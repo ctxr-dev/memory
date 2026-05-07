@@ -1,27 +1,73 @@
-# Local Dify MCP Memory Boilerplate
+<h1 align="center">Local Dify MCP Memory Boilerplate</h1>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-![Open Source](https://img.shields.io/badge/Open%20Source-yes-brightgreen)
-![Local First](https://img.shields.io/badge/Local--First-memory-0A7C66)
-![Dify](https://img.shields.io/badge/RAG-Dify-2F6FEB)
-![MCP](https://img.shields.io/badge/MCP-stdio-6E56CF)
-![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED)
-![Node.js](https://img.shields.io/badge/Node.js-20+-339933)
-![Bash](https://img.shields.io/badge/Shell-Bash-4EAA25)
-![Postgres](https://img.shields.io/badge/DB-Postgres-4169E1)
-![Weaviate](https://img.shields.io/badge/Vector-Weaviate-00B388)
-![Claude Code](https://img.shields.io/badge/Claude%20Code-supported-D97706)
-![Cursor](https://img.shields.io/badge/Cursor-supported-111827)
-![Codex/OpenAI](https://img.shields.io/badge/Codex%2FOpenAI-supported-10A37F)
-![Hooks](https://img.shields.io/badge/Hooks-opt--in-7C3AED)
-![Persistence](https://img.shields.io/badge/Persistence-.memory%2Fdify-0EA5E9)
-![Version Pinning](https://img.shields.io/badge/Dify-version%20pinned-F59E0B)
-![Secrets](https://img.shields.io/badge/Secrets-.env%20ignored-DC2626)
-![Host Paths](https://img.shields.io/badge/Host%20Paths-not%20hardcoded-64748B)
+<p align="center">
+  <strong>Inspectable local project memory for AI coding agents.</strong>
+</p>
 
-Give every project its own local memory system: Dify for inspectable high-precision RAG, a stdio MCP bridge for Codex/OpenAI, Claude Desktop, Cursor, and other MCP clients, and optional hooks for continuous session capture.
+<p align="center">
+  Dify Knowledge for high-precision RAG, a stdio MCP bridge for modern agent clients, and optional hooks that preserve fresh session context before it disappears.
+</p>
 
-The goal is simple: an AI agent should be able to install this into a fresh repo, ask you only the necessary questions, start the local stack, wire the MCP client where possible, and leave you with one remaining human task: open Dify, create the knowledge bases, and paste the generated API values into `memory/.env`.
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
+  <img alt="Open Source" src="https://img.shields.io/badge/Open%20Source-yes-brightgreen">
+  <img alt="Local First" src="https://img.shields.io/badge/Local--First-memory-0A7C66">
+  <img alt="Dify" src="https://img.shields.io/badge/RAG-Dify-2F6FEB">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-stdio-6E56CF">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ED">
+  <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20+-339933">
+  <img alt="Bash" src="https://img.shields.io/badge/Shell-Bash-4EAA25">
+  <img alt="Postgres" src="https://img.shields.io/badge/DB-Postgres-4169E1">
+  <img alt="Weaviate" src="https://img.shields.io/badge/Vector-Weaviate-00B388">
+  <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-supported-D97706">
+  <img alt="Cursor" src="https://img.shields.io/badge/Cursor-supported-111827">
+  <img alt="Codex/OpenAI" src="https://img.shields.io/badge/Codex%2FOpenAI-supported-10A37F">
+  <img alt="Hooks" src="https://img.shields.io/badge/Hooks-opt--in-7C3AED">
+  <img alt="Persistence" src="https://img.shields.io/badge/Persistence-.memory%2Fdify-0EA5E9">
+  <img alt="Version Pinning" src="https://img.shields.io/badge/Dify-version%20pinned-F59E0B">
+  <img alt="Secrets" src="https://img.shields.io/badge/Secrets-.env%20ignored-DC2626">
+  <img alt="Host Paths" src="https://img.shields.io/badge/Host%20Paths-not%20hardcoded-64748B">
+</p>
+
+<p align="center">
+  <a href="#copyable-ai-install-prompt">Install with AI</a>
+  |
+  <a href="#what-it-looks-like">Screenshot</a>
+  |
+  <a href="#install-into-a-project">Manual install</a>
+  |
+  <a href="#client-support">Clients</a>
+  |
+  <a href="#continuous-memory-hooks">Hooks</a>
+</p>
+
+<p align="center">
+  <img src="img.png" alt="Dify Knowledge UI showing project memory knowledge bases" width="920">
+</p>
+
+> Give every project its own local memory system: Dify for inspectable high-precision RAG, a stdio MCP bridge for Codex/OpenAI, Claude Desktop, Cursor, and other MCP clients, and optional hooks for continuous session capture.
+
+The goal is intentionally practical: an AI agent should be able to install this into a fresh repo, ask only the necessary questions, start the local stack, wire the MCP client where possible, and leave you with one human task: open Dify, create the knowledge bases, and paste the generated API values into `memory/.env`.
+
+## At A Glance
+
+| Need | What this gives you |
+| --- | --- |
+| Inspect memory instead of trusting magic | Dify Knowledge UI with datasets, chunks, indexing state, and retrieval tests |
+| Keep projects isolated | Per-project container names, Compose project names, images, and `.memory/dify/` data |
+| Use modern AI clients | MCP snippets for Codex/OpenAI, Claude Desktop, Cursor, and generic MCP JSON |
+| Preserve session knowledge | Optional hooks for `SessionStart`, `PreCompact`, `PostCompact`, and `SessionEnd` |
+| Avoid hidden state | No hardcoded host paths, no copied secrets, no vendored Dify runtime data |
+
+```mermaid
+flowchart LR
+  Agent["AI agent session"] --> Hooks["Optional hooks"]
+  Agent --> MCP["MCP bridge (stdio)"]
+  Hooks --> MCP
+  MCP --> Dify["Dify Knowledge API"]
+  Dify --> UI["Inspectable Knowledge UI"]
+  Dify --> Future["Future agent retrieval"]
+```
 
 ## Why This Exists
 
@@ -50,9 +96,9 @@ At that point, you usually do not need more Markdown. You need a real local RAG 
 
 ## What It Looks Like
 
-![Dify Knowledge UI showing project memory knowledge bases](img.png)
+The screenshot above is the Dify Knowledge UI that backs the project memory: visible datasets, document counts, indexing settings, retrieval testing, and a Service API key that the MCP bridge uses.
 
-The memory itself is managed in Dify Knowledge: visible datasets, document counts, indexing settings, retrieval testing, and a Service API key that the MCP bridge uses. Thanks to the Dify team and community for building the local-first RAG platform that makes this kind of inspectable project memory practical. This repo is only a thin project template and MCP bridge around that excellent foundation.
+Thanks to the Dify team and community for building the local-first RAG platform that makes this kind of inspectable project memory practical. This repo is only a thin project template and MCP bridge around that excellent foundation.
 
 ## Copyable AI Install Prompt
 
