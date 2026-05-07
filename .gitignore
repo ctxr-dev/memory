@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+node_modules/
+memory-template/memory/.env
+memory-template/memory/.dify-version
+memory-template/memory/vendor/dify/
+memory-template/.memory/dify/*
+!memory-template/.memory/dify/.keep

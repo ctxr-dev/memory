@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+.dify-version
+vendor/
+**/node_modules/
+**/.npm/
+**/*.log
+**/.DS_Store

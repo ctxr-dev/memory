@@ -1,0 +1,3 @@
+[mcp_servers.__MEMORY_SERVER_NAME__]
+command = "docker"
+args = ["exec", "-i", "__MEMORY_SERVER_NAME__", "node", "src/index.js"]
