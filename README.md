@@ -32,8 +32,6 @@
 <p align="center">
   <a href="#copyable-ai-install-prompt">Install with AI</a>
   |
-  <a href="#what-it-looks-like">Screenshot</a>
-  |
   <a href="#install-into-a-project">Manual install</a>
   |
   <a href="#client-support">Clients</a>
