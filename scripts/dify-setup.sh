@@ -72,6 +72,11 @@ for arg in "$@"; do
   esac
 done
 
+if [ "$NON_INTERACTIVE" -eq 1 ] && [ "$AUTO_CREATE" -eq 0 ]; then
+  echo "--non-interactive requires --auto-create. Without it, unbound slots cannot be created and the script has no way to proceed." >&2
+  exit 1
+fi
+
 # ---------- helpers ----------
 prompt() {
   local msg="$1" default="${2-}"

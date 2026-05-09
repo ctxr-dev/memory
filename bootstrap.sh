@@ -15,13 +15,16 @@ Usage:
   ./memory/bootstrap.sh --slug <project-slug> [options]
 
 Options:
-  --slug <slug>            Required. Lowercase ASCII a-z, 0-9, -.
+  --slug <slug>            Project slug (lowercase a-z, 0-9, -). Auto-derived
+                           from the parent directory name if not supplied.
   --title "<title>"        Display title (default: title-cased slug).
   --llm-provider <p>       claude | codex | anthropic | openai | ask (default: ask)
   --install-hooks          Install Claude Code hooks (default: on).
   --no-hooks               Skip Claude Code hook install.
   --register-codex         If codex CLI present, register the MCP server.
-  --no-interactive         Fail if a value would have been prompted for.
+  --no-interactive         Skip all prompts; auto-select defaults. When multiple
+                           LLM providers are detected, use --llm-provider to
+                           specify one explicitly or the first detected is used.
   -h, --help               This help.
 
 Run from the user-project root after `git clone <boilerplate> ./memory`.
@@ -75,8 +78,23 @@ if [ -z "$compose_version" ]; then
   exit 1
 fi
 required_compose="2.24.4"
-lowest="$(printf '%s\n%s\n' "$compose_version" "$required_compose" | sort -V | head -n1)"
-if [ "$lowest" != "$required_compose" ] && [ "$compose_version" != "$required_compose" ]; then
+# Portable semver GTE check — avoids GNU-only `sort -V` (not available on macOS/BSD).
+version_gte() {
+  local a="$1" b="$2"
+  local a1 a2 a3 b1 b2 b3 IFS='.'
+  # shellcheck disable=SC2086
+  set -- $a; a1="${1:-0}"; a2="${2:-0}"; a3="${3:-0}"
+  # shellcheck disable=SC2086
+  set -- $b; b1="${1:-0}"; b2="${2:-0}"; b3="${3:-0}"
+  if   [ "$a1" -gt "$b1" ]; then return 0
+  elif [ "$a1" -lt "$b1" ]; then return 1
+  elif [ "$a2" -gt "$b2" ]; then return 0
+  elif [ "$a2" -lt "$b2" ]; then return 1
+  elif [ "$a3" -ge "$b3" ]; then return 0
+  else return 1
+  fi
+}
+if ! version_gte "$compose_version" "$required_compose"; then
   echo "docker compose $compose_version is too old; need $required_compose+." >&2
   exit 1
 fi

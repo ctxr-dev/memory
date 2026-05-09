@@ -305,9 +305,10 @@ async function scanCmd(config, { include, ignore, root }) {
   }
   const includeGlobs = splitList(include);
   const ignoreGlobs = splitList(ignore);
+  // Pass only caller-supplied extras; findFiles already merges with defaultIgnore() internally.
   const matches = findFiles(baseRoot, {
     include: includeGlobs.length > 0 ? includeGlobs : defaultGlobs(),
-    ignore: ignoreGlobs.length > 0 ? ignoreGlobs : defaultIgnore(),
+    ignore: ignoreGlobs,
   });
   return {
     root: baseRoot,
