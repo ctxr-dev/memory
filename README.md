@@ -396,6 +396,9 @@ bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
 node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
 node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
 
+# Unit tests (no npm deps; uses node's built-in test runner)
+( cd ./memory && node --test test/*.test.mjs )   # or: ( cd ./memory && npm test )
+
 # Stack health (Docker required)
 ./memory/scripts/ps.sh
 ./memory/scripts/ui-url.sh

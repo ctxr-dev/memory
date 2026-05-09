@@ -1,0 +1,248 @@
+// Pure-function tests for mcp-server/src/dify.js — no Dify, no Docker, no
+// network. Covers buildDatasetMap (slot inference + legacy fallback),
+// buildMetadataCondition (operator selection + null/empty handling), and
+// resolveDatasetId / requireDifyWriteConfig (slot name vs UUID heuristic).
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  buildDatasetMap,
+  buildMetadataCondition,
+  resolveDatasetId,
+  requireDifyWriteConfig,
+} from "../mcp-server/src/dify.js";
+
+// ---------- buildDatasetMap ----------
+
+test("buildDatasetMap: empty env -> empty map", () => {
+  const m = buildDatasetMap({});
+  assert.equal(m.size, 0);
+});
+
+test("buildDatasetMap: infers slot from DIFY_DATASET_<NAME>_ID", () => {
+  const m = buildDatasetMap({
+    DIFY_DATASET_DAILY_ID: "uuid-daily",
+    DIFY_DATASET_KNOWLEDGE_ID: "uuid-knowledge",
+    DIFY_DATASET_SELF_IMPROVEMENT_ID: "uuid-self",
+  });
+  assert.equal(m.size, 3);
+  assert.deepEqual(m.get("daily"), { name: "daily", id: "uuid-daily" });
+  assert.deepEqual(m.get("knowledge"), { name: "knowledge", id: "uuid-knowledge" });
+  assert.deepEqual(m.get("self_improvement"), { name: "self_improvement", id: "uuid-self" });
+});
+
+test("buildDatasetMap: empty value declares an unbound slot", () => {
+  const m = buildDatasetMap({ DIFY_DATASET_DAILY_ID: "" });
+  assert.equal(m.size, 1);
+  assert.deepEqual(m.get("daily"), { name: "daily", id: "" });
+});
+
+test("buildDatasetMap: legacy DIFY_WRITE_DATASET_ID becomes 'default' slot when not already mapped", () => {
+  const m = buildDatasetMap({ DIFY_WRITE_DATASET_ID: "legacy-uuid" });
+  assert.equal(m.size, 1);
+  assert.deepEqual(m.get("default"), { name: "default", id: "legacy-uuid" });
+});
+
+test("buildDatasetMap: legacy id NOT duplicated when already present in a slot", () => {
+  const m = buildDatasetMap({
+    DIFY_DATASET_KNOWLEDGE_ID: "shared-uuid",
+    DIFY_WRITE_DATASET_ID: "shared-uuid",
+  });
+  assert.equal(m.size, 1);
+  assert.deepEqual(m.get("knowledge"), { name: "knowledge", id: "shared-uuid" });
+  assert.equal(m.has("default"), false);
+});
+
+test("buildDatasetMap: ignores unrelated env keys", () => {
+  const m = buildDatasetMap({
+    PATH: "/usr/bin",
+    DIFY_API_URL: "http://api:5001/v1",
+    SOMETHING_ELSE: "value",
+  });
+  assert.equal(m.size, 0);
+});
+
+// ---------- buildMetadataCondition ----------
+
+test("buildMetadataCondition: null filters -> null", () => {
+  assert.equal(buildMetadataCondition(null), null);
+  assert.equal(buildMetadataCondition(undefined), null);
+  assert.equal(buildMetadataCondition("not-an-object"), null);
+});
+
+test("buildMetadataCondition: empty object -> null", () => {
+  assert.equal(buildMetadataCondition({}), null);
+});
+
+test("buildMetadataCondition: skips null/empty/whitespace values", () => {
+  const cond = buildMetadataCondition({
+    atom_type: "decision",
+    project_module: "",
+    language: "  ",
+    task_type: null,
+    error_pattern: undefined,
+  });
+  assert.deepEqual(cond, {
+    logical_operator: "and",
+    conditions: [{ name: "atom_type", comparison_operator: "is", value: "decision" }],
+  });
+});
+
+test("buildMetadataCondition: tags uses contains, others use is", () => {
+  const cond = buildMetadataCondition({
+    atom_type: "decision",
+    tags: "alpha,beta",
+    project_module: "api",
+  });
+  assert.equal(cond.logical_operator, "and");
+  const byName = Object.fromEntries(cond.conditions.map((c) => [c.name, c]));
+  assert.equal(byName.atom_type.comparison_operator, "is");
+  assert.equal(byName.tags.comparison_operator, "contains");
+  assert.equal(byName.project_module.comparison_operator, "is");
+});
+
+test("buildMetadataCondition: trims values", () => {
+  const cond = buildMetadataCondition({ atom_type: "  decision  " });
+  assert.equal(cond.conditions[0].value, "decision");
+});
+
+test("buildMetadataCondition: all-empty -> null (not empty conditions list)", () => {
+  const cond = buildMetadataCondition({ atom_type: "", tags: "" });
+  assert.equal(cond, null);
+});
+
+test("buildMetadataCondition: respects logicalOperator override", () => {
+  const cond = buildMetadataCondition({ atom_type: "x" }, { logicalOperator: "or" });
+  assert.equal(cond.logical_operator, "or");
+});
+
+test("buildMetadataCondition: respects containsFields override", () => {
+  const cond = buildMetadataCondition(
+    { custom: "value" },
+    { containsFields: ["custom"] },
+  );
+  assert.equal(cond.conditions[0].comparison_operator, "contains");
+});
+
+// ---------- resolveDatasetId ----------
+
+test("resolveDatasetId: empty input -> empty string", () => {
+  const config = { datasetMap: new Map() };
+  assert.equal(resolveDatasetId(config, ""), "");
+  assert.equal(resolveDatasetId(config, null), "");
+  assert.equal(resolveDatasetId(config, undefined), "");
+});
+
+test("resolveDatasetId: known slot name -> mapped id", () => {
+  const config = {
+    datasetMap: new Map([["knowledge", { name: "knowledge", id: "uuid-knowledge" }]]),
+  };
+  assert.equal(resolveDatasetId(config, "knowledge"), "uuid-knowledge");
+  // case-insensitive
+  assert.equal(resolveDatasetId(config, "KNOWLEDGE"), "uuid-knowledge");
+  assert.equal(resolveDatasetId(config, "  Knowledge  "), "uuid-knowledge");
+});
+
+test("resolveDatasetId: known slot with empty id falls through to UUID heuristic (and fails)", () => {
+  const config = {
+    datasetMap: new Map([["daily", { name: "daily", id: "" }]]),
+  };
+  // slot is declared but unbound; not a UUID -> ""
+  assert.equal(resolveDatasetId(config, "daily"), "");
+});
+
+test("resolveDatasetId: UUID-shaped string passes through", () => {
+  const config = { datasetMap: new Map() };
+  const uuid = "abcd1234-5678-90ef-abcd-1234567890ef";
+  assert.equal(resolveDatasetId(config, uuid), uuid);
+  // also pass-through when datasetMap is missing
+  assert.equal(resolveDatasetId({}, uuid), uuid);
+});
+
+test("resolveDatasetId: short non-UUID returns empty string", () => {
+  const config = { datasetMap: new Map() };
+  assert.equal(resolveDatasetId(config, "knowledge"), "");
+  assert.equal(resolveDatasetId(config, "abc123"), "");
+});
+
+// ---------- requireDifyWriteConfig ----------
+
+test("requireDifyWriteConfig: throws when apiKey missing", () => {
+  assert.throws(
+    () => requireDifyWriteConfig({ apiKey: "", datasetMap: new Map(), datasetIds: [] }),
+    /DIFY_KNOWLEDGE_API_KEY/,
+  );
+});
+
+test("requireDifyWriteConfig: returns resolved id when slot bound", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map([["knowledge", { name: "knowledge", id: "uuid-k" }]]),
+    datasetIds: ["uuid-k"],
+    legacyWriteDatasetId: "",
+  };
+  assert.equal(requireDifyWriteConfig(config, "knowledge"), "uuid-k");
+});
+
+test("requireDifyWriteConfig: throws when slot name unknown / unbound", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map([["daily", { name: "daily", id: "" }]]),
+    datasetIds: [],
+    legacyWriteDatasetId: "",
+  };
+  assert.throws(
+    () => requireDifyWriteConfig(config, "missing"),
+    /not configured/,
+  );
+  // slot exists but unbound -> still rejected
+  assert.throws(
+    () => requireDifyWriteConfig(config, "daily"),
+    /not configured/,
+  );
+});
+
+test("requireDifyWriteConfig: falls back to legacyWriteDatasetId when no name given", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map(),
+    datasetIds: [],
+    legacyWriteDatasetId: "legacy-uuid",
+  };
+  assert.equal(requireDifyWriteConfig(config), "legacy-uuid");
+});
+
+test("requireDifyWriteConfig: falls back to first datasetIds entry when no legacy id", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map([["daily", { name: "daily", id: "uuid-d" }]]),
+    datasetIds: ["uuid-d"],
+    legacyWriteDatasetId: "",
+  };
+  assert.equal(requireDifyWriteConfig(config), "uuid-d");
+});
+
+test("requireDifyWriteConfig: throws when no fallback available", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map(),
+    datasetIds: [],
+    legacyWriteDatasetId: "",
+  };
+  assert.throws(
+    () => requireDifyWriteConfig(config),
+    /No write dataset configured/,
+  );
+});
+
+test("requireDifyWriteConfig: accepts UUID-shaped explicit id even when not in slot map", () => {
+  const config = {
+    apiKey: "secret",
+    datasetMap: new Map(),
+    datasetIds: [],
+    legacyWriteDatasetId: "",
+  };
+  const uuid = "abcd1234-5678-90ef-abcd-1234567890ef";
+  assert.equal(requireDifyWriteConfig(config, uuid), uuid);
+});
