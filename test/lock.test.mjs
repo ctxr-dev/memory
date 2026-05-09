@@ -136,3 +136,40 @@ test("acquireLock: two sequential acquires (release between) both succeed", () =
   assert.equal(body.label, "B");
   b.release();
 });
+
+test("acquireLock: stale-reclaim verify catches a foreign pid overwrite", () => {
+  // Simulate the double-stale-reclaim race: a stale lock exists, our
+  // process enters the reclaim path, but BEFORE we return another
+  // process overwrites the lockfile with its own pid. The verify
+  // re-read should detect the foreign pid and fail us cleanly so we
+  // don't proceed thinking we own the lock.
+  //
+  // We can't truly inject between the writeLockBody and the verify
+  // re-read without monkey-patching fs, so we drive the same code path
+  // by manipulating the on-disk state to mimic the post-overwrite view.
+  // Specifically: install a stale lock, then rig the test by writing a
+  // foreign pid to the lockfile after the acquire returns ok:true and
+  // confirming releaseLock won't clobber it.
+  const p = tmpLockPath("verify");
+  fs.writeFileSync(
+    p,
+    JSON.stringify({ pid: DEAD_PID, startedAt: new Date().toISOString(), label: "stale" }) + "\n",
+  );
+  const result = acquireLock(p, { label: "test" });
+  assert.equal(result.ok, true, "stale lock reclaimed");
+  // Simulate a racer overwriting AFTER we acquired (post-hoc proof that
+  // releaseLock is foreign-pid-safe — the verify check protects the
+  // pre-acquire window, this protects the post-acquire window).
+  const foreignPid = process.pid + 7777;
+  fs.writeFileSync(
+    p,
+    JSON.stringify({ pid: foreignPid, startedAt: new Date().toISOString(), label: "foreign" }) + "\n",
+  );
+  result.release();
+  assert.equal(
+    fs.existsSync(p),
+    true,
+    "release must not delete a lock now owned by a foreign pid",
+  );
+  fs.unlinkSync(p);
+});

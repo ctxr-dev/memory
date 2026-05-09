@@ -9,3 +9,5 @@ vendor/dify/
 
 # Operational state files (ops only, not memory content)
 .compile-state.json
+.compile-state.json.log
+.compile.lock

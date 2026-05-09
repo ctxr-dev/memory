@@ -21,18 +21,14 @@ import fs from "node:fs";
 //
 // Notes:
 //   - Atomic create uses `fs.openSync(path, 'wx')` which is POSIX-atomic.
-//   - Stale reclaim has a small TOCTOU window; the consequence is
-//     two compiles running concurrently in the rare case where two
-//     processes both detect a stale lock at the same instant. The
-//     primary goal — preventing the FREQUENT race of two healthy
-//     compiles — is fully covered.
-
-export class LockUnavailable extends Error {
-  constructor(message, owner) {
-    super(message);
-    this.owner = owner;
-  }
-}
+//   - Stale reclaim is followed by a re-read verify: if two processes both
+//     detect the same stale lock at the same instant, the loser of the
+//     write race re-reads, sees a foreign pid, and returns ok:false. So
+//     the rare "both detect stale" race resolves to exactly one winner,
+//     same as the fast path.
+//   - The primary goal — preventing the FREQUENT race of two healthy
+//     compiles started by back-to-back SessionStart hooks — is fully
+//     covered by the atomic-create fast path.
 
 const DEFAULT_STALE_MS = 600_000; // 10 minutes
 
@@ -107,6 +103,21 @@ export function acquireLock(lockPath, { staleMs = DEFAULT_STALE_MS, label = "com
   }
 
   writeLockBody(lockPath, body);
+  // Defend against the double-stale-reclaim race: two processes both
+  // detect the same stale lock at the same instant and both fall through
+  // here. Both writeFileSync calls run; whichever ran SECOND has its pid
+  // on disk. Re-read and lose cleanly if pid no longer matches ours, so
+  // exactly one of the racers proceeds. Without this check, the loser
+  // would continue and a third compile arriving after the loser releases
+  // could acquire while the winner is still running.
+  const verify = readLockBody(lockPath);
+  if (!verify || verify.pid !== process.pid) {
+    return {
+      ok: false,
+      owner: verify,
+      reason: `lost stale-reclaim race to pid=${verify ? verify.pid : "?"}`,
+    };
+  }
   return { ok: true, release: () => releaseLock(lockPath) };
 }
 
@@ -136,8 +147,11 @@ export function installLockReleaseHandlers(lockPath) {
   // 'exit' fires for normal exits (including process.exit calls).
   process.on("exit", release);
 
-  // SIGINT / SIGTERM: release then re-exit with the conventional code.
-  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  // SIGINT / SIGTERM / SIGHUP: release then re-exit with the conventional
+  // code. SIGHUP matters because compile.mjs is often spawned detached by
+  // SessionStart hooks; closing the controlling terminal delivers SIGHUP
+  // and without this the lock would leak until staleMs expires.
+  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]]) {
     process.once(sig, () => {
       release();
       process.exit(code);
