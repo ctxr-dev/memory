@@ -67,24 +67,64 @@ git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
 - Detect available LLM CLIs (`claude` first, then `codex`) and ask which one to use for distillation; falls back to `anthropic` / `openai` when an API key is set.
 - Create `memory/.env` from the template, injecting your slug. **Re-runs never touch `memory/.env`.**
 
-After Dify is up:
+After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-driven, see [Onboarding](#onboarding)):
 
-1. Open the printed UI URL.
-2. Create your admin account, configure an embedding model, create a Knowledge base.
-3. Open `Service API`, create a Knowledge API key, copy it and the dataset IDs.
-4. Edit `memory/.env`:
-   ```bash
-   DIFY_KNOWLEDGE_API_KEY=...
-   DIFY_DATASET_IDS=dataset-uuid-1,dataset-uuid-2
-   DIFY_WRITE_DATASET_ID=dataset-uuid-1
-   ```
-5. Restart only the MCP bridge:
-   ```bash
-   ./memory/scripts/up.sh <project-slug>-memory
-   ./memory/scripts/mcp-smoke.sh
-   ```
+```bash
+./memory/scripts/dify-setup.sh
+./memory/scripts/mcp-smoke.sh
+```
 
-That is the entire install.
+That is the entire install. The wizard handles the API key, the four default dataset slots (`daily`, `knowledge`, `plans`, `investigations`), and an optional first-pass absorb of your existing project documentation.
+
+## Onboarding
+
+`dify-setup.sh` is a re-runnable wizard. Once Dify is up and you have admin/embedding configured in the UI, it asks at most four kinds of questions:
+
+1. **`DIFY_KNOWLEDGE_API_KEY`** — paste it now (or skip if you already added it to `memory/.env`).
+2. **For each dataset slot** in `DIFY_DATASETS` (defaults: `daily, knowledge, plans, investigations`):
+   - Auto-create a Dify dataset with that exact name and bind its id to `DIFY_DATASET_<NAME>_ID`.
+   - Or paste an existing dataset id you want to re-use.
+   - Or skip the slot.
+3. **Bridge restart** — the wizard restarts the MCP bridge so the new env propagates.
+4. **Absorb existing docs?** — optional. Scans the workspace for matching files, lets you pick which ones go into which slot (defaults to `knowledge`), then upserts each as a Dify document with name = relative path with `/` replaced by `_` (e.g. `docs/auth/jwt.md` becomes `docs_auth_jwt.md`). Re-running the absorb later overwrites the same doc instead of duplicating.
+
+### Manual flow
+
+```bash
+./memory/scripts/up.sh           # start Dify + MCP bridge
+./memory/scripts/ui-url.sh       # open the printed Dify UI URL
+                                 # In Dify: admin -> embedding model -> Service API -> create Knowledge API key
+./memory/scripts/dify-setup.sh   # paste key, bind/create slots, optional absorb
+./memory/scripts/mcp-smoke.sh    # validate
+```
+
+Want to add another slot later? Edit `DIFY_DATASETS` in `memory/.env` (e.g. add `runbooks`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot.
+
+### AI-driven flow
+
+Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP server registered):
+
+```text
+Set up the Dify memory boilerplate for this project. The MCP server is `<project-slug>-memory`. Do this:
+
+1. Call `list_datasets` to see what already exists in Dify.
+2. For each of these slots (daily, knowledge, plans, investigations), check whether a dataset with that name already exists.
+   - If it exists, tell me the id and ask whether to bind it.
+   - If it does not, ask whether to call `create_dataset` to create it.
+3. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste.
+4. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
+5. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
+
+Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
+```
+
+The agent uses the MCP tools `list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, and `save_to_dataset` to drive the conversation. None of those mutate anything outside Dify; the wizard is what writes memory/.env.
+
+### Saving plans, investigations, or other artefacts manually
+
+The MCP tool `save_to_dataset(dataset, name, text)` does upsert-by-exact-name. That means if you save `plan-auth-rewrite.md` once and then again later (after polishing), the second call replaces the first document — no duplicates accumulate even when you iterate. Same applies to absorbed files.
+
+For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: see [STACK.md](STACK.md) — the integration points are `PostToolUse` matchers that observe `ExitPlanMode` and similar lifecycle events. Wiring those is outside this commit's scope; the MCP tools are ready, the hook recipes are not yet shipped.
 
 ## How memory is built
 
@@ -92,24 +132,37 @@ That is the entire install.
 flowchart LR
   Hook["PreCompact / PostCompact / SessionEnd"] --> Flush["scripts/hooks/flush.mjs"]
   Flush --> LLM1["LLM extract (typed atoms)"]
-  LLM1 --> DailyDoc["Dify: daily-&lt;ts&gt;.md (enabled)"]
+  LLM1 --> DailyDataset["Dify dataset 'daily': daily-&lt;ts&gt;.md"]
   Start["SessionStart (lazy, once/day)"] --> Compile["scripts/compile.mjs"]
-  Compile --> ListDaily["List enabled daily-*.md from Dify"]
-  ListDaily --> LLM2["LLM dedup-merge vs knowledge-*"]
-  LLM2 --> KnowledgeDoc["Dify: knowledge-&lt;slug&gt;-&lt;ts&gt;.md"]
+  Compile --> ReadDaily["Read enabled daily-*.md from 'daily'"]
+  ReadDaily --> LLM2["LLM dedup-merge vs 'knowledge'"]
+  LLM2 --> KnowledgeDataset["Dify dataset 'knowledge': knowledge-&lt;slug&gt;-&lt;ts&gt;.md"]
   Compile --> DisableDaily["Disable processed daily-*.md"]
-  KnowledgeDoc --> Search["MCP search_memory (any session)"]
+  Absorb["MCP absorb_files (any session)"] --> KnowledgeDataset
+  Save["MCP save_to_dataset / write_memory (any session)"] --> AnyDataset["Dify named slot: plans, investigations, ..."]
+  KnowledgeDataset --> Search["MCP search_memory"]
+  AnyDataset --> Search
+  DailyDataset --> Search
 ```
 
-Two stages, two LLM calls per cycle, **everything stored in Dify**.
+Two stages of automatic capture (flush + compile), plus on-demand `absorb_files` and `save_to_dataset` for documentation and artefact upserts. **Everything is stored in Dify**, organised by named dataset slots.
 
+- **Named slots** (default: `daily`, `knowledge`, `plans`, `investigations`) declared in `DIFY_DATASETS`. Each slot has its own `DIFY_DATASET_<NAME>_ID`. Add as many as you want (e.g. `runbooks`, `decisions`, `incidents`) and re-run `dify-setup.sh`.
 - **No local memory files.** The only on-disk state is a tiny ops file `./memory/.compile-state.json` that records the last compile attempt date. Memory content lives only in Dify.
-- **Compile** is what runs the dedup-merge. It uses the MCP bridge container (`docker exec`) so it shares the bridge's network access to the internal Dify API.
-- **Daily docs are kept after promotion** but disabled, so they stop surfacing in `search_memory` while remaining visible in the Dify UI. Re-enable them in Dify if you ever need to recover.
+- **Naming conventions inside Dify**:
+  - `daily-<YYYY-MM-DD-HHMMSSmmm>.md` — one per flush event, accumulates per session, dedup-merged out by compile.
+  - `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` — one per deduped fact; compile may write a new version with the same `<slug>` and a new `<ts>`, then disable the prior one.
+  - `<relative_path_with_underscores>.md` — absorbed user docs (`docs/auth/jwt.md` becomes `docs_auth_jwt.md`).
+  - `<your-name>.md` — anything you upsert via `save_to_dataset` (plans, investigations, decisions). The same name overwrites; iterate freely.
+- **Daily docs are kept after promotion** but disabled (hidden from `search_memory`, visible in the Dify UI for audit).
 - **Recursion guard**: when the compile run starts a session of its own, the `CLAUDE_INVOKED_BY=memory_compile` env var prevents another compile from kicking off.
-- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or a stopped MCP container all cause flush/compile to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
+- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or a stopped MCP container all cause flush/compile/absorb to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
 
 ## What gets saved
+
+Two routes: **automatic distillation** (flush + compile) and **on-demand upserts** (absorb + save_to_dataset).
+
+### Automatic atoms (extracted from session transcripts)
 
 Six atom types map to the categories that actually pay off in retrieval:
 
@@ -123,6 +176,29 @@ Six atom types map to the categories that actually pay off in retrieval:
 | `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. |
 
 Every atom carries `tags` for metadata-filtered search. The compile-stage prompt biases toward **update** over **create** when titles and tags overlap, so the same fact does not get written twice.
+
+### On-demand uploads (any artefact you want indexed)
+
+| MCP tool | When | Naming + identity |
+|---|---|---|
+| `absorb_files(files[], dataset?, dryRun?)` | Index existing project docs (`docs/**/*.md`, `ARCHITECTURE.md`, RFCs). | `relative/path/with/slashes.md` becomes `relative_path_with_slashes.md`. Re-running overwrites the same Dify document. |
+| `save_to_dataset(dataset, name, text)` | Save a plan, investigation, decision record, runbook. | The `name` IS the identity. Polishing the same `plan-auth-rewrite.md` later replaces the prior version, no duplicates. |
+
+Both use upsert-by-exact-name (delete-then-create), so the contract is: **same name → updated content; different name → new document**. This is the property the user asked for: "if the plan md filename is the same it should always be updated in RAG".
+
+### MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `search_memory` | Retrieve scored chunks across configured datasets. |
+| `get_memory_config` | Inspect bridge configuration without exposing secrets. |
+| `write_memory` | Create-or-supersede a single document (low-level). |
+| `update_memory` | Required-supersedes variant; used by compile. |
+| `save_to_dataset` | Upsert by exact name (the durable-artefact path). |
+| `list_datasets` | Show Dify datasets + local slot bindings. |
+| `create_dataset` | Create a new Dify dataset; bind it via `dify-setup.sh`. |
+| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
+| `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
 ## Updates
 
@@ -189,12 +265,13 @@ memory/
 │   ├── dify-bootstrap.sh       # resolve + pin Dify version, clone vendor
 │   ├── mcp-config.sh           # print client snippets
 │   ├── mcp-smoke.sh            # JSON-RPC smoke against the bridge
-│   ├── compile.mjs             # daily logs -> Dify (lazy, dedup-merge)
-│   ├── lib/{env,llm,dify-write,redact}.mjs
+│   ├── compile.mjs             # daily -> knowledge promotion (lazy, dedup-merge)
+│   ├── dify-setup.sh           # interactive dataset binding + absorb wizard
+│   ├── lib/{env,llm,dify-write,redact,slug}.mjs
 │   └── hooks/{session-start,pre-compact,post-compact,session-end}.{sh,mjs}
 ├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
 ├── mcp-server/
-│   └── src/{index,dify,memory-cli}.js
+│   └── src/{index,dify,memory-cli,glob}.js
 ├── templates/
 │   ├── agents/                 # rendered to <project>/.agents/
 │   ├── claude/settings.json    # rendered to <project>/.claude/

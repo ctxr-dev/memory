@@ -135,20 +135,33 @@ The MCP bridge accepts multiple dataset IDs separated by commas.
 
 ## Connect Dify To The MCP Bridge
 
-Edit `memory/.env`:
+The recommended path is the wizard:
+
+```bash
+./memory/scripts/dify-setup.sh
+```
+
+It binds named slots to Dify dataset IDs in `memory/.env` and optionally absorbs your existing project documentation. See the [README onboarding section](README.md#onboarding) for the full walkthrough.
+
+If you prefer to edit `memory/.env` by hand, the relevant block is:
 
 ```bash
 DIFY_KNOWLEDGE_API_KEY=...
-DIFY_DATASET_IDS=dataset-uuid-1,dataset-uuid-2
+
+DIFY_DATASETS=daily,knowledge,plans,investigations
+DIFY_DATASET_DAILY_ID=...
+DIFY_DATASET_KNOWLEDGE_ID=...
+DIFY_DATASET_PLANS_ID=...
+DIFY_DATASET_INVESTIGATIONS_ID=...
+
+DIFY_FLUSH_DATASET=daily
+DIFY_COMPILE_DATASET=knowledge
+DIFY_ABSORB_DEFAULT_DATASET=knowledge
 ```
+
+Add more slots by extending `DIFY_DATASETS` and adding the matching `DIFY_DATASET_<NAME>_ID` line, then re-run `dify-setup.sh` (it only asks about new/unbound slots).
 
 Optional: if you want the MCP bridge to force retrieval settings instead of using Dify's configured defaults, set `DIFY_RETRIEVAL_MODEL_JSON`. Leave it empty unless you have a specific reason. Dify's UI is usually the better place to tune retrieval.
-
-For automatic session-memory writes, either set `DIFY_WRITE_DATASET_ID` or make the first value in `DIFY_DATASET_IDS` the knowledge base that should receive session captures:
-
-```bash
-DIFY_WRITE_DATASET_ID=session-memory-dataset-uuid
-```
 
 Hook-created memory documents have their own Dify indexing/chunking options:
 
@@ -165,7 +178,8 @@ MEMORY_HOOK_PRECOMPACT_MIN_TURNS=5
 
 These are the important knobs:
 
-- `DIFY_WRITE_DATASET_ID`: the Knowledge base that receives automatic hook writes. If empty, hooks write to the first ID in `DIFY_DATASET_IDS`.
+- `DIFY_DATASETS` + `DIFY_DATASET_<NAME>_ID`: the named slot map. `dify-setup.sh` maintains both.
+- `DIFY_FLUSH_DATASET` / `DIFY_COMPILE_DATASET` / `DIFY_ABSORB_DEFAULT_DATASET`: pipeline routing (slot names).
 - `DIFY_SESSION_INDEXING_TECHNIQUE`: `high_quality` for embedding-based indexing; keep this for precision.
 - `DIFY_SESSION_DOC_FORM`: `text_model` by default. Keep hook captures as normal text unless you have tested Dify's `hierarchical_model` or `qa_model` behavior in the UI first.
 - `DIFY_SESSION_DOC_LANGUAGE`: document processing language sent to Dify.
