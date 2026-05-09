@@ -543,7 +543,7 @@ Stop the stack:
 
 ```bash
 cd ~/your-project
-git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
+git clone https://github.com/ctxr-dev/memory ./memory
 ./memory/bootstrap.sh --slug <project-slug>
 ```
 

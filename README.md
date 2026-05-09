@@ -72,7 +72,7 @@ Windows-specific gotchas:
 
 ```bash
 # from inside the project root
-git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
+git clone https://github.com/ctxr-dev/memory ./memory
 ./memory/bootstrap.sh --slug <project-slug>
 ./memory/scripts/up.sh    # FIRST RUN IS SLOW: clones the upstream Dify repo
                           # into memory/vendor/dify, pulls Dify images, and
@@ -100,6 +100,8 @@ That is the entire install. The wizard handles the API key, the five default dat
 
 ### 🤖 AI-driven install
 
+This is the FIRST of two AI prompts shipped with the boilerplate. It covers the host-side install only (clone, bootstrap, docker stack up). The SECOND prompt — under [Onboarding § AI-driven flow](#-ai-driven-flow) — wires Dify datasets via MCP tools AFTER the install. They're separate because most MCP clients (Claude Desktop, Cursor, Codex) need a restart to pick up the new memory server, so the same agent session can't span both phases. Run this prompt first, restart your client when it tells you to, then paste the onboarding prompt.
+
 Paste this prompt into your agent (Claude Code, Cursor, Codex) running inside the target project root:
 
 ```text
@@ -107,7 +109,7 @@ Install the local Dify MCP memory boilerplate into this project. Target the curr
 
 Steps:
 
-1. Confirm the boilerplate Git URL with me first if you cannot infer it. Default: https://github.com/ctxr-dev/memory-boilerplate.git
+1. Confirm the boilerplate Git URL with me first if you cannot infer it. Default: https://github.com/ctxr-dev/memory
 
 2. Ask me for the project slug. Lowercase ASCII a-z, 0-9, hyphen (e.g. billing-api, docs-site). If I give you a name, propose a sanitised slug derived from the project folder name and confirm. The slug becomes the per-project Docker container, image, and Compose project name, so multiple projects can run their own memory stacks without collisions.
 
@@ -151,8 +153,9 @@ Steps:
     a) Open the printed Dify UI URL.
     b) Create the admin account, configure an embedding model under Settings -> Model Provider (REQUIRED before any high_quality dataset can be created).
     c) Open Knowledge -> Service API, create a Knowledge API key.
-    d) Run `./memory/scripts/dify-setup.sh` to wire datasets, install the per-document metadata schema, and (optionally) absorb my existing docs.
-    e) Final end-to-end smoke (only valid after step d): `./memory/scripts/mcp-smoke.sh` — read-only round-trip across get_memory_config, search_memory (plain + filtered), and recall_lessons.
+    d) Restart your MCP client (Claude Desktop / Cursor / Codex / your terminal-spawned agent) so it picks up the new memory MCP server. The server only becomes callable after this restart.
+    e) Run `./memory/scripts/dify-setup.sh` to wire datasets, install the per-document metadata schema, and (optionally) absorb my existing docs. ALTERNATIVELY paste the second AI prompt from the README (under "Onboarding -> AI-driven flow") to a fresh agent session for an MCP-driven walkthrough that uses list_datasets / create_dataset / scan_documents / absorb_files instead of the wizard.
+    f) Final end-to-end smoke (only valid after step e): `./memory/scripts/mcp-smoke.sh` — read-only round-trip across get_memory_config, search_memory (plain + filtered), and recall_lessons.
 
 Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
 ```
@@ -193,6 +196,8 @@ Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `mem
 (Note: a raw `docker compose ... up -d memory_mcp` from the workspace root would fail because Docker Compose can't find `docker-compose.yaml` there. The `./memory/scripts/` wrappers add the correct `-f compose.mcp.yaml` and `-f vendor/dify/docker/docker-compose.yaml` flags via `scripts/lib.sh`.)
 
 ### 🤖 AI-driven flow
+
+This is the SECOND of two AI prompts. Run [the install prompt](#-ai-driven-install) first; restart your MCP client to pick up the new memory server; THEN paste this one. It uses the MCP tools (`list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, `save_lesson`, `recall_lessons`) which only become callable after the bridge container is registered with your client.
 
 Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP server registered):
 
