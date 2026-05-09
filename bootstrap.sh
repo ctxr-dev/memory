@@ -252,6 +252,29 @@ if [ "$install_hooks" -eq 1 ]; then
   fi
 fi
 
+# ---------- skills + rules ----------
+# templates/skills/*.md is rendered into both .claude/skills/ (for Claude Code,
+# only when --install-hooks) and .agents/rules/ (vendor-neutral, always).
+# Re-renders overwrite; the source is the canonical version.
+skills_src="$TEMPLATES_DIR/skills"
+if [ -d "$skills_src" ]; then
+  rules_dst="$WORKSPACE_DIR/.agents/rules"
+  mkdir -p "$rules_dst"
+  while IFS= read -r -d '' file; do
+    rel="${file#$skills_src/}"
+    render "$file" > "$rules_dst/$rel"
+  done < <(find "$skills_src" -type f -name '*.md' -print0)
+
+  if [ "$install_hooks" -eq 1 ]; then
+    claude_skills_dst="$WORKSPACE_DIR/.claude/skills"
+    mkdir -p "$claude_skills_dst"
+    while IFS= read -r -d '' file; do
+      rel="${file#$skills_src/}"
+      render "$file" > "$claude_skills_dst/$rel"
+    done < <(find "$skills_src" -type f -name '*.md' -print0)
+  fi
+fi
+
 # ---------- gitignore append (idempotent via marker) ----------
 gitignore="$WORKSPACE_DIR/.gitignore"
 marker="# Local Dify MCP memory boilerplate"

@@ -53,9 +53,11 @@ const compileTriggered = (() => {
 
 const context = [
   `Project memory is available through the \`${memoryServerName}\` MCP server.`,
-  "Use `search_memory` before relying on project-history assumptions, architecture decisions, integration details, or previous session conclusions.",
-  "Use `write_memory` to record explicit durable decisions; pass `supersedes` to retire an existing entry.",
-  "Memory lives in Dify as two document families: `daily-<ts>.md` (raw flush output) and `knowledge-<slug>-<ts>.md` (deduped, merged). PreCompact/PostCompact/SessionEnd hooks write daily docs; once-per-day compile promotes daily atoms into knowledge docs and disables the source dailies.",
+  "Before starting any non-trivial task, call `recall_lessons` with the inferred project_module / language / task_type. Lessons live in the `self_improvement` Dify dataset; ignoring them defeats the boilerplate.",
+  "When the user CORRECTS you (\"no\", \"stop doing X\", \"I told you before\", reverts your work), call `save_lesson` IMMEDIATELY (before replying) so the next turn can recall it. Required metadata: project_module, task_type, error_pattern.",
+  "For task-specific memory, use `search_memory` with `filters` (atom_type, project_module, language, task_type, error_pattern, tags) and a `scoreThreshold`. Do NOT load the whole store.",
+  "For durable artefacts (plans, investigations, decisions), use `save_to_dataset(dataset, name, text, metadata)` with upsert-by-name semantics: same name overwrites.",
+  "Memory lives in Dify, organised by named dataset slots: daily, knowledge, plans, investigations, self_improvement (and any user-defined extras). PreCompact/PostCompact/SessionEnd hooks write `daily-<ts>.md` docs; once-per-day compile promotes daily atoms into the right slot (lessons -> self_improvement, everything else -> knowledge) and disables the source dailies.",
   compileTriggered
     ? "Compile was triggered in the background to promote any unprocessed daily docs."
     : "Compile was already attempted today; skipped this session start.",
