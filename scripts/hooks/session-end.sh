@@ -2,4 +2,4 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-node "$SCRIPT_DIR/session-memory-hook.mjs" session-end
+node "$SCRIPT_DIR/flush.mjs" session-end
