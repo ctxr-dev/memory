@@ -316,15 +316,28 @@ export async function findDocumentByExactName(config, { datasetId, name }) {
 export async function upsertDocumentByName(config, { datasetId, name, text }) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const existing = await findDocumentByExactName(config, { datasetId: selectedDatasetId, name });
+
+  // Create-then-delete: if the create fails, the prior doc survives. Worst
+  // case is a transient duplicate name in Dify until the next compile pass
+  // resolves it; that is preferable to losing the only copy of a fact.
+  const created = await createDocumentByText(config, { datasetId: selectedDatasetId, name, text });
+
+  let deleteError;
   if (existing?.id) {
     try {
       await deleteDocument(config, { datasetId: selectedDatasetId, documentId: existing.id });
     } catch (err) {
-      throw new Error(`upsert: failed to delete prior '${name}' (${existing.id}): ${err.message}`);
+      deleteError = err instanceof Error ? err.message : String(err);
     }
   }
-  const created = await createDocumentByText(config, { datasetId: selectedDatasetId, name, text });
-  return { name, datasetId: selectedDatasetId, replacedId: existing?.id || null, created };
+
+  return {
+    name,
+    datasetId: selectedDatasetId,
+    replacedId: existing?.id || null,
+    created,
+    deleteError,
+  };
 }
 
 export async function deleteDocument(config, { datasetId, documentId }) {

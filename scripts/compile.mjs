@@ -182,7 +182,9 @@ async function main() {
   const dailyDataset = envValue("DIFY_FLUSH_DATASET", "daily");
   let dailies;
   try {
-    const result = await listDocuments({ prefix: "daily-", enabled: "true", datasetId: dailyDataset });
+    const listOpts = { prefix: "daily-", datasetId: dailyDataset };
+    if (!FORCE) listOpts.enabled = "true";
+    const result = await listDocuments(listOpts);
     dailies = Array.isArray(result?.documents) ? result.documents : [];
   } catch (err) {
     if (err instanceof DifyBridgeUnavailable) {
@@ -271,7 +273,7 @@ async function main() {
 
     if (allOk && !DRY_RUN) {
       try {
-        await disableDocument({ documentId: daily.id });
+        await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
         appendCompileLog({ event: "disable", document: daily.name });
         promotedDocs += 1;
       } catch (err) {

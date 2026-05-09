@@ -2,16 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_IGNORE = [
+  ".git",
   ".git/**",
+  "node_modules",
   "node_modules/**",
+  ".memory",
   ".memory/**",
-  "memory/vendor/**",
-  "memory/.git/**",
+  "memory",
+  "memory/**",
+  "vendor",
   "vendor/**",
+  "dist",
   "dist/**",
+  "build",
   "build/**",
+  ".next",
   ".next/**",
+  ".cache",
   ".cache/**",
+  ".turbo",
   ".turbo/**",
   "**/.DS_Store",
   "*.lock",
@@ -77,7 +86,7 @@ export function matchAny(relPath, regexes) {
   return false;
 }
 
-function* walk(rootDir, relPrefix = "") {
+function* walk(rootDir, relPrefix, ignoreRe) {
   let entries;
   try {
     entries = fs.readdirSync(rootDir, { withFileTypes: true });
@@ -87,11 +96,15 @@ function* walk(rootDir, relPrefix = "") {
   for (const entry of entries) {
     const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
     const full = path.join(rootDir, entry.name);
+    // Skip symlinks entirely so /workspace cannot be escaped via a link.
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
-      yield { type: "dir", rel, full };
-      yield* walk(full, rel);
+      // Prune ignored directories at the directory level so we don't recurse
+      // into vendor/dify or .git.
+      if (ignoreRe && matchAny(rel, ignoreRe)) continue;
+      yield* walk(full, rel, ignoreRe);
     } else if (entry.isFile()) {
-      yield { type: "file", rel, full };
+      yield { rel, full };
     }
   }
 }
@@ -103,8 +116,7 @@ export function findFiles(rootDir, { include, ignore } = {}) {
   const ignoreRe = compileGlobs(ignoreGlobs);
 
   const out = [];
-  for (const entry of walk(rootDir)) {
-    if (entry.type !== "file") continue;
+  for (const entry of walk(rootDir, "", ignoreRe)) {
     if (matchAny(entry.rel, ignoreRe)) continue;
     if (!matchAny(entry.rel, includeRe)) continue;
     let stat;
@@ -113,6 +125,7 @@ export function findFiles(rootDir, { include, ignore } = {}) {
     } catch {
       continue;
     }
+    if (!stat.isFile()) continue;
     out.push({
       relPath: entry.rel,
       absPath: entry.full,

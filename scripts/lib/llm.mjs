@@ -131,37 +131,57 @@ async function callClaudeCli({ systemPrompt, userPrompt, timeoutMs }) {
 async function callCodexCli({ systemPrompt, userPrompt, timeoutMs }) {
   const combined = systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
   const candidates = [
-    ["exec", "--json", combined],
-    ["exec", combined],
+    { args: ["exec", "--json", combined], parse: parseCodexJsonl },
+    { args: ["exec", combined], parse: (raw) => raw },
   ];
   let lastErr;
-  for (const args of candidates) {
+  for (const { args, parse } of candidates) {
     try {
       const raw = await spawnCapture("codex", args, { timeoutMs });
-      try {
-        const wrapper = JSON.parse(raw);
-        if (typeof wrapper?.result === "string") return wrapper.result;
-        if (typeof wrapper?.output === "string") return wrapper.output;
-        if (Array.isArray(wrapper?.messages)) {
-          const text = wrapper.messages
-            .map((m) => (typeof m?.content === "string" ? m.content : ""))
-            .filter(Boolean)
-            .join("\n");
-          if (text) return text;
-        }
-        return raw;
-      } catch {
-        return raw;
-      }
+      const text = parse(raw);
+      return text || raw;
     } catch (err) {
       lastErr = err;
-      if (err instanceof LLMProviderUnavailable && /unknown.*--json|invalid argument/i.test(err.message)) {
+      if (
+        err instanceof LLMProviderUnavailable &&
+        /unknown|unexpected|unrecognized|invalid argument/i.test(err.message)
+      ) {
         continue;
       }
       throw err;
     }
   }
   throw lastErr ?? new LLMProviderUnavailable("codex exec failed");
+}
+
+function parseCodexJsonl(raw) {
+  const lines = String(raw).split(/\r?\n/).filter((l) => l.trim());
+  let lastAssistantText = "";
+  let lastResultText = "";
+  for (const line of lines) {
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    // Codex emits JSONL events; collect agent_message / message / result text.
+    const candidates = [
+      event?.message,
+      event?.text,
+      event?.delta,
+      event?.content,
+      event?.result,
+    ];
+    for (const c of candidates) {
+      if (typeof c === "string" && c.trim()) {
+        const role = String(event?.role || event?.type || "").toLowerCase();
+        if (role.includes("result")) lastResultText = c;
+        else lastAssistantText = c;
+      }
+    }
+  }
+  return lastResultText || lastAssistantText || "";
 }
 
 async function callAnthropicApi({ systemPrompt, userPrompt, maxTokens, timeoutMs }) {

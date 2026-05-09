@@ -109,7 +109,14 @@ server.registerTool(
         apiKeyConfigured: Boolean(config.apiKey),
         apiKeyPreview: maskSecret(config.apiKey),
         datasetIds: config.datasetIds,
-        writeDatasetId: config.writeDatasetId || config.datasetIds[0] || "",
+        flushDataset: config.flushDatasetName,
+        compileDataset: config.compileDatasetName,
+        absorbDefaultDataset: config.absorbDefaultDatasetName,
+        datasetSlots: Array.from(config.datasetMap.entries()).map(([name, e]) => ({
+          name,
+          configuredId: e.id || "",
+        })),
+        legacyWriteDatasetId: config.legacyWriteDatasetId || "",
         sessionProcessRulePreset: config.sessionProcessRulePreset,
         sessionProcessRuleConfigured: Boolean(config.sessionProcessRule),
         retrievalModelConfigured: Boolean(config.retrievalModel),
@@ -145,7 +152,9 @@ server.registerTool(
         throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in memory/.env.");
       }
       if (selectedDatasetIds.length === 0) {
-        throw new Error("DIFY_DATASET_IDS is empty. Add at least one Dify knowledge base ID.");
+        throw new Error(
+          "No datasets to search. Bind at least one slot in DIFY_DATASETS / DIFY_DATASET_<NAME>_ID (run ./memory/scripts/dify-setup.sh) or pass datasetIds explicitly.",
+        );
       }
 
       const settled = await Promise.allSettled(

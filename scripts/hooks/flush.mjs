@@ -81,9 +81,11 @@ function buildSourceMaterial(rawInput) {
 
   let body;
   let turnCount;
+  let fromCompactSummary = false;
   if (hookInput.compact_summary) {
     body = `## Compact Summary\n\n${hookInput.compact_summary}`;
     turnCount = 1;
+    fromCompactSummary = true;
   } else if (transcriptPath) {
     const transcript = transcriptToMarkdown(transcriptPath);
     body = transcript.markdown;
@@ -96,7 +98,7 @@ function buildSourceMaterial(rawInput) {
   body = redact(body).trim();
 
   const minTurns = mode === "pre-compact" ? PRECOMPACT_MIN_TURNS : SESSION_END_MIN_TURNS;
-  if (mode !== "post-compact" && turnCount < minTurns) {
+  if (!fromCompactSummary && turnCount < minTurns) {
     throw new SkipMemory(`only ${turnCount} transcript turns; minimum for ${mode} is ${minTurns}`);
   }
   if (!body) {
@@ -212,6 +214,17 @@ async function main() {
   const docName = dailyDocName();
   const text = renderDailyDocument({ atoms, source });
   const datasetName = envValue("DIFY_FLUSH_DATASET", "daily");
+
+  // Preflight: refuse cleanly if the slot is declared but unbound, so the
+  // user gets a useful skip message instead of a generic Dify 4xx.
+  const slotEnvKey = `DIFY_DATASET_${datasetName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
+  const boundId = envValue(slotEnvKey, "");
+  const legacyId = envValue("DIFY_WRITE_DATASET_ID", "");
+  if (!boundId && !legacyId) {
+    throw new SkipMemory(
+      `Dify slot '${datasetName}' is not bound (${slotEnvKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ./memory/scripts/dify-setup.sh.`,
+    );
+  }
 
   try {
     const result = await writeMemory({ name: docName, text, datasetId: datasetName });
