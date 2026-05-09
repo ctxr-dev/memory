@@ -136,6 +136,50 @@ export function requireDifyWriteConfig(config) {
   return datasetId;
 }
 
+export async function deleteDocument(config, { datasetId, documentId }) {
+  if (!documentId) {
+    throw new Error("deleteDocument requires documentId.");
+  }
+  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/${encodeURIComponent(documentId)}`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+    },
+    config.timeoutMs,
+  );
+}
+
+export async function disableDocument(config, { datasetId, documentId }) {
+  if (!documentId) {
+    throw new Error("disableDocument requires documentId.");
+  }
+  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/status/disable`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ document_ids: [documentId] }),
+    },
+    config.timeoutMs,
+  );
+}
+
 export async function createDocumentByText(config, { datasetId, name, text }) {
   const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(

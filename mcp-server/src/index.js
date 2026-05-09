@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   createDocumentByText,
+  deleteDocument,
+  disableDocument,
   fetchJsonWithTimeout,
   getConfig,
   maskSecret,
@@ -175,21 +177,81 @@ server.registerTool(
   {
     title: "Write project memory",
     description:
-      "Create a Dify knowledge document from concise project memory text such as decisions, constraints, and session summaries.",
+      "Create a Dify knowledge document from concise project memory text such as decisions, constraints, and session summaries. Optionally supersede an existing document by passing its id; the old document is disabled (or deleted with supersedesAction='delete') after the new one is written.",
     inputSchema: {
       name: z.string().trim().min(1).max(180),
       text: z.string().trim().min(20).max(200_000),
       datasetId: z.string().trim().min(1).optional(),
+      supersedes: z.string().trim().min(1).optional(),
+      supersedesAction: z.enum(["disable", "delete"]).optional(),
     },
   },
-  async ({ name, text, datasetId }) => {
+  async ({ name, text, datasetId, supersedes, supersedesAction }) => {
     try {
       const config = getConfig();
       const response = await createDocumentByText(config, { datasetId, name, text });
+
+      let supersedeResult;
+      if (supersedes) {
+        const action = supersedesAction || "disable";
+        try {
+          supersedeResult = action === "delete"
+            ? await deleteDocument(config, { datasetId, documentId: supersedes })
+            : await disableDocument(config, { datasetId, documentId: supersedes });
+        } catch (err) {
+          supersedeResult = {
+            ok: false,
+            action,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
       return jsonToolResponse({
         ok: true,
         datasetId: datasetId || config.writeDatasetId || config.datasetIds[0],
         response,
+        supersedes: supersedes
+          ? {
+              documentId: supersedes,
+              action: supersedesAction || "disable",
+              result: supersedeResult,
+            }
+          : undefined,
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "update_memory",
+  {
+    title: "Update an existing project memory document",
+    description:
+      "Replace an existing Dify knowledge document with a merged version. Equivalent to write_memory with a required supersedes id; provided as a dedicated tool so dedup-merge callers (compile.mjs) have an unambiguous signal.",
+    inputSchema: {
+      name: z.string().trim().min(1).max(180),
+      text: z.string().trim().min(20).max(200_000),
+      supersedes: z.string().trim().min(1),
+      datasetId: z.string().trim().min(1).optional(),
+      supersedesAction: z.enum(["disable", "delete"]).optional(),
+    },
+  },
+  async ({ name, text, supersedes, datasetId, supersedesAction }) => {
+    try {
+      const config = getConfig();
+      const created = await createDocumentByText(config, { datasetId, name, text });
+      const action = supersedesAction || "disable";
+      const supersedeResult = action === "delete"
+        ? await deleteDocument(config, { datasetId, documentId: supersedes })
+        : await disableDocument(config, { datasetId, documentId: supersedes });
+      return jsonToolResponse({
+        ok: true,
+        datasetId: datasetId || config.writeDatasetId || config.datasetIds[0],
+        created,
+        supersedes: { documentId: supersedes, action, result: supersedeResult },
       });
     } catch (error) {
       return errorToolResponse(error);
