@@ -7,7 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 load_memory_env
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
-container_name="${container_name:-__MEMORY_SERVER_NAME__}"
+if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
+  echo "MCP smoke failed: MCP_CONTAINER_NAME not set in memory/.env (got '$container_name')." >&2
+  echo "  Run ./memory/bootstrap.sh --slug <project-slug> first." >&2
+  exit 1
+fi
 output_file="$(mktemp)"
 trap 'rm -f "$output_file"' EXIT
 
@@ -86,10 +90,18 @@ if (!config.apiKeyConfigured) {
   fail("DIFY_KNOWLEDGE_API_KEY is not configured in memory/.env");
 }
 if (!Array.isArray(config.datasetIds) || config.datasetIds.length === 0) {
-  fail("DIFY_DATASET_IDS is empty in memory/.env");
+  fail("No datasets configured. Run ./memory/scripts/dify-setup.sh to bind DIFY_DATASETS slots.");
 }
-if (!config.writeDatasetId) {
-  fail("DIFY_WRITE_DATASET_ID is empty and no fallback dataset ID is available");
+const flushSlot = config.flushDataset || "daily";
+const compileSlot = config.compileDataset || "knowledge";
+const slots = Array.isArray(config.datasetSlots) ? config.datasetSlots : [];
+const flushBound = slots.find((s) => s.name === flushSlot)?.configuredId;
+const compileBound = slots.find((s) => s.name === compileSlot)?.configuredId;
+if (!flushBound && !config.legacyWriteDatasetId) {
+  fail(`Flush slot '${flushSlot}' has no configured id. Run ./memory/scripts/dify-setup.sh.`);
+}
+if (!compileBound && !config.legacyWriteDatasetId) {
+  fail(`Compile slot '${compileSlot}' has no configured id. Run ./memory/scripts/dify-setup.sh.`);
 }
 
 const search = toolText(3);
@@ -98,6 +110,6 @@ if (Array.isArray(search.errors) && search.errors.length > 0) {
 }
 
 console.error(
-  `MCP smoke OK: ${config.datasetIds.length} dataset(s), write dataset ${config.writeDatasetId}`,
+  `MCP smoke OK: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'`,
 );
 NODE

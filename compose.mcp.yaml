@@ -54,12 +54,12 @@ services:
     volumes: !override
       - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/weaviate:/var/lib/weaviate
 
-  __MEMORY_SERVER_NAME__:
+  memory_mcp:
     build:
       context: ${MEMORY_DIR:?Set MEMORY_DIR via memory/scripts/up.sh}
       dockerfile: mcp-server/Dockerfile
-    image: ${MCP_IMAGE_NAME:-__MCP_IMAGE_NAME__}
-    container_name: ${MCP_CONTAINER_NAME:-__MEMORY_SERVER_NAME__}
+    image: ${MCP_IMAGE_NAME:?Set MCP_IMAGE_NAME via memory/.env (bootstrap.sh writes it)}
+    container_name: ${MCP_CONTAINER_NAME:?Set MCP_CONTAINER_NAME via memory/.env (bootstrap.sh writes it)}
     command: ["sleep", "infinity"]
     restart: unless-stopped
     volumes:

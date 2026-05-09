@@ -318,10 +318,13 @@ Bootstrap complete.
 Next steps:
   1) ./memory/scripts/up.sh                     # start the Dify stack
   2) ./memory/scripts/ui-url.sh                 # open the printed URL
-  3) In Dify UI: create knowledge base, copy API key + dataset IDs
-  4) Edit memory/.env: DIFY_KNOWLEDGE_API_KEY, DIFY_DATASET_IDS, DIFY_WRITE_DATASET_ID
-  5) ./memory/scripts/up.sh $memory_server_name # restart MCP bridge with new env
-  6) ./memory/scripts/mcp-smoke.sh              # validate
+  3) In Dify UI: create the admin account, configure an embedding model,
+     then Knowledge -> Service API -> create a Knowledge API key.
+  4) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
+                                                  the four dataset slots (daily,
+                                                  knowledge, plans, investigations),
+                                                  optionally absorb existing docs.
+  5) ./memory/scripts/mcp-smoke.sh               # validate
 
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug

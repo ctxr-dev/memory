@@ -7,6 +7,20 @@ DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
 MEMORY_ENV="$MEMORY_DIR/.env"
 
+# Refuse to run if WORKSPACE_DIR is the user's home directory or root.
+# Happens when the boilerplate was cloned at the repo root (`git clone … .`
+# instead of `git clone … ./memory`), which would bind-mount $HOME (or /)
+# into the bridge container at /workspace.
+case "$WORKSPACE_DIR" in
+  "$HOME"|/|/root)
+    echo "FATAL: WORKSPACE_DIR resolves to '$WORKSPACE_DIR', which is your home or root." >&2
+    echo "  Clone the boilerplate INTO a project subdirectory:" >&2
+    echo "    cd ~/your-project && git clone <repo> ./memory" >&2
+    echo "  Do not git clone the boilerplate AS the project root." >&2
+    exit 1
+    ;;
+esac
+
 read_env_value() {
   local key="$1"
   local file="${2:-$MEMORY_ENV}"
@@ -32,11 +46,17 @@ load_memory_env() {
     configured_memory_data_dir="$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)"
   fi
 
+  if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
+    echo "FATAL: COMPOSE_PROJECT_NAME not configured." >&2
+    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to memory/.env." >&2
+    exit 1
+  fi
+
   export MEMORY_DIR
   export WORKSPACE_DIR
   export DIFY_DOCKER_DIR
   export MEMORY_DATA_DIR="${configured_memory_data_dir:-$WORKSPACE_DIR/.memory}"
-  export COMPOSE_PROJECT_NAME="${configured_project_name:-__COMPOSE_PROJECT_NAME__}"
+  export COMPOSE_PROJECT_NAME="$configured_project_name"
 }
 
 docker_compose() {

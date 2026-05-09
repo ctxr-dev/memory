@@ -108,8 +108,20 @@ cli() {
   docker exec -i "$CONTAINER_NAME" node src/memory-cli.js "$@"
 }
 
-cli_with_stdin() {
-  docker exec -i "$CONTAINER_NAME" node src/memory-cli.js "$@"
+restart_bridge() {
+  ( cd "$MEMORY_DIR" && docker_compose up -d --no-build memory_mcp >/dev/null )
+  # Wait for the bridge to be healthy enough to accept exec calls.
+  local attempts=0
+  while [ "$attempts" -lt 30 ]; do
+    if docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
+      if docker exec -i "$CONTAINER_NAME" node -e 'process.exit(0)' 2>/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+  echo "WARNING: bridge restart did not become ready within 30s; continuing." >&2
 }
 
 # ---------- preflight ----------
@@ -129,7 +141,16 @@ echo
 
 if [ -z "$API_KEY" ]; then
   if [ "$NON_INTERACTIVE" -eq 1 ]; then
-    echo "DIFY_KNOWLEDGE_API_KEY not set; cannot continue non-interactively." >&2
+    cat <<EOF >&2
+FATAL: DIFY_KNOWLEDGE_API_KEY not set; cannot continue in --non-interactive mode.
+
+Set it first, then re-run:
+  1) Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>')).
+  2) Knowledge -> Service API -> create a Knowledge API key.
+  3) Edit memory/.env: DIFY_KNOWLEDGE_API_KEY=<the-key>
+  4) Restart the bridge: docker compose -p "\$COMPOSE_PROJECT_NAME" up -d --no-build memory_mcp
+  5) ./memory/scripts/dify-setup.sh --non-interactive --auto-create
+EOF
     exit 1
   fi
   echo "Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>'))"
@@ -139,8 +160,7 @@ if [ -z "$API_KEY" ]; then
   set_env_var DIFY_KNOWLEDGE_API_KEY "$api_key"
   API_KEY="$api_key"
   echo "Restarting bridge with the new key..."
-  ( cd "$MEMORY_DIR" && ./scripts/up.sh "$CONTAINER_NAME" >/dev/null )
-  sleep 1
+  restart_bridge
 fi
 
 # ---------- discover existing datasets ----------
@@ -203,8 +223,7 @@ set_env_var DIFY_DATASETS "$(echo "$declared_slots" | tr -d ' ')"
 
 # Restart bridge so env propagates.
 echo "Restarting bridge to pick up dataset bindings..."
-( cd "$MEMORY_DIR" && ./scripts/up.sh "$CONTAINER_NAME" >/dev/null )
-sleep 1
+restart_bridge
 
 # ---------- optional absorb ----------
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
