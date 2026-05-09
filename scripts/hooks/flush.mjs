@@ -119,12 +119,18 @@ function loadPrompt() {
 
 function normaliseMetadata(raw) {
   const md = (raw && typeof raw === "object") ? raw : {};
-  const taskType = String(md.task_type || "").toLowerCase().trim();
+  // Strip CR/LF before trim so a metadata value cannot break the line-based
+  // parser in compile.mjs (every flush atom is rendered as a single
+  // `- metadata: <json>` line).
+  const clean = (v) => String(v || "").replace(/[\r\n]+/g, " ").trim();
+  const taskType = clean(md.task_type).toLowerCase();
   return {
-    project_module: String(md.project_module || "").toLowerCase().trim(),
-    language: String(md.language || "").toLowerCase().trim(),
-    task_type: TASK_TYPES.has(taskType) ? taskType : "",
-    error_pattern: String(md.error_pattern || "").toLowerCase().trim(),
+    project_module: clean(md.project_module).toLowerCase(),
+    language: clean(md.language).toLowerCase(),
+    // Out-of-set task_type collapses to "unknown" so the lesson is still
+    // filterable; previously it became "" which dropped the atom.
+    task_type: TASK_TYPES.has(taskType) ? taskType : (taskType ? "unknown" : ""),
+    error_pattern: clean(md.error_pattern).toLowerCase(),
   };
 }
 

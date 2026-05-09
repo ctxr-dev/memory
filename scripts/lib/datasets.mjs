@@ -54,16 +54,23 @@ export function routeAtomToDataset(atomType, fallback) {
 }
 
 // Normalise an atom's metadata block into the exact fields Dify will store.
-// Tags array is joined with commas. Missing fields become "".
+// Tags array is joined with commas. Empty/absent fields are OMITTED so
+// downstream filters never match `is ""` against entries that simply lack
+// the field. atom_type is always present since the atom has a type.
 export function metadataForDify(atom) {
   const md = (atom && typeof atom.metadata === "object" && atom.metadata) || {};
-  const tagsField = Array.isArray(atom?.tags) ? atom.tags.join(",") : String(md.tags || "");
-  return {
-    atom_type: String(atom?.type || "").trim(),
-    tags: tagsField,
-    project_module: String(md.project_module || "").trim(),
-    language: String(md.language || "").trim(),
-    task_type: String(md.task_type || "").trim(),
-    error_pattern: String(md.error_pattern || "").trim(),
+  const tagsField = Array.isArray(atom?.tags)
+    ? atom.tags.map((t) => String(t).trim()).filter(Boolean).join(",")
+    : String(md.tags || "").trim();
+  const out = { atom_type: String(atom?.type || "").trim() };
+  const maybe = (k, v) => {
+    const cleaned = String(v || "").trim();
+    if (cleaned) out[k] = cleaned;
   };
+  if (tagsField) out.tags = tagsField;
+  maybe("project_module", md.project_module);
+  maybe("language", md.language);
+  maybe("task_type", md.task_type);
+  maybe("error_pattern", md.error_pattern);
+  return out;
 }

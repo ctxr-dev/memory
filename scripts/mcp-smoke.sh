@@ -90,7 +90,7 @@ if (!config.apiKeyConfigured) {
   fail("DIFY_KNOWLEDGE_API_KEY is not configured in memory/.env");
 }
 if (!Array.isArray(config.datasetIds) || config.datasetIds.length === 0) {
-  fail("No datasets configured. Run ./memory/scripts/dify-setup.sh to bind DIFY_DATASETS slots.");
+  fail("No datasets configured. Run ./memory/scripts/dify-setup.sh to bind dataset slots (every DIFY_DATASET_<NAME>_ID line declares one).");
 }
 const flushSlot = config.flushDataset || "daily";
 const compileSlot = config.compileDataset || "knowledge";

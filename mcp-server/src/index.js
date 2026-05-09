@@ -22,6 +22,7 @@ import {
   upsertDocumentByName,
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
+import { lessonDocName } from "./slug.js";
 
 const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
 const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
@@ -298,7 +299,7 @@ server.registerTool(
   {
     title: "List Dify datasets",
     description:
-      "List every Dify Knowledge dataset visible to the configured API key, plus the local DIFY_DATASETS bindings declared in memory/.env (so you can see which named slot points to which dataset id).",
+      "List every Dify Knowledge dataset visible to the configured API key, plus the local slot bindings declared by DIFY_DATASET_<NAME>_ID lines in memory/.env (so you can see which named slot points to which dataset id).",
     inputSchema: {},
   },
   async () => {
@@ -330,7 +331,7 @@ server.registerTool(
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset. Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env (DIFY_DATASETS=daily,knowledge,plans,investigations + DIFY_DATASET_<NAME>_ID=<id>).",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default). Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -394,12 +395,15 @@ server.registerTool(
   async ({ title, body, metadata, tags, evidence }) => {
     try {
       const config = getConfig();
-      const datasetSlot = config.datasetMap.has("self_improvement")
+      // datasetMap.has() returns true even when the slot is declared but
+      // unbound (id = ""). Check the resolved id to decide whether to fall
+      // back to the absorb default.
+      const datasetSlot = config.datasetMap.get("self_improvement")?.id
         ? "self_improvement"
         : (config.absorbDefaultDatasetName || "knowledge");
-      const slug = String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "lesson";
-      const ts = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
-      const name = `lesson-${slug}-${ts.slice(0, 8)}-${ts.slice(8, 14)}${ts.slice(14, 17)}.md`;
+      // Use the shared lessonDocName so save_lesson and compile produce
+      // the same shape recognised by parseLessonDocName.
+      const name = lessonDocName(title);
       const tagList = Array.isArray(tags) ? tags : (metadata.tags ? String(metadata.tags).split(",").map((t) => t.trim()) : []);
       const lines = [
         `# ${title}`,
@@ -479,33 +483,54 @@ server.registerTool(
         ...(tags ? { tags } : {}),
       };
 
-      // Fall-back ladder: drop one filter at a time when hits are thin.
-      const ladder = [
-        baseFilters,
-        ...(error_pattern ? [{ ...baseFilters, error_pattern: undefined }] : []),
-        ...(language ? [{ atom_type: "self-improvement-lesson", project_module, task_type, tags }] : []),
-        ...(task_type ? [{ atom_type: "self-improvement-lesson", project_module, tags }] : []),
-        { atom_type: "self-improvement-lesson" },
-      ];
+      // Fall-back ladder: drop the most-specific filter first, broadening
+      // step by step. Each step's filter set is built fresh from baseFilters
+      // by removing the listed keys. Steps whose key is not present in
+      // baseFilters become identical to the previous step and are
+      // deduplicated below. The final step is atom_type only.
+      const dropOrder = ["error_pattern", "language", "task_type", "tags", "project_module"];
+      const ladderRaw = [{ ...baseFilters }];
+      const dropped = [];
+      for (const key of dropOrder) {
+        dropped.push(key);
+        const next = { ...baseFilters };
+        for (const k of dropped) delete next[k];
+        ladderRaw.push(next);
+      }
+      // Dedup adjacent identical filter sets so we don't run the same
+      // Dify call twice when the caller skipped a field.
+      const ladder = [];
+      let prevKey = null;
+      for (const f of ladderRaw) {
+        const key = JSON.stringify(f);
+        if (key !== prevKey) ladder.push(f);
+        prevKey = key;
+      }
 
-      let lessonHits = [];
+      // Accumulate hits across rungs. Strict-filter hits are stored first
+      // and preserved; broader rungs only add NEW segments (deduped by
+      // segmentId). Stop broadening once we have at least 3 distinct hits.
+      const seen = new Set();
+      const lessonHits = [];
       let usedFilters = null;
       for (const filters of ladder) {
-        const cleaned = Object.fromEntries(
-          Object.entries(filters).filter(([, v]) => v != null && v !== ""),
-        );
-        const condition = buildMetadataCondition(cleaned);
+        const condition = buildMetadataCondition(filters);
         const records = await retrieveChunks(config, {
           datasetId: lessonDatasetId,
           query,
           metadataCondition: condition,
           scoreThreshold: threshold,
         });
-        if (records.length > 0) {
-          lessonHits = records.map((r) => compactRecord(lessonDatasetId, r));
-          usedFilters = cleaned;
-          if (lessonHits.length >= 3) break;
+        if (records.length === 0) continue;
+        if (!usedFilters) usedFilters = filters;
+        for (const r of records) {
+          const compact = compactRecord(lessonDatasetId, r);
+          const dedupKey = compact.segmentId || `${compact.documentId}:${compact.score}`;
+          if (seen.has(dedupKey)) continue;
+          seen.add(dedupKey);
+          lessonHits.push(compact);
         }
+        if (lessonHits.length >= 3) break;
       }
 
       const supplementary = [];

@@ -200,9 +200,11 @@ fi
 
 # Migrate from the old DIFY_DATASETS list var, if present, by seeding
 # DIFY_DATASET_<NAME>_ID lines for each name and removing the legacy var.
-legacy_list="$(read_env_value DIFY_DATASETS "$ENV_FILE" 2>/dev/null || true)"
-if [ -n "$legacy_list" ]; then
-  echo "Migrating legacy DIFY_DATASETS=$legacy_list -> per-slot env lines."
+# Use existence (grep) not value emptiness so a `DIFY_DATASETS=` line with
+# no value is also cleaned up.
+if grep -qE '^DIFY_DATASETS=' "$ENV_FILE"; then
+  legacy_list="$(read_env_value DIFY_DATASETS "$ENV_FILE" 2>/dev/null || true)"
+  echo "Migrating legacy DIFY_DATASETS=${legacy_list:-<empty>} -> per-slot env lines."
   for migrated in $(echo "$legacy_list" | tr ',' '\n' | awk 'NF'); do
     migrated="$(echo "$migrated" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
     [ -n "$migrated" ] || continue
@@ -222,9 +224,13 @@ while IFS= read -r s; do
 done < <(discover_slots_from_env)
 for d in "${DEFAULT_DATASETS[@]}"; do
   found=0
-  for existing in "${declared_slots_arr[@]:-}"; do
-    [ "$existing" = "$d" ] && { found=1; break; }
-  done
+  # Bash 3.2 (default on macOS) treats expansion of an empty array under
+  # `set -u` as unset; guard with a length check before iterating.
+  if [ "${#declared_slots_arr[@]}" -gt 0 ]; then
+    for existing in "${declared_slots_arr[@]}"; do
+      [ "$existing" = "$d" ] && { found=1; break; }
+    done
+  fi
   if [ "$found" -eq 0 ]; then
     declared_slots_arr+=("$d")
     set_env_var "$(slot_to_env_key "$d")" ""

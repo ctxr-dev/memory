@@ -18,7 +18,7 @@ import {
   parseKnowledgeDocName,
   parseLessonDocName,
 } from "./lib/slug.mjs";
-import { ATOM_TYPE_TO_DATASET, metadataForDify } from "./lib/datasets.mjs";
+import { ATOM_TYPE_TO_DATASET, ATOM_TYPES, metadataForDify } from "./lib/datasets.mjs";
 
 const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -93,7 +93,15 @@ function parseAtomsFromMarkdown(text) {
         default: break;
       }
     }
-    if (type && title && body) atoms.push({ type, title, body, tags, metadata, evidence });
+    if (!type || !title || !body) continue;
+    // Re-validate atom type against the central registry. A daily doc
+    // produced by an older flush.mjs (or hand-edited) might carry a
+    // typo'd type; promoting it would route to the wrong dataset.
+    if (!ATOM_TYPES.has(type)) {
+      console.error(`compile.mjs: skipping atom with unknown type '${type}' (title='${title.slice(0, 40)}')`);
+      continue;
+    }
+    atoms.push({ type, title, body, tags, metadata, evidence });
   }
   return atoms;
 }
@@ -316,6 +324,12 @@ async function main() {
           metadataResult = await applyMetadataToWritten(atom, result, targetDataset);
         }
 
+        // Metadata-write failure is non-fatal for the doc itself but the
+        // doc is now un-filterable. Mark the daily kept-enabled so a later
+        // compile retries the metadata write (idempotent because the new
+        // daily-doc atom hasn't been replaced).
+        const metadataFailed = metadataResult && metadataResult.ok !== true;
+
         appendCompileLog({
           event: "atom",
           source: daily.name,
@@ -328,6 +342,7 @@ async function main() {
           metadataError: metadataResult?.error || metadataResult?.reason,
         });
         if (!DRY_RUN && result?.ok === false) throw new Error(JSON.stringify(result));
+        if (metadataFailed) allOk = false;
       } catch (err) {
         allOk = false;
         counts.error += 1;

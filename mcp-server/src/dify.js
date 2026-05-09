@@ -176,7 +176,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
     const resolved = resolveDatasetId(config, datasetNameOrId);
     if (!resolved) {
       throw new Error(
-        `Dataset '${datasetNameOrId}' is not configured. Add to DIFY_DATASETS and set ${envEnvKey(datasetNameOrId)} in memory/.env, or run ./memory/scripts/dify-setup.sh.`,
+        `Dataset '${datasetNameOrId}' is not configured. Add ${envEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
       );
     }
     return resolved;
@@ -184,7 +184,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
   const fallback = config.legacyWriteDatasetId || config.datasetIds[0];
   if (!fallback) {
     throw new Error(
-      "No write dataset configured. Run ./memory/scripts/dify-setup.sh, or set DIFY_DATASETS + DIFY_DATASET_<NAME>_ID in memory/.env.",
+      "No write dataset configured. Run ./memory/scripts/dify-setup.sh, or add a DIFY_DATASET_<NAME>_ID=<dataset-id> line to memory/.env.",
     );
   }
   return fallback;
@@ -218,10 +218,34 @@ export async function listAllDatasets(config, { keyword } = {}) {
   return all;
 }
 
-export async function createDataset(config, { name, description, indexingTechnique = "high_quality", permission = "only_me" }) {
+// Auto-created datasets get high_quality indexing (full-text + vector
+// indexes both populated) AND a hybrid_search retrieval default with
+// reranking enabled. This is "full text + vector" as the user asked for:
+// embedding similarity + BM25 inverted-index, fused via Dify's hybrid
+// retrieval. The reranking_enable flag is harmless when no reranker is
+// configured (Dify falls back to score-based fusion).
+export async function createDataset(config, {
+  name,
+  description,
+  indexingTechnique = "high_quality",
+  permission = "only_me",
+  retrievalModel,
+}) {
   if (!name) throw new Error("createDataset requires a name.");
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets`;
-  const payload = { name, indexing_technique: indexingTechnique, permission };
+  const defaultRetrievalModel = {
+    search_method: "hybrid_search",
+    reranking_enable: true,
+    top_k: 8,
+    score_threshold_enabled: false,
+    score_threshold: 0,
+  };
+  const payload = {
+    name,
+    indexing_technique: indexingTechnique,
+    permission,
+    retrieval_model: retrievalModel || defaultRetrievalModel,
+  };
   if (description) payload.description = description;
   return fetchJsonWithTimeout(
     endpoint,
@@ -429,9 +453,18 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
 // metadataCondition is the Dify-shaped object:
 //   { logical_operator: "and" | "or", conditions: [{ name, comparison_operator, value }] }
 //
-// Per Dify docs the filter is passed at the top level of the retrieve payload
-// as `metadata_condition`. If a future Dify version moves it under
-// `retrieval_model`, switch the key here once.
+// Per Dify source (api/controllers/console/datasets/hit_testing_base.py +
+// api/core/rag/retrieval/dataset_retrieval.py) and issue #29044, the wire
+// JSON key is `metadata_filtering_conditions` and it lives INSIDE
+// `retrieval_model`. Top-level `metadata_condition` is silently dropped.
+
+const DEFAULT_HYBRID_RETRIEVAL_MODEL = {
+  search_method: "hybrid_search",
+  reranking_enable: true,
+  top_k: 8,
+  score_threshold_enabled: false,
+  score_threshold: 0,
+};
 
 export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, retrievalModel } = {}) {
   if (!datasetId) throw new Error("retrieveChunks requires datasetId.");
@@ -440,27 +473,25 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
     datasetId,
   )}/retrieve`;
 
-  const baseRetrievalModel =
-    retrievalModel && typeof retrievalModel === "object"
-      ? { ...retrievalModel }
-      : config.retrievalModel
-        ? { ...config.retrievalModel }
-        : null;
+  // Always send a retrieval_model (default hybrid search) so we can attach
+  // metadata_filtering_conditions to it. Caller-supplied retrievalModel
+  // wins; config-level (DIFY_RETRIEVAL_MODEL_JSON) wins over the default.
+  const rm = retrievalModel && typeof retrievalModel === "object"
+    ? { ...retrievalModel }
+    : config.retrievalModel
+      ? { ...config.retrievalModel }
+      : { ...DEFAULT_HYBRID_RETRIEVAL_MODEL };
 
   if (typeof scoreThreshold === "number" && scoreThreshold >= 0 && scoreThreshold <= 1) {
-    const rm = baseRetrievalModel || {};
     rm.score_threshold = scoreThreshold;
     rm.score_threshold_enabled = true;
-    return runRetrieve(endpoint, config, query, rm, metadataCondition);
   }
 
-  return runRetrieve(endpoint, config, query, baseRetrievalModel, metadataCondition);
-}
+  if (metadataCondition) {
+    rm.metadata_filtering_conditions = metadataCondition;
+  }
 
-async function runRetrieve(endpoint, config, query, retrievalModel, metadataCondition) {
-  const payload = { query };
-  if (retrievalModel) payload.retrieval_model = retrievalModel;
-  if (metadataCondition) payload.metadata_condition = metadataCondition;
+  const payload = { query, retrieval_model: rm };
   const body = await fetchJsonWithTimeout(
     endpoint,
     {

@@ -148,18 +148,21 @@ If you prefer to edit `memory/.env` by hand, the relevant block is:
 ```bash
 DIFY_KNOWLEDGE_API_KEY=...
 
-DIFY_DATASETS=daily,knowledge,plans,investigations
+# Each line declares one slot. The slot NAME is the env-var name
+# lowercased between DIFY_DATASET_ and _ID. Empty value = declared but
+# not bound yet.
 DIFY_DATASET_DAILY_ID=...
 DIFY_DATASET_KNOWLEDGE_ID=...
 DIFY_DATASET_PLANS_ID=...
 DIFY_DATASET_INVESTIGATIONS_ID=...
+DIFY_DATASET_SELF_IMPROVEMENT_ID=...
 
 DIFY_FLUSH_DATASET=daily
 DIFY_COMPILE_DATASET=knowledge
 DIFY_ABSORB_DEFAULT_DATASET=knowledge
 ```
 
-Add more slots by extending `DIFY_DATASETS` and adding the matching `DIFY_DATASET_<NAME>_ID` line, then re-run `dify-setup.sh` (it only asks about new/unbound slots).
+Add more slots by adding a new `DIFY_DATASET_<NAME>_ID=` line, then re-run `dify-setup.sh` (it only asks about new/unbound slots). Auto-created datasets default to `high_quality` indexing + `hybrid_search` retrieval (full-text + vector).
 
 Optional: if you want the MCP bridge to force retrieval settings instead of using Dify's configured defaults, set `DIFY_RETRIEVAL_MODEL_JSON`. Leave it empty unless you have a specific reason. Dify's UI is usually the better place to tune retrieval.
 
@@ -178,7 +181,7 @@ MEMORY_HOOK_PRECOMPACT_MIN_TURNS=5
 
 These are the important knobs:
 
-- `DIFY_DATASETS` + `DIFY_DATASET_<NAME>_ID`: the named slot map. `dify-setup.sh` maintains both.
+- `DIFY_DATASET_<NAME>_ID`: every line is one slot binding. Empty value = declared but unbound. `dify-setup.sh` maintains the file.
 - `DIFY_FLUSH_DATASET` / `DIFY_COMPILE_DATASET` / `DIFY_ABSORB_DEFAULT_DATASET`: pipeline routing (slot names).
 - `DIFY_SESSION_INDEXING_TECHNIQUE`: `high_quality` for embedding-based indexing; keep this for precision.
 - `DIFY_SESSION_DOC_FORM`: `text_model` by default. Keep hook captures as normal text unless you have tested Dify's `hierarchical_model` or `qa_model` behavior in the UI first.
@@ -416,7 +419,7 @@ Current hook events:
 What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 - `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
-- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later promotes those atoms into `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents and disables the source dailies.
+- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later routes each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Source dailies are disabled after their atoms are promoted.
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 

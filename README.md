@@ -76,7 +76,7 @@ After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-dri
 ./memory/scripts/mcp-smoke.sh
 ```
 
-That is the entire install. The wizard handles the API key, the four default dataset slots (`daily`, `knowledge`, `plans`, `investigations`), and an optional first-pass absorb of your existing project documentation.
+That is the entire install. The wizard handles the API key, the five default dataset slots (`daily`, `knowledge`, `plans`, `investigations`, `self_improvement`), the per-document metadata schema on each slot, and an optional first-pass absorb of your existing project documentation.
 
 ### AI-driven install
 
@@ -130,12 +130,13 @@ The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboa
 `dify-setup.sh` is a re-runnable wizard. Once Dify is up and you have admin/embedding configured in the UI, it asks at most four kinds of questions:
 
 1. **`DIFY_KNOWLEDGE_API_KEY`** — paste it now (or skip if you already added it to `memory/.env`).
-2. **For each dataset slot** in `DIFY_DATASETS` (defaults: `daily, knowledge, plans, investigations`):
-   - Auto-create a Dify dataset with that exact name and bind its id to `DIFY_DATASET_<NAME>_ID`.
+2. **For each dataset slot** declared in `memory/.env` (every `DIFY_DATASET_<NAME>_ID=` line is one slot; defaults are `daily, knowledge, plans, investigations, self_improvement`):
+   - Auto-create a Dify dataset with that exact name (high_quality + hybrid_search by default — full-text + vector indexes both populated) and bind its id to `DIFY_DATASET_<NAME>_ID`.
    - Or paste an existing dataset id you want to re-use.
    - Or skip the slot.
-3. **Bridge restart** — the wizard restarts the MCP bridge so the new env propagates.
-4. **Absorb existing docs?** — optional. Scans the workspace for matching files, lets you pick which ones go into which slot (defaults to `knowledge`), then upserts each as a Dify document with name = relative path with `/` replaced by `_` (e.g. `docs/auth/jwt.md` becomes `docs_auth_jwt.md`). Re-running the absorb later overwrites the same doc instead of duplicating.
+3. **Metadata schema** — for every bound slot, the wizard installs the six per-document metadata fields (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) and offers to enable Dify's built-in fields (`document_name`, `upload_date`, `last_update_date`).
+4. **Bridge restart** — the wizard restarts the MCP bridge so the new env propagates.
+5. **Absorb existing docs?** — optional. Scans the workspace for matching files, lets you pick which ones go into which slot (defaults to `knowledge`), then upserts each as a Dify document with name = relative path with `/` replaced by `_` (e.g. `docs/auth/jwt.md` becomes `docs_auth_jwt.md`). Re-running the absorb later overwrites the same doc instead of duplicating.
 
 ### Manual flow
 
@@ -147,7 +148,7 @@ The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboa
 ./memory/scripts/mcp-smoke.sh    # validate
 ```
 
-Want to add another slot later? Edit `DIFY_DATASETS` in `memory/.env` (e.g. add `runbooks`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot.
+Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` (e.g. `DIFY_DATASET_RUNBOOKS_ID=`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot. After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines: `./memory/scripts/up.sh` (rebuilds + recreates) or `docker compose -p $COMPOSE_PROJECT_NAME up -d --no-build memory_mcp` for env-only refresh.
 
 ### AI-driven flow
 
@@ -181,8 +182,8 @@ A dedicated dataset slot, `self_improvement`, captures lessons learned **only** 
 
 ### Two MCP entry points
 
-- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?)`** — call BEFORE non-trivial work. Searches the `self_improvement` dataset filtered to `atom_type=self-improvement-lesson` plus the supplied context. Falls back by dropping `error_pattern` → `language` → `task_type` until at least 3 hits are found. Optionally also pulls top `bug-root-cause` and `feedback-rule` atoms from `knowledge` matching the same `project_module`. Returns at most 5 records sorted by score.
-- **`save_lesson(title, body, metadata)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key — different lessons with the same `error_pattern` will MERGE in compile rather than multiply. Available on the next turn.
+- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Searches the `self_improvement` dataset filtered to `atom_type=self-improvement-lesson` plus the supplied context. Broadens via a fall-back ladder (drop `error_pattern` → `language` → `task_type` → `tags` → `project_module`, ending at `atom_type` only) and accumulates UNIQUE hits across rungs until at least 3 distinct hits or the ladder is exhausted. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is provided AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` and `feedback-rule` atoms from `knowledge` matching the same `project_module`.
+- **`save_lesson(title, body, metadata, tags?, evidence?)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key — different lessons with the same `error_pattern` will MERGE in compile rather than multiply. The doc name `lesson-<slug>-<ts>.md` matches the format compile recognises, so inline-saved lessons participate in the same dedup-merge pipeline. Available on the next turn.
 
 ### Two capture paths feed `self_improvement`
 
@@ -321,9 +322,10 @@ The cloned `./memory/` keeps its own `.git`, so:
 
 ```bash
 cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
+./memory/scripts/up.sh    # recreate the bridge so it picks up env changes
 ```
 
-Re-running bootstrap is idempotent. `memory/.env` is preserved across upgrades — only template-derived files (`.agents/*`, `.claude/settings.json`) are re-rendered.
+Re-running bootstrap is idempotent. `memory/.env` is preserved across upgrades — only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge container reads `memory/.env` via Compose's `env_file:` directive, so any new `DIFY_DATASET_<NAME>_ID=` line you add only takes effect after a recreate; `up.sh` handles that. Existing `memory/.env` slots survive the upgrade.
 
 ## Client config
 

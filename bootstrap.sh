@@ -104,8 +104,10 @@ if [ -z "$slug" ]; then
   fi
 fi
 slug="$(sanitize_slug "$slug")"
-if [ -z "$slug" ] || ! printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9-]*[a-z0-9]$'; then
-  echo "Invalid slug: '$slug'. Use lowercase a-z, 0-9, -." >&2
+# Accept single-char slugs ("a") and multi-segment ("foo-bar"); reject
+# consecutive dashes ("a--b") and leading/trailing dashes.
+if [ -z "$slug" ] || ! printf '%s' "$slug" | grep -qE '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+  echo "Invalid slug: '$slug'. Use lowercase a-z, 0-9, with single dashes between segments." >&2
   exit 1
 fi
 
@@ -343,9 +345,11 @@ Next steps:
   3) In Dify UI: create the admin account, configure an embedding model,
      then Knowledge -> Service API -> create a Knowledge API key.
   4) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
-                                                  the four dataset slots (daily,
-                                                  knowledge, plans, investigations),
-                                                  optionally absorb existing docs.
+                                                  the five dataset slots (daily,
+                                                  knowledge, plans, investigations,
+                                                  self_improvement), install per-doc
+                                                  metadata schema, optionally absorb
+                                                  existing docs.
   5) ./memory/scripts/mcp-smoke.sh               # validate
 
 The boilerplate ships with its own .git so you can update it later:
