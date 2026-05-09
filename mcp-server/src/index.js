@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   buildDatasetMap,
+  buildMetadataCondition,
   createDataset,
   createDocumentByText,
   deleteDocument,
@@ -16,6 +17,8 @@ import {
   maskSecret,
   requireDifyWriteConfig,
   resolveDatasetId,
+  retrieveChunks,
+  updateDocumentMetadata,
   upsertDocumentByName,
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
@@ -23,29 +26,23 @@ import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob
 const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
 const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
 
-async function retrieveDataset({ apiUrl, apiKey, retrievalModel, timeoutMs }, datasetId, query) {
-  const endpoint = `${apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(datasetId)}/retrieve`;
-  const payload = { query };
+const FilterSchema = z.object({
+  atom_type: z.string().trim().min(1).optional(),
+  project_module: z.string().trim().min(1).optional(),
+  language: z.string().trim().min(1).optional(),
+  task_type: z.string().trim().min(1).optional(),
+  error_pattern: z.string().trim().min(1).optional(),
+  tags: z.string().trim().min(1).optional(),
+});
 
-  if (retrievalModel) {
-    payload.retrieval_model = retrievalModel;
-  }
-
-  const body = await fetchJsonWithTimeout(
-    endpoint,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    },
-    timeoutMs,
-  );
-
-  return Array.isArray(body?.records) ? body.records : [];
-}
+const MetadataSchema = z.object({
+  atom_type: z.string().optional(),
+  tags: z.string().optional(),
+  project_module: z.string().optional(),
+  language: z.string().optional(),
+  task_type: z.string().optional(),
+  error_pattern: z.string().optional(),
+}).partial();
 
 function compactRecord(datasetId, record) {
   const segment = record?.segment || {};
@@ -134,18 +131,24 @@ server.registerTool(
   {
     title: "Search project memory",
     description:
-      "Search configured Dify knowledge bases and return scored chunks with document metadata.",
+      "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot.",
     inputSchema: {
       query: z.string().trim().min(1).max(250),
+      datasets: z.array(z.string().trim().min(1)).optional(),
       datasetIds: z.array(z.string().trim().min(1)).optional(),
+      filters: FilterSchema.optional(),
+      scoreThreshold: z.number().min(0).max(1).optional(),
       maxResults: z.number().int().min(1).max(50).optional(),
     },
   },
-  async ({ query, datasetIds, maxResults }) => {
+  async ({ query, datasets, datasetIds, filters, scoreThreshold, maxResults }) => {
     try {
       const config = getConfig();
-      const selectedDatasetIds = Array.isArray(datasetIds) && datasetIds.length > 0
-        ? datasetIds
+      const requested = Array.isArray(datasets) && datasets.length > 0
+        ? datasets
+        : (Array.isArray(datasetIds) && datasetIds.length > 0 ? datasetIds : null);
+      const selectedDatasetIds = requested
+        ? requested.map((d) => resolveDatasetId(config, d) || d).filter(Boolean)
         : config.datasetIds;
 
       if (!config.apiKey) {
@@ -153,13 +156,20 @@ server.registerTool(
       }
       if (selectedDatasetIds.length === 0) {
         throw new Error(
-          "No datasets to search. Bind at least one slot in DIFY_DATASETS / DIFY_DATASET_<NAME>_ID (run ./memory/scripts/dify-setup.sh) or pass datasetIds explicitly.",
+          "No datasets to search. Bind at least one slot via DIFY_DATASET_<NAME>_ID (run ./memory/scripts/dify-setup.sh) or pass `datasets` explicitly.",
         );
       }
 
+      const metadataCondition = filters ? buildMetadataCondition(filters) : null;
+
       const settled = await Promise.allSettled(
         selectedDatasetIds.map(async (datasetId) => {
-          const records = await retrieveDataset(config, datasetId, query);
+          const records = await retrieveChunks(config, {
+            datasetId,
+            query,
+            metadataCondition,
+            scoreThreshold,
+          });
           return records.map((record) => compactRecord(datasetId, record));
         }),
       );
@@ -184,6 +194,8 @@ server.registerTool(
       return jsonToolResponse({
         query,
         datasetsSearched: selectedDatasetIds,
+        filters: filters || null,
+        scoreThreshold: scoreThreshold ?? null,
         errors,
         totalRecords: records.length,
         records: records.slice(0, limit),
@@ -340,18 +352,197 @@ server.registerTool(
   {
     title: "Upsert a document into a named dataset",
     description:
-      "Write `text` as a Dify document with the given exact `name`, replacing any existing document in the dataset that has the same name. Use this for plans, investigations, and any artefact whose identity is its filename. The `dataset` argument can be a configured slot name (e.g. 'plans', 'investigations') or a raw dataset id.",
+      "Write `text` as a Dify document with the given exact `name`, replacing any existing document in the dataset that has the same name. Use this for plans, investigations, and any artefact whose identity is its filename. The `dataset` argument can be a configured slot name (e.g. 'plans', 'investigations') or a raw dataset id. Optional `metadata` map applies the per-document Dify metadata fields (atom_type, project_module, language, task_type, error_pattern, tags) so the doc is filterable in future search_memory / recall_lessons calls.",
     inputSchema: {
       dataset: z.string().trim().min(1),
       name: z.string().trim().min(1).max(180),
       text: z.string().trim().min(1).max(500_000),
+      metadata: MetadataSchema.optional(),
     },
   },
-  async ({ dataset, name, text }) => {
+  async ({ dataset, name, text, metadata }) => {
     try {
       const config = getConfig();
-      const result = await upsertDocumentByName(config, { datasetId: dataset, name, text });
+      const result = await upsertDocumentByName(config, { datasetId: dataset, name, text, metadata });
       return jsonToolResponse({ ok: true, ...result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "save_lesson",
+  {
+    title: "Save a self-improvement lesson",
+    description:
+      "Persist a self-improvement lesson into the `self_improvement` Dify dataset (or the slot named in DIFY_DATASET_SELF_IMPROVEMENT_ID). Use this MID-SESSION the moment the user corrects you, so the next turn can already retrieve it via recall_lessons. The lesson document is named `lesson-<slug>-<ts>.md` (slug derived from `title`); re-saving with the same title overwrites in place. `metadata.project_module`, `metadata.task_type`, and `metadata.error_pattern` are required so the lesson is filterable.",
+    inputSchema: {
+      title: z.string().trim().min(1).max(180),
+      body: z.string().trim().min(1).max(10_000),
+      metadata: z.object({
+        project_module: z.string().trim().min(1),
+        task_type: z.string().trim().min(1),
+        error_pattern: z.string().trim().min(1),
+        language: z.string().trim().optional(),
+        tags: z.string().trim().optional(),
+      }),
+      tags: z.array(z.string().trim().min(1)).optional(),
+      evidence: z.string().trim().max(500).optional(),
+    },
+  },
+  async ({ title, body, metadata, tags, evidence }) => {
+    try {
+      const config = getConfig();
+      const datasetSlot = config.datasetMap.has("self_improvement")
+        ? "self_improvement"
+        : (config.absorbDefaultDatasetName || "knowledge");
+      const slug = String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "lesson";
+      const ts = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
+      const name = `lesson-${slug}-${ts.slice(0, 8)}-${ts.slice(8, 14)}${ts.slice(14, 17)}.md`;
+      const tagList = Array.isArray(tags) ? tags : (metadata.tags ? String(metadata.tags).split(",").map((t) => t.trim()) : []);
+      const lines = [
+        `# ${title}`,
+        "",
+        `- type: self-improvement-lesson`,
+        `- tags: [${tagList.join(", ")}]`,
+        `- project_module: ${metadata.project_module}`,
+        `- language: ${metadata.language || ""}`,
+        `- task_type: ${metadata.task_type}`,
+        `- error_pattern: ${metadata.error_pattern}`,
+        `- updated_at_utc: ${new Date().toISOString()}`,
+        "",
+        body,
+      ];
+      if (evidence) lines.push("", `evidence: ${evidence}`);
+      const text = lines.join("\n").concat("\n");
+
+      const fullMetadata = {
+        atom_type: "self-improvement-lesson",
+        tags: tagList.join(","),
+        project_module: metadata.project_module,
+        language: metadata.language || "",
+        task_type: metadata.task_type,
+        error_pattern: metadata.error_pattern,
+      };
+
+      const result = await upsertDocumentByName(config, {
+        datasetId: datasetSlot,
+        name,
+        text,
+        metadata: fullMetadata,
+      });
+      return jsonToolResponse({ ok: true, datasetSlot, ...result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "recall_lessons",
+  {
+    title: "Recall relevant self-improvement lessons before related work",
+    description:
+      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than 3 hits by dropping `error_pattern`, then `language`, then `task_type`. Optionally also pulls `bug-root-cause` + `feedback-rule` atoms from the `knowledge` dataset matching `project_module`. Returns at most `maxResults` (default 5) compact records sorted by score.",
+    inputSchema: {
+      query: z.string().trim().min(1).max(250),
+      project_module: z.string().trim().min(1).optional(),
+      language: z.string().trim().min(1).optional(),
+      task_type: z.string().trim().min(1).optional(),
+      error_pattern: z.string().trim().min(1).optional(),
+      tags: z.string().trim().min(1).optional(),
+      includeKnowledge: z.boolean().optional(),
+      scoreThreshold: z.number().min(0).max(1).optional(),
+      maxResults: z.number().int().min(1).max(20).optional(),
+    },
+  },
+  async ({ query, project_module, language, task_type, error_pattern, tags, includeKnowledge, scoreThreshold, maxResults }) => {
+    try {
+      const config = getConfig();
+      const lessonSlot = config.datasetMap.get("self_improvement")?.id ? "self_improvement" : null;
+      if (!lessonSlot) {
+        throw new Error(
+          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in memory/.env (or run ./memory/scripts/dify-setup.sh).",
+        );
+      }
+      const limit = maxResults || 5;
+      const threshold = scoreThreshold ?? 0.55;
+      const lessonDatasetId = resolveDatasetId(config, lessonSlot);
+
+      const baseFilters = {
+        atom_type: "self-improvement-lesson",
+        ...(project_module ? { project_module } : {}),
+        ...(language ? { language } : {}),
+        ...(task_type ? { task_type } : {}),
+        ...(error_pattern ? { error_pattern } : {}),
+        ...(tags ? { tags } : {}),
+      };
+
+      // Fall-back ladder: drop one filter at a time when hits are thin.
+      const ladder = [
+        baseFilters,
+        ...(error_pattern ? [{ ...baseFilters, error_pattern: undefined }] : []),
+        ...(language ? [{ atom_type: "self-improvement-lesson", project_module, task_type, tags }] : []),
+        ...(task_type ? [{ atom_type: "self-improvement-lesson", project_module, tags }] : []),
+        { atom_type: "self-improvement-lesson" },
+      ];
+
+      let lessonHits = [];
+      let usedFilters = null;
+      for (const filters of ladder) {
+        const cleaned = Object.fromEntries(
+          Object.entries(filters).filter(([, v]) => v != null && v !== ""),
+        );
+        const condition = buildMetadataCondition(cleaned);
+        const records = await retrieveChunks(config, {
+          datasetId: lessonDatasetId,
+          query,
+          metadataCondition: condition,
+          scoreThreshold: threshold,
+        });
+        if (records.length > 0) {
+          lessonHits = records.map((r) => compactRecord(lessonDatasetId, r));
+          usedFilters = cleaned;
+          if (lessonHits.length >= 3) break;
+        }
+      }
+
+      const supplementary = [];
+      if (includeKnowledge !== false && project_module) {
+        const knowledgeSlot = config.datasetMap.get("knowledge")?.id ? "knowledge" : null;
+        if (knowledgeSlot) {
+          const knowledgeId = resolveDatasetId(config, knowledgeSlot);
+          for (const t of ["bug-root-cause", "feedback-rule"]) {
+            const records = await retrieveChunks(config, {
+              datasetId: knowledgeId,
+              query,
+              metadataCondition: buildMetadataCondition({ atom_type: t, project_module }),
+              scoreThreshold: threshold,
+            });
+            for (const r of records.slice(0, 1)) supplementary.push(compactRecord(knowledgeId, r));
+          }
+        }
+      }
+
+      const merged = [...lessonHits, ...supplementary];
+      merged.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+
+      return jsonToolResponse({
+        query,
+        lessonDataset: lessonSlot,
+        usedFilters: usedFilters || baseFilters,
+        scoreThreshold: threshold,
+        lessonHits: lessonHits.length,
+        supplementaryHits: supplementary.length,
+        totalRecords: merged.length,
+        records: merged.slice(0, limit).map((r) => ({
+          datasetId: r.datasetId,
+          documentName: r.documentName,
+          score: r.score,
+          content: r.content,
+        })),
+      });
     } catch (error) {
       return errorToolResponse(error);
     }
