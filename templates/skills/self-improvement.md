@@ -1,9 +1,26 @@
 ---
 name: self-improvement
-description: Use the project memory to look up self-improvement lessons before related work, and persist new lessons the moment the user corrects you.
+description: Use the project memory to look up self-improvement lessons before related work, persist new lessons the moment the user corrects you, and route every "save to memory" / "memorize" request to the RAG store instead of any client-local memory system.
 ---
 
-# Self-improvement memory
+# Memory routing — the hard rule
+
+> When the user says **"save to memory", "memorize this", "remember that", "save it for later"**, or any equivalent, ALWAYS use one of the MCP tools below. **NEVER write to your client's local file-based memory** (Claude Code's `~/.claude/projects/.../memory/*.md`, Cursor's project memory, etc.) when this MCP server is registered.
+>
+> Local-file memory is per-client and per-session: invisible to every other agent and to your future self in another session. The RAG memory is shared across every agent on this project, persists in Dify, and is the entire reason the boilerplate exists. Defaulting to local-file memory silently bypasses it and gives the user the impression nothing is being saved.
+>
+> Routing decision tree:
+>
+> | What you're saving | Tool | Slot |
+> |---|---|---|
+> | Behavioural lesson about the AI (correction, repeated mistake, rule) | `save_lesson` | `self_improvement` (auto) |
+> | Project fact / decision / lore / convention | `save_to_dataset` | `knowledge` |
+> | Plan or investigation as a durable artefact | `save_to_dataset` | `plans` or `investigations` |
+> | Reusable code-level pattern / library footgun | `save_to_dataset` | `knowledge` (atom_type=pattern-gotcha) |
+>
+> All `save_to_dataset` calls use upsert-by-name semantics: same `name` overwrites, no duplicates.
+
+# Self-improvement memory (the lesson loop)
 
 This project ships with a Dify-backed self-improvement loop. Two MCP tools matter:
 

@@ -53,10 +53,19 @@ const compileTriggered = (() => {
 
 const context = [
   `Project memory is available through the \`${memoryServerName}\` MCP server.`,
+  // The hard rule first — without this, agents fall back to whatever
+  // memory system they were trained on (Claude Code's local file
+  // memory, Cursor's, etc.) when the user says "save / memorize /
+  // remember", silently bypassing the RAG store this project ships
+  // with. Listing the right tools is not enough; the wrong default
+  // has to be explicitly forbidden.
+  "MEMORY ROUTING (hard rule): when the user says \"save to memory\", \"memorize this\", \"remember that\", \"save it for later\", or any equivalent — ALWAYS use the MCP tools below. NEVER write to your own client's local file-based memory (e.g. Claude Code's ~/.claude/projects/.../memory/*.md, Cursor's project memory, etc.) when this MCP server is registered. The local file memory is per-client and per-session; the RAG memory is shared across every agent on this project and is the whole point of having installed the boilerplate. Routing:",
+  "  - Behavioural lesson about the AI itself (correction, repeated mistake, rule for next time) -> `save_lesson` (writes to the `self_improvement` slot, surfaced by `recall_lessons`).",
+  "  - Project fact / decision / lore (how the workspace works, who-does-what, conventions, integration quirks) -> `save_to_dataset(dataset=\"knowledge\", name=\"<artefact>.md\", text, metadata)`.",
+  "  - Plan or investigation as a durable artefact (upsert-by-name; same name overwrites) -> `save_to_dataset(dataset=\"plans\" or \"investigations\", name=\"<short-slug>.md\", text, metadata)`.",
   "Before starting any non-trivial task, call `recall_lessons` with the inferred project_module / language / task_type. Lessons live in the `self_improvement` Dify dataset; ignoring them defeats the boilerplate.",
   "When the user CORRECTS you (\"no\", \"stop doing X\", \"I told you before\", reverts your work), call `save_lesson` IMMEDIATELY (before replying) so the next turn can recall it. Required metadata: project_module, task_type, error_pattern.",
   "For task-specific memory, use `search_memory` with `filters` (atom_type, project_module, language, task_type, error_pattern, tags) and a `scoreThreshold`. Do NOT load the whole store.",
-  "For durable artefacts (plans, investigations, decisions), use `save_to_dataset(dataset, name, text, metadata)` with upsert-by-name semantics: same name overwrites.",
   "Memory lives in Dify, organised by named dataset slots: daily, knowledge, plans, investigations, self_improvement (and any user-defined extras). PreCompact/PostCompact/SessionEnd hooks write `daily-<ts>.md` docs; once-per-day compile promotes daily atoms into the right slot (lessons -> self_improvement, everything else -> knowledge) and disables the source dailies.",
   compileTriggered
     ? "Compile was triggered in the background to promote any unprocessed daily docs."
