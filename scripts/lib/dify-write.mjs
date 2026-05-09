@@ -84,3 +84,34 @@ export function listDocuments({ prefix, enabled, datasetId } = {}) {
 export function readDocument({ documentId, datasetId } = {}) {
   return execCli("read", { documentId, datasetId });
 }
+
+export function saveMemory({ name, text, datasetId } = {}) {
+  return execCli("save", { name, datasetId }, { stdin: text });
+}
+
+export function listDatasets() {
+  return execCli("list-datasets", {});
+}
+
+export function createDifyDataset({ name, description } = {}) {
+  return execCli("create-dataset", { name, description });
+}
+
+export function findByName({ name, datasetId } = {}) {
+  return execCli("find-by-name", { name, datasetId });
+}
+
+export function scanWorkspace({ include, ignore, root } = {}) {
+  const flags = {};
+  if (include) flags.include = Array.isArray(include) ? include.join(",") : include;
+  if (ignore) flags.ignore = Array.isArray(ignore) ? ignore.join(",") : ignore;
+  if (root) flags.root = root;
+  return execCli("scan", flags);
+}
+
+export function absorbFiles({ files, datasetId, dryRun } = {}) {
+  const flags = { datasetId };
+  if (files) flags.files = Array.isArray(files) ? files.join(",") : files;
+  if (dryRun) flags.dryRun = "true";
+  return execCli("absorb", flags);
+}

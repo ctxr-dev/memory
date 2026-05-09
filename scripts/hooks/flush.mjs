@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROMPTS_DIR, envInt } from "../lib/env.mjs";
+import { PROMPTS_DIR, envInt, envValue } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "../lib/llm.mjs";
@@ -211,11 +211,12 @@ async function main() {
 
   const docName = dailyDocName();
   const text = renderDailyDocument({ atoms, source });
+  const datasetName = envValue("DIFY_FLUSH_DATASET", "daily");
 
   try {
-    const result = await writeMemory({ name: docName, text });
+    const result = await writeMemory({ name: docName, text, datasetId: datasetName });
     console.error(
-      `flush.mjs: wrote ${atoms.length} atom(s) to Dify document ${docName} (datasetId=${result?.datasetId || "?"})`,
+      `flush.mjs: wrote ${atoms.length} atom(s) to Dify dataset '${datasetName}' as ${docName} (datasetId=${result?.datasetId || "?"})`,
     );
   } catch (err) {
     if (err instanceof DifyBridgeUnavailable) {

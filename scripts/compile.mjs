@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { COMPILE_STATE_PATH, PROMPTS_DIR, envInt } from "./lib/env.mjs";
+import { COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue } from "./lib/env.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
   listDocuments,
@@ -145,6 +145,7 @@ async function decideAction(atom, candidates, systemPrompt) {
 }
 
 async function executeAction(atom, decision, candidates) {
+  const knowledgeDataset = envValue("DIFY_COMPILE_DATASET", "knowledge");
   if (decision.action === "skip") {
     return { ok: true, action: "skip", reason: decision.reason };
   }
@@ -152,7 +153,7 @@ async function executeAction(atom, decision, candidates) {
     const text = buildKnowledgeDocText(atom);
     const name = knowledgeDocName(atom.title);
     if (DRY_RUN) return { ok: true, dryRun: true, action: "create", name };
-    return writeMemory({ name, text });
+    return writeMemory({ name, text, datasetId: knowledgeDataset });
   }
   if (decision.action === "update") {
     if (!decision.supersedes) throw new Error("update action missing supersedes");
@@ -169,6 +170,7 @@ async function executeAction(atom, decision, candidates) {
     return writeMemory({
       name,
       text,
+      datasetId: knowledgeDataset,
       supersedes: decision.supersedes,
       supersedesAction: "disable",
     });
@@ -177,9 +179,10 @@ async function executeAction(atom, decision, candidates) {
 }
 
 async function main() {
+  const dailyDataset = envValue("DIFY_FLUSH_DATASET", "daily");
   let dailies;
   try {
-    const result = await listDocuments({ prefix: "daily-", enabled: "true" });
+    const result = await listDocuments({ prefix: "daily-", enabled: "true", datasetId: dailyDataset });
     dailies = Array.isArray(result?.documents) ? result.documents : [];
   } catch (err) {
     if (err instanceof DifyBridgeUnavailable) {
@@ -205,7 +208,7 @@ async function main() {
   for (const daily of sorted) {
     let docText;
     try {
-      const r = await readDocument({ documentId: daily.id });
+      const r = await readDocument({ documentId: daily.id, datasetId: dailyDataset });
       docText = r?.text || "";
     } catch (err) {
       counts.error += 1;
@@ -221,7 +224,7 @@ async function main() {
     if (atoms.length === 0) {
       if (!DRY_RUN) {
         try {
-          await disableDocument({ documentId: daily.id });
+          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
           appendCompileLog({ event: "disable-empty", document: daily.name });
         } catch (err) {
           counts.error += 1;

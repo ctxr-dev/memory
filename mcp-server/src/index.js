@@ -1,14 +1,27 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import fs from "node:fs";
+import path from "node:path";
 import {
+  buildDatasetMap,
+  createDataset,
   createDocumentByText,
   deleteDocument,
   disableDocument,
   fetchJsonWithTimeout,
+  findDocumentByExactName,
   getConfig,
+  listAllDatasets,
   maskSecret,
+  requireDifyWriteConfig,
+  resolveDatasetId,
+  upsertDocumentByName,
 } from "./dify.js";
+import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
+
+const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
+const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
 
 async function retrieveDataset({ apiUrl, apiKey, retrievalModel, timeoutMs }, datasetId, query) {
   const endpoint = `${apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(datasetId)}/retrieve`;
@@ -209,7 +222,7 @@ server.registerTool(
 
       return jsonToolResponse({
         ok: true,
-        datasetId: datasetId || config.writeDatasetId || config.datasetIds[0],
+        datasetId: requireDifyWriteConfig(config, datasetId),
         response,
         supersedes: supersedes
           ? {
@@ -249,9 +262,194 @@ server.registerTool(
         : await disableDocument(config, { datasetId, documentId: supersedes });
       return jsonToolResponse({
         ok: true,
-        datasetId: datasetId || config.writeDatasetId || config.datasetIds[0],
+        datasetId: requireDifyWriteConfig(config, datasetId),
         created,
         supersedes: { documentId: supersedes, action, result: supersedeResult },
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "list_datasets",
+  {
+    title: "List Dify datasets",
+    description:
+      "List every Dify Knowledge dataset visible to the configured API key, plus the local DIFY_DATASETS bindings declared in memory/.env (so you can see which named slot points to which dataset id).",
+    inputSchema: {},
+  },
+  async () => {
+    try {
+      const config = getConfig();
+      const remote = await listAllDatasets(config);
+      const declared = buildDatasetMap();
+      return jsonToolResponse({
+        datasets: remote.map((d) => ({
+          id: d?.id,
+          name: d?.name,
+          description: d?.description,
+          documentCount: d?.document_count,
+          indexingTechnique: d?.indexing_technique,
+        })),
+        declaredLocally: Array.from(declared.entries()).map(([slug, entry]) => ({
+          name: slug,
+          configuredId: entry.id || "",
+        })),
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "create_dataset",
+  {
+    title: "Create a Dify dataset",
+    description:
+      "Create a new Dify Knowledge dataset. Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env (DIFY_DATASETS=daily,knowledge,plans,investigations + DIFY_DATASET_<NAME>_ID=<id>).",
+    inputSchema: {
+      name: z.string().trim().min(1).max(120),
+      description: z.string().trim().max(500).optional(),
+    },
+  },
+  async ({ name, description }) => {
+    try {
+      const config = getConfig();
+      const created = await createDataset(config, { name, description });
+      return jsonToolResponse({ ok: true, dataset: created });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "save_to_dataset",
+  {
+    title: "Upsert a document into a named dataset",
+    description:
+      "Write `text` as a Dify document with the given exact `name`, replacing any existing document in the dataset that has the same name. Use this for plans, investigations, and any artefact whose identity is its filename. The `dataset` argument can be a configured slot name (e.g. 'plans', 'investigations') or a raw dataset id.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      name: z.string().trim().min(1).max(180),
+      text: z.string().trim().min(1).max(500_000),
+    },
+  },
+  async ({ dataset, name, text }) => {
+    try {
+      const config = getConfig();
+      const result = await upsertDocumentByName(config, { datasetId: dataset, name, text });
+      return jsonToolResponse({ ok: true, ...result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "scan_documents",
+  {
+    title: "Scan workspace files for absorption candidates",
+    description:
+      "Walk the read-only /workspace mount inside the bridge container and return matching files with their suggested doc names (relative path with '/' replaced by '_'). Default include globs cover .md/.mdx/.markdown/.txt/.rst/.adoc; default ignore covers .git, node_modules, vendor, .memory, dist, build. Pass `include` or `ignore` arrays to override.",
+    inputSchema: {
+      include: z.array(z.string().trim().min(1)).optional(),
+      ignore: z.array(z.string().trim().min(1)).optional(),
+    },
+  },
+  async ({ include, ignore }) => {
+    try {
+      if (!fs.existsSync(WORKSPACE_MOUNT)) {
+        throw new Error(
+          `Workspace mount '${WORKSPACE_MOUNT}' missing. Recreate the bridge container after pulling the latest compose.mcp.yaml so the workspace volume is mounted.`,
+        );
+      }
+      const matches = findFiles(WORKSPACE_MOUNT, {
+        include: include && include.length > 0 ? include : defaultGlobs(),
+        ignore: ignore && ignore.length > 0 ? ignore : defaultIgnore(),
+      });
+      return jsonToolResponse({
+        root: WORKSPACE_MOUNT,
+        include: include && include.length > 0 ? include : defaultGlobs(),
+        ignore: ignore && ignore.length > 0 ? ignore : defaultIgnore(),
+        total: matches.length,
+        files: matches.map((m) => ({
+          relPath: m.relPath,
+          docName: relPathToDocName(m.relPath),
+          size: m.size,
+          mtime: m.mtime,
+        })),
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "absorb_files",
+  {
+    title: "Absorb selected workspace files into a dataset",
+    description:
+      "Read each file (relative path under /workspace) and upsert it as a Dify document using its relative path with '/' replaced by '_' as the document name. Existing documents with the same name are replaced. `dataset` is a configured slot name or raw id (defaults to DIFY_ABSORB_DEFAULT_DATASET, normally 'knowledge'). Pass dryRun=true to see what would happen without writing.",
+    inputSchema: {
+      files: z.array(z.string().trim().min(1)).min(1),
+      dataset: z.string().trim().min(1).optional(),
+      dryRun: z.boolean().optional(),
+    },
+  },
+  async ({ files, dataset, dryRun }) => {
+    try {
+      const config = getConfig();
+      const datasetSlot = dataset || config.absorbDefaultDatasetName;
+      const datasetId = requireDifyWriteConfig(config, datasetSlot);
+      if (!fs.existsSync(WORKSPACE_MOUNT)) {
+        throw new Error(`Workspace mount '${WORKSPACE_MOUNT}' missing.`);
+      }
+      const results = [];
+      for (const rel of files) {
+        const safeRel = String(rel).replace(/^\/+/, "");
+        const abs = path.join(WORKSPACE_MOUNT, safeRel);
+        if (!abs.startsWith(`${WORKSPACE_MOUNT}/`) && abs !== WORKSPACE_MOUNT) {
+          results.push({ relPath: rel, ok: false, error: "path escapes workspace mount" });
+          continue;
+        }
+        let stat;
+        try { stat = fs.statSync(abs); } catch (err) {
+          results.push({ relPath: rel, ok: false, error: `stat failed: ${err.message}` });
+          continue;
+        }
+        if (!stat.isFile()) {
+          results.push({ relPath: rel, ok: false, error: "not a file" });
+          continue;
+        }
+        if (stat.size > ABSORB_MAX_FILE_BYTES) {
+          results.push({ relPath: rel, ok: false, error: `file ${stat.size}B exceeds ABSORB_MAX_FILE_BYTES=${ABSORB_MAX_FILE_BYTES}` });
+          continue;
+        }
+        const text = fs.readFileSync(abs, "utf8");
+        const docName = relPathToDocName(safeRel);
+        if (dryRun) {
+          results.push({ relPath: rel, ok: true, dryRun: true, docName, size: stat.size });
+          continue;
+        }
+        try {
+          const out = await upsertDocumentByName(config, { datasetId, name: docName, text });
+          results.push({ relPath: rel, ok: true, docName, replacedId: out.replacedId, size: stat.size });
+        } catch (err) {
+          results.push({ relPath: rel, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return jsonToolResponse({
+        datasetId,
+        datasetSlot,
+        total: results.length,
+        succeeded: results.filter((r) => r.ok).length,
+        failed: results.filter((r) => !r.ok).length,
+        results,
       });
     } catch (error) {
       return errorToolResponse(error);

@@ -106,12 +106,44 @@ export async function fetchJsonWithTimeout(url, options, timeoutMs) {
   }
 }
 
+function envEnvKey(name) {
+  return `DIFY_DATASET_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
+}
+
+export function buildDatasetMap(env = process.env) {
+  const map = new Map();
+  const declared = splitCsv(env.DIFY_DATASETS);
+
+  for (const name of declared) {
+    const slug = String(name).toLowerCase().trim();
+    if (!slug) continue;
+    const id = (env[envEnvKey(slug)] || "").trim();
+    map.set(slug, { name: slug, id });
+  }
+
+  // Back-compat: legacy single-write dataset becomes the unnamed default.
+  const legacy = (env.DIFY_WRITE_DATASET_ID || "").trim();
+  if (legacy && !Array.from(map.values()).some((d) => d.id === legacy)) {
+    map.set("default", { name: "default", id: legacy });
+  }
+
+  return map;
+}
+
 export function getConfig(env = process.env) {
+  const datasetMap = buildDatasetMap(env);
+  const allDatasetIds = Array.from(datasetMap.values()).map((d) => d.id).filter(Boolean);
+  const searchScope = splitCsv(env.DIFY_DATASET_IDS);
+
   return {
     apiUrl: env.DIFY_API_URL || "http://api:5001/v1",
     apiKey: env.DIFY_KNOWLEDGE_API_KEY || "",
-    datasetIds: splitCsv(env.DIFY_DATASET_IDS),
-    writeDatasetId: env.DIFY_WRITE_DATASET_ID || "",
+    datasetMap,
+    datasetIds: searchScope.length > 0 ? searchScope : allDatasetIds,
+    flushDatasetName: (env.DIFY_FLUSH_DATASET || "daily").toLowerCase(),
+    compileDatasetName: (env.DIFY_COMPILE_DATASET || "knowledge").toLowerCase(),
+    absorbDefaultDatasetName: (env.DIFY_ABSORB_DEFAULT_DATASET || "knowledge").toLowerCase(),
+    legacyWriteDatasetId: env.DIFY_WRITE_DATASET_ID || "",
     retrievalModel: parseJsonObject(env.DIFY_RETRIEVAL_MODEL_JSON, "DIFY_RETRIEVAL_MODEL_JSON"),
     sessionProcessRule: sessionProcessRuleFromEnv(env),
     sessionProcessRulePreset: env.DIFY_SESSION_PROCESS_RULE_PRESET || "conversation",
@@ -123,21 +155,89 @@ export function getConfig(env = process.env) {
   };
 }
 
-export function requireDifyWriteConfig(config) {
+export function resolveDatasetId(config, datasetNameOrId) {
+  if (!datasetNameOrId) return "";
+  const lower = String(datasetNameOrId).toLowerCase().trim();
+  const entry = config.datasetMap?.get(lower);
+  if (entry?.id) return entry.id;
+  // If caller passed a raw UUID-shaped id, accept as-is.
+  if (/^[0-9a-f-]{20,}$/i.test(String(datasetNameOrId).trim())) {
+    return String(datasetNameOrId).trim();
+  }
+  return "";
+}
+
+export function requireDifyWriteConfig(config, datasetNameOrId) {
   if (!config.apiKey) {
     throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in memory/.env.");
   }
-
-  const datasetId = config.writeDatasetId || config.datasetIds[0];
-  if (!datasetId) {
-    throw new Error("Set DIFY_WRITE_DATASET_ID or at least one DIFY_DATASET_IDS value.");
+  if (datasetNameOrId) {
+    const resolved = resolveDatasetId(config, datasetNameOrId);
+    if (!resolved) {
+      throw new Error(
+        `Dataset '${datasetNameOrId}' is not configured. Add to DIFY_DATASETS and set ${envEnvKey(datasetNameOrId)} in memory/.env, or run ./memory/scripts/dify-setup.sh.`,
+      );
+    }
+    return resolved;
   }
+  const fallback = config.legacyWriteDatasetId || config.datasetIds[0];
+  if (!fallback) {
+    throw new Error(
+      "No write dataset configured. Run ./memory/scripts/dify-setup.sh, or set DIFY_DATASETS + DIFY_DATASET_<NAME>_ID in memory/.env.",
+    );
+  }
+  return fallback;
+}
 
-  return datasetId;
+export async function listDatasets(config, { keyword, page = 1, limit = 100 } = {}) {
+  const params = new URLSearchParams();
+  if (keyword) params.set("keyword", keyword);
+  params.set("page", String(page));
+  params.set("limit", String(limit));
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets?${params.toString()}`;
+  return fetchJsonWithTimeout(
+    endpoint,
+    { method: "GET", headers: { Authorization: `Bearer ${config.apiKey}` } },
+    config.timeoutMs,
+  );
+}
+
+export async function listAllDatasets(config, { keyword } = {}) {
+  const all = [];
+  let page = 1;
+  const limit = 100;
+  while (true) {
+    const body = await listDatasets(config, { keyword, page, limit });
+    const batch = Array.isArray(body?.data) ? body.data : [];
+    all.push(...batch);
+    if (!body?.has_more || batch.length === 0) break;
+    page += 1;
+    if (page > 100) break;
+  }
+  return all;
+}
+
+export async function createDataset(config, { name, description, indexingTechnique = "high_quality", permission = "only_me" }) {
+  if (!name) throw new Error("createDataset requires a name.");
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets`;
+  const payload = { name, indexing_technique: indexingTechnique, permission };
+  if (description) payload.description = description;
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    config.timeoutMs,
+  );
 }
 
 export async function listDocuments(config, { datasetId, keyword, page = 1, limit = 100 } = {}) {
-  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const params = new URLSearchParams();
   if (keyword) params.set("keyword", keyword);
   params.set("page", String(page));
@@ -173,7 +273,7 @@ export async function listAllDocuments(config, { datasetId, keyword } = {}) {
 
 export async function getDocumentSegments(config, { datasetId, documentId, page = 1, limit = 100 } = {}) {
   if (!documentId) throw new Error("getDocumentSegments requires documentId.");
-  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const params = new URLSearchParams();
   params.set("page", String(page));
   params.set("limit", String(limit));
@@ -206,11 +306,32 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
   return all.join("\n\n");
 }
 
+export async function findDocumentByExactName(config, { datasetId, name }) {
+  if (!name) throw new Error("findDocumentByExactName requires name.");
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const docs = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
+  return docs.find((d) => d?.name === name) || null;
+}
+
+export async function upsertDocumentByName(config, { datasetId, name, text }) {
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const existing = await findDocumentByExactName(config, { datasetId: selectedDatasetId, name });
+  if (existing?.id) {
+    try {
+      await deleteDocument(config, { datasetId: selectedDatasetId, documentId: existing.id });
+    } catch (err) {
+      throw new Error(`upsert: failed to delete prior '${name}' (${existing.id}): ${err.message}`);
+    }
+  }
+  const created = await createDocumentByText(config, { datasetId: selectedDatasetId, name, text });
+  return { name, datasetId: selectedDatasetId, replacedId: existing?.id || null, created };
+}
+
 export async function deleteDocument(config, { datasetId, documentId }) {
   if (!documentId) {
     throw new Error("deleteDocument requires documentId.");
   }
-  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
     selectedDatasetId,
   )}/documents/${encodeURIComponent(documentId)}`;
@@ -231,7 +352,7 @@ export async function disableDocument(config, { datasetId, documentId }) {
   if (!documentId) {
     throw new Error("disableDocument requires documentId.");
   }
-  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
     selectedDatasetId,
   )}/documents/status/disable`;
@@ -251,7 +372,7 @@ export async function disableDocument(config, { datasetId, documentId }) {
 }
 
 export async function createDocumentByText(config, { datasetId, name, text }) {
-  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
     selectedDatasetId,
   )}/document/create-by-text`;
