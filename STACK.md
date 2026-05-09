@@ -536,3 +536,21 @@ Stop the stack:
 ```bash
 ./memory/scripts/down.sh
 ```
+
+### "FATAL: WORKSPACE_DIR resolves to '...' which is your home or root."
+
+`scripts/lib.sh` refuses to run when the boilerplate was cloned at the user-project root (`git clone … .`) instead of into a `./memory` subdirectory. Bind-mounting `$HOME` (or `/`) into the bridge container at `/workspace` would expose every dotfile and personal artefact to absorb / scan. The guard normalises both `$HOME` and `WORKSPACE_DIR` via `pwd -P`, so a Linux home that happens to be a symlinked mount also trips it. Fix: re-clone into a project subdirectory:
+
+```bash
+cd ~/your-project
+git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
+./memory/bootstrap.sh --slug <project-slug>
+```
+
+### Concurrent compile attempts
+
+`scripts/compile.mjs` acquires `memory/.compile.lock` (file-based, atomic POSIX `O_CREAT|O_EXCL`) before mutating `.compile-state.json`. A second compile spawned by an overlapping `SessionStart` finds the lock alive and exits 0 silently. Stale locks (process dead, or holder older than `MEMORY_COMPILE_LOCK_STALE_MS`, default 30 minutes) are reclaimed automatically. Implementation: `scripts/lib/lock.mjs`. Manual recovery (only needed if a compile crashed mid-write AND the stale window has not elapsed):
+
+```bash
+rm -f memory/.compile.lock
+```

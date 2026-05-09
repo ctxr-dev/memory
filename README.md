@@ -74,8 +74,11 @@ Windows-specific gotchas:
 # from inside the project root
 git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
 ./memory/bootstrap.sh --slug <project-slug>
-./memory/scripts/up.sh
-./memory/scripts/ui-url.sh
+./memory/scripts/up.sh    # FIRST RUN IS SLOW: clones the upstream Dify repo
+                          # into memory/vendor/dify, pulls Dify images, and
+                          # builds the bridge. Expect 2-5 minutes and a
+                          # few GB of pulls. up.sh prints the Dify UI URL
+                          # at the end.
 ```
 
 `bootstrap.sh` will:
@@ -88,8 +91,9 @@ git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
 After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-driven, see [Onboarding](#onboarding)):
 
 ```bash
-./memory/scripts/dify-setup.sh
-./memory/scripts/mcp-smoke.sh
+./memory/scripts/dify-setup.sh   # paste API key, bind/create slots, install metadata
+./memory/scripts/mcp-smoke.sh    # ONLY valid AFTER dify-setup binds slots; otherwise
+                                 # exits non-zero with a "Run dify-setup.sh" hint.
 ```
 
 That is the entire install. The wizard handles the API key, the five default dataset slots (`daily`, `knowledge`, `plans`, `investigations`, `self_improvement`), the per-document metadata schema on each slot, and an optional first-pass absorb of your existing project documentation.
@@ -116,25 +120,39 @@ Steps:
 
 4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
 
-5. Ask which MCP clients to register: Claude Desktop, Cursor, Codex/OpenAI, generic. Print the matching snippet from .agents/clients/ for each I confirm. For Codex/OpenAI, run: codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
+5. Ask which MCP clients I want registered: Claude Desktop, Cursor, Codex/OpenAI, generic. Note the choices for step 8; the actual snippets only exist after bootstrap.sh runs.
 
-6. Verify host prerequisites or tell me exactly what is missing: docker compose 2.24.4+, node 20+, git, curl, bash, openssl/shasum.
+6. Verify host prerequisites or tell me exactly what is missing:
+   - docker (Docker Desktop or engine) with `docker compose` 2.24.4+
+   - node 20+
+   - git, curl, bash 3.2+
+   bootstrap.sh itself only enforces docker + node + docker-compose-version; git and curl are needed by `git clone` and the Dify-version probe. No `jq`, `realpath`, or other extras are required (the install path is intentionally portable to Git Bash on Windows).
 
-7. Run the install:
+7. Run the install. If I chose Codex/OpenAI as a client in step 5 AND the `codex` CLI is on PATH, append `--register-codex` so bootstrap auto-runs `codex mcp add` for me; otherwise tell me to run that command manually after step 8:
    git clone <boilerplate-git-url> ./memory
-   ./memory/bootstrap.sh --slug <slug> --llm-provider <provider> [--no-hooks if I declined]
+   ./memory/bootstrap.sh --slug <slug> --llm-provider <provider> [--no-hooks if I declined] [--register-codex if Codex picked]
 
-8. Run the verification commands from the README's "Verification" section after install.
+8. Static verification only (Docker not yet required; the stack is not up yet):
+   bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
+   node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
+   node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
+   ( cd ./memory && node --test test/*.test.mjs )
 
-9. Start the stack:
+   Then print the requested client snippets from `./memory/.agents/clients/` (now that bootstrap has rendered them):
+   ./memory/scripts/mcp-config.sh all
+   For Codex (if not auto-registered in step 7):
+   codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
+
+9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (typically 2-5 minutes, multi-GB):
    ./memory/scripts/up.sh
-   ./memory/scripts/ui-url.sh
+   (`up.sh` invokes `ui-url.sh` itself, so the Dify UI URL is printed when it finishes.)
 
-10. Tell me the exact next steps after install:
+10. Tell me the exact next steps after the stack is up:
     a) Open the printed Dify UI URL.
-    b) Create the admin account, configure an embedding model.
+    b) Create the admin account, configure an embedding model under Settings -> Model Provider (REQUIRED before any high_quality dataset can be created).
     c) Open Knowledge -> Service API, create a Knowledge API key.
-    d) Run `./memory/scripts/dify-setup.sh` to wire datasets and (optionally) absorb my existing docs.
+    d) Run `./memory/scripts/dify-setup.sh` to wire datasets, install the per-document metadata schema, and (optionally) absorb my existing docs.
+    e) Final end-to-end smoke (only valid after step d): `./memory/scripts/mcp-smoke.sh` — read-only round-trip across get_memory_config, search_memory (plain + filtered), and recall_lessons.
 
 Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
 ```
@@ -173,12 +191,13 @@ Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP se
 ```text
 Set up the Dify memory boilerplate for this project. The MCP server is `<project-slug>-memory`. Do this:
 
-1. Verify DIFY_KNOWLEDGE_API_KEY is set in memory/.env. If not, STOP. Tell me to:
+1. Call `get_memory_config` to confirm DIFY_KNOWLEDGE_API_KEY is set (the bridge surfaces `apiKeyConfigured: true|false` without leaking the key). If false, STOP and tell me to:
    (a) Open the Dify UI URL printed by ./memory/scripts/ui-url.sh
    (b) Sign in, configure an embedding model under Settings → Model Provider (REQUIRED before any high_quality dataset can be created)
    (c) Knowledge → Service API → create a Knowledge API key
    (d) Paste the key into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>
-   (e) Restart the bridge: ./memory/scripts/up.sh
+   (e) Restart ONLY the bridge so the new env is picked up (faster than a full up.sh):
+       docker compose -p $(grep '^COMPOSE_PROJECT_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r') up -d --no-build memory_mcp
    THEN re-run me. Do not attempt to proceed without the key — `dify-setup.sh --non-interactive` will exit FATAL.
 
 2. Call `list_datasets` to see what already exists in Dify.
@@ -188,6 +207,8 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
 4. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
 5. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
 6. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
+
+7. Sanity round-trip (proves the metadata schema you installed in step 4 actually works): call `save_lesson` with a deliberately-tagged smoke lesson (title "Onboarding smoke", error_pattern "smoke-test", project_module "smoke", task_type "unknown"), then immediately call `recall_lessons(query="smoke", project_module="smoke")`. The lesson must round-trip. If it does NOT, the metadata schema install probably failed; tell me to re-run `./memory/scripts/dify-setup.sh`.
 
 Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
 ```
@@ -413,49 +434,51 @@ The hook timeout is 130s for the flush hooks (PreCompact/PostCompact/SessionEnd)
 
 ## Verification
 
-Run after `bootstrap.sh` and again after `dify-setup.sh`:
+Run after `bootstrap.sh` and again after `dify-setup.sh`. Each block lists its prereqs explicitly so you can stop at the latest one your environment can satisfy.
 
 ```bash
-# Static checks (no Docker required)
+# ---- Tier 1: Static checks. Requires: bootstrap.sh only. No Docker, no LLM. ----
 bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
 node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
 node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
 
-# Unit tests (no npm deps; uses node's built-in test runner)
+# ---- Tier 2: Hermetic unit tests. Requires: node 20+. ----
 ( cd ./memory && node --test test/*.test.mjs )   # or: ( cd ./memory && npm test )
 
-# Stack health (Docker required)
+# ---- Tier 3: Stack health. Requires: up.sh has been run. ----
 ./memory/scripts/ps.sh
 ./memory/scripts/ui-url.sh
 
-# End-to-end MCP smoke (after dify-setup.sh has bound at least one dataset).
+# ---- Tier 4: End-to-end MCP smoke. Requires: up.sh + dify-setup.sh + ----
+# ---- DIFY_KNOWLEDGE_API_KEY in memory/.env + at least one dataset bound. ----
 # Read-only by design: exercises initialize, get_memory_config, plain
 # search_memory, filtered search_memory (atom_type + scoreThreshold), and
 # a recall_lessons round-trip with a deliberately-no-match query. A
 # regression in the typed-pipeline tools surfaces here instead of in
-# real-user incidents.
+# real-user incidents. Fails with a "Run dify-setup.sh" hint if any of
+# the prereqs above is missing.
 ./memory/scripts/mcp-smoke.sh
 
-# Optional: dry-run a flush + compile pass without writing to Dify
+# ---- Tier 5: Pipeline dry-run. Requires: configured LLM provider ----
+# ---- (claude/codex CLI on PATH, or ANTHROPIC_API_KEY/OPENAI_API_KEY). ----
+# Optional. Exercises flush + compile without writing to Dify (compile uses --dry-run).
 echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"Decision: Dify is the canonical store for project memory."}' \
   | ./memory/scripts/hooks/post-compact.sh
 node ./memory/scripts/compile.mjs --dry-run
 
-# Verify metadata schema is installed on the self_improvement slot
+# ---- Tier 6: Direct CLI checks. Requires: bridge container running. ----
+# Verify the metadata schema is installed on the self_improvement slot.
 docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js list-metadata-fields --datasetId self_improvement
 # expect doc_metadata to include atom_type, tags, project_module,
 # language, task_type, error_pattern.
 
-# Filtered search smoke against the self_improvement slot
-# (this only RETRIEVES; pair it with a save_lesson MCP call from your
-# agent if you want a true save -> recall round-trip)
+# Filtered search smoke against the self_improvement slot.
+# (RETRIEVES only; pair with a save_lesson MCP call from your agent for
+# a true save -> recall round-trip.)
 docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js search --datasetId self_improvement \
   --query "smoke" --filters '{"atom_type":"self-improvement-lesson"}'
-
-# Run the unit-test suite (no Dify, no Docker, hermetic; node 20+)
-node --test test/*.test.mjs   # or: npm test
 ```
 
 If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.
