@@ -335,6 +335,8 @@ cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
 
 Re-running bootstrap is idempotent. `memory/.env` is preserved across upgrades — only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge container reads `memory/.env` via Compose's `env_file:` directive, so any new `DIFY_DATASET_<NAME>_ID=` line you add only takes effect after a recreate; `up.sh` handles that. Existing `memory/.env` slots survive the upgrade.
 
+> **Note on locally edited `.agents/*` files:** bootstrap REFUSES to overwrite a file under `.agents/` whose content differs from the freshly-rendered template — it prints a conflict list and exits non-zero. If you intentionally customised a snippet, either accept the boilerplate's version (delete the file then re-run bootstrap) or merge the new template by hand. Skill files under `.claude/skills/` and `.agents/rules/` are always overwritten on re-run; treat them as canonical from the boilerplate.
+
 ## Client config
 
 Generated client snippets live under `.agents/clients/` after bootstrap. Print them with:
@@ -412,15 +414,20 @@ echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"D
 node ./memory/scripts/compile.mjs --dry-run
 
 # Verify metadata schema is installed on the self_improvement slot
-docker exec -i $(grep ^MCP_CONTAINER_NAME ./memory/.env | cut -d= -f2) \
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js list-metadata-fields --datasetId self_improvement
 # expect doc_metadata to include atom_type, tags, project_module,
 # language, task_type, error_pattern.
 
-# Inline lesson save -> immediate recall round-trip
-docker exec -i $(grep ^MCP_CONTAINER_NAME ./memory/.env | cut -d= -f2) \
+# Filtered search smoke against the self_improvement slot
+# (this only RETRIEVES; pair it with a save_lesson MCP call from your
+# agent if you want a true save -> recall round-trip)
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js search --datasetId self_improvement \
   --query "smoke" --filters '{"atom_type":"self-improvement-lesson"}'
+
+# Run the unit-test suite (no Dify, no Docker, hermetic; node 20+)
+node --test test/*.test.mjs   # or: npm test
 ```
 
 If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.

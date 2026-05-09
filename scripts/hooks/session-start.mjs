@@ -40,7 +40,7 @@ function maybeTriggerCompile() {
   return spawnCompileDetached();
 }
 
-const memoryServerName = envValue("MCP_CONTAINER_NAME") || envValue("MEMORY_SERVER_NAME") || "<memory-server>";
+const memoryServerName = envValue("MCP_CONTAINER_NAME") || "<memory-server>";
 
 const compileTriggered = (() => {
   try {

@@ -6,7 +6,7 @@ export class DifyBridgeUnavailable extends Error {}
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 function containerName() {
-  const name = envValue("MCP_CONTAINER_NAME") || envValue("MEMORY_SERVER_NAME");
+  const name = envValue("MCP_CONTAINER_NAME");
   if (!name) {
     throw new DifyBridgeUnavailable("MCP_CONTAINER_NAME not set in memory/.env");
   }

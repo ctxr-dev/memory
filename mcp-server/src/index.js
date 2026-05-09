@@ -84,8 +84,12 @@ function errorToolResponse(error) {
   };
 }
 
+// MCP server identity comes from the container env (compose.mcp.yaml's
+// env_file forwards memory/.env). The literal placeholder is only ever
+// seen if the container was started without the env file — surface that
+// as the tool-name so the misconfig is loud instead of silent.
 const server = new McpServer({
-  name: "__MEMORY_SERVER_NAME__",
+  name: process.env.MCP_CONTAINER_NAME || "memory-mcp",
   version: "0.1.0",
 });
 

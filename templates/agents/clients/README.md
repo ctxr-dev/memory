@@ -14,7 +14,9 @@ The installed project also provides:
 ```bash
 ./memory/scripts/mcp-config.sh all
 ./memory/scripts/mcp-config.sh codex
-./memory/scripts/mcp-config.sh json
+./memory/scripts/mcp-config.sh codex-toml
+./memory/scripts/mcp-config.sh claude-desktop
+./memory/scripts/mcp-config.sh cursor
 ```
 
 Codex/OpenAI can usually be registered automatically with:
