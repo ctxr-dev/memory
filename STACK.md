@@ -171,10 +171,12 @@ These are the important knobs:
 - `DIFY_SESSION_DOC_LANGUAGE`: document processing language sent to Dify.
 - `DIFY_SESSION_PROCESS_RULE_PRESET`: the chunking preset for hook-created documents.
 - `DIFY_SESSION_PROCESS_RULE_JSON`: advanced raw Dify `process_rule`; use this when you want exact control over segmentation.
-- `MEMORY_HOOK_MAX_TURNS`: how many recent transcript turns the hook sends to Dify.
-- `MEMORY_HOOK_MAX_CHARS`: hard cap before sending to Dify.
+- `MEMORY_HOOK_MAX_TURNS`: how many recent transcript turns flush.mjs hands to the LLM extractor.
+- `MEMORY_HOOK_MAX_CHARS`: hard cap before sending to the LLM.
 - `MEMORY_HOOK_SESSION_END_MIN_TURNS`: skip tiny sessions unless at least this many transcript turns exist.
 - `MEMORY_HOOK_PRECOMPACT_MIN_TURNS`: skip tiny pre-compact captures unless at least this many transcript turns exist.
+- `MEMORY_LLM_PROVIDER`: which LLM does flush + compile. See `.env.example`.
+- `MEMORY_DAILY_RETENTION_DAYS`: rotate compiled daily logs after this many days.
 
 `DIFY_SESSION_PROCESS_RULE_PRESET=conversation` sends a Dify `process_rule` with:
 
@@ -318,7 +320,9 @@ The MCP tool returns chunks and metadata. The assistant still needs to reason ov
 
 ## Continuous Memory Hooks
 
-Hooks are opt-in at install time. If the installer was run with `--install-hooks`, the workspace hook manifest is:
+The full memory pipeline (flush + compile, atom shape, dedup-merge) is documented in the repo [README](README.md). This section covers only the Dify-stack-relevant pieces: the manifest, the script-to-event mapping for non-Claude clients, and the manual-test commands.
+
+Hooks are opt-in at install time. If `bootstrap.sh --install-hooks` was used (default on), the workspace hook manifest is:
 
 ```text
 .agents/hooks.json
@@ -389,63 +393,42 @@ Current hook events:
 }
 ```
 
-What they do:
+What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
-- `SessionStart`: injects a short reminder that project memory is available through the `__MEMORY_SERVER_NAME__` MCP server and should be searched for project-history assumptions.
-- `PreCompact`: before Claude Code compacts an exhausted context window, extracts the recent transcript and writes it directly to Dify.
-- `PostCompact`: sends Claude Code's compact summary directly to Dify as a new Knowledge document.
-- `SessionEnd`: reads the Claude Code transcript path from hook JSON, extracts user/assistant text, redacts common secrets, and sends the resulting memory document directly to Dify.
+- `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
+- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract a small set of typed atoms and appends them to `./memory/daily/YYYY-MM-DD.md`. **Flush never writes to Dify.** Only the lazy compile stage does.
 
-The hook memory-write pipeline is:
+If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
-```text
-Claude Code hook JSON
-  -> memory/scripts/hooks/session-memory-hook.mjs
-  -> read transcript_path or compact_summary
-  -> keep recent turns only
-  -> redact common secrets
-  -> build one Markdown document in memory
-  -> docker exec -i __MEMORY_SERVER_NAME__ node src/ingest-session.js
-  -> Dify create-document-by-text API
-  -> Dify chunks/indexes into .memory/dify/
-```
-
-No step in that pipeline writes a local memory note file. The only durable store is Dify's own persisted runtime state under `.memory/dify/`.
-
-The hook upload path is:
+Manual flush test (extracts and appends to today's daily log if your LLM provider is configured):
 
 ```bash
-docker exec -i __MEMORY_SERVER_NAME__ node src/ingest-session.js
-```
-
-If Dify is not configured yet, or if the MCP bridge container is not running yet, the hook skips cleanly and prints the reason. Once `memory/.env` is configured, upload/API failures are treated as real errors. The hooks never write fallback memory files.
-
-Manual test:
-
-```bash
-printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory."}' |
+printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory because flat markdown does not scale."}' |
   ./memory/scripts/hooks/post-compact.sh
+cat memory/daily/$(date -u +%F).md
 ```
 
-After setting `DIFY_KNOWLEDGE_API_KEY` and `DIFY_WRITE_DATASET_ID`, the same command should create a new document in Dify.
+Manual compile (after `memory/.env` is configured and the stack is up):
 
-Claude Code details:
+```bash
+node ./memory/scripts/compile.mjs --force        # process every daily log now
+node ./memory/scripts/compile.mjs --dry-run      # see decisions without writing to Dify
+```
+
+Claude Code hook details:
 
 - Hooks receive JSON on stdin.
-- `PreCompact` is the context-pressure safety net. It fires before Claude Code compacts a full context window, so it is the right place to preserve detail that compaction may discard.
-- `SessionEnd` includes `transcript_path`.
-- `PostCompact` includes `compact_summary`.
-- `SessionStart` can return `additionalContext`; this project uses that only to remind the agent to use Dify/MCP memory, not to inject stored memory blobs.
-- The hook timeout is set to 60 seconds because Dify indexing calls can take longer than the default SessionEnd budget.
+- `PreCompact` is the context-pressure safety net. It fires before Claude Code compacts a full context window, including automatic compaction.
+- `SessionEnd` and `PreCompact` payloads include `transcript_path`; `PostCompact` includes `compact_summary`. Flush handles both shapes.
+- `SessionStart` returns `additionalContext` only to remind the agent that memory exists. It does NOT inject stored memory blobs (that is the agent's job via `search_memory`).
+- The hook timeout is 60s because the LLM extraction call dominates wall-clock time.
 
-There is no separate reliable "context is almost exhausted" token-threshold hook exposed here. The supported lifecycle hook for that moment is `PreCompact`, including automatic compaction. This project follows the same lifecycle pattern as `claude-memory-compiler` at the hook level:
+This boilerplate follows the same lifecycle shape as [`coleam00/claude-memory-compiler`](https://github.com/coleam00/claude-memory-compiler) (capture at SessionEnd / PreCompact, summary at PostCompact, re-orient at SessionStart) and adds:
 
-- capture at `SessionEnd`
-- capture before context compaction with `PreCompact`
-- capture the compacted summary with `PostCompact`
-- re-orient the next session with `SessionStart`
-
-The storage is intentionally different: this project writes directly to Dify Knowledge through the MCP bridge instead of writing daily Markdown logs or compiling local article files.
+- A typed-atom output schema instead of free-form summary bullets.
+- A dedup-merge compile stage that supersedes outdated entries instead of accumulating duplicates.
+- A swappable LLM provider (Claude Code CLI / Codex CLI / Anthropic / OpenAI), so the boilerplate is not Claude-only.
+- Dify Knowledge as the durable store instead of flat markdown article files.
 
 Codex/OpenAI, Cursor, Claude Desktop, and other MCP clients:
 
