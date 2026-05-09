@@ -53,6 +53,15 @@ Result: most sessions contribute 0–3 small atoms, dedup-merged across history,
 
 The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates. Two flows: install it yourself, or have an agent drive it.
 
+### Prerequisites
+
+- Docker Desktop 4.x+ with Docker Compose 2.24.4+
+- Node 20+ (used at install AND runtime — no `jq` or other extras needed)
+- bash 3.2+, plus standard POSIX utilities (`awk`, `sed`, `grep`, `find`, `mktemp`, `tr`, `cut`)
+- `git`, `curl`
+
+**Cross-platform:** macOS and Linux are first-class. **Windows works via WSL2 or Git Bash** — bootstrap is bash-only and the install scripts intentionally avoid `jq`, `realpath`, `gsed`, or any other non-portable binary so a Git Bash shell with Docker Desktop is sufficient. Docker bind-mount path translation is handled by Docker Desktop itself.
+
 ### Manual install
 
 ```bash
@@ -65,7 +74,8 @@ git clone https://github.com/ctxr-dev/memory-boilerplate.git ./memory
 
 `bootstrap.sh` will:
 
-- Render `.agents/`, `.claude/settings.json`, and append the boilerplate block to your project `.gitignore` (so `/memory` and `/.memory` are ignored).
+- Render `.agents/` and (when `--install-hooks`, default on) `.claude/settings.json`. **Existing files are structurally merged, never overwritten:** if you already have hooks, MCP servers, or permissions configured, your entries pass through verbatim and only our entries are added or refreshed. The merge is implemented in `scripts/lib/merge-config.mjs` (pure Node, no `jq`); re-runs are byte-stable when nothing changes.
+- Append the boilerplate block to your project `.gitignore` (so `/memory` and `/.memory` are ignored). Idempotent: a marker line guards re-runs.
 - Detect available LLM CLIs (`claude` first, then `codex`) and ask which one to use for distillation; falls back to `anthropic` / `openai` when an API key is set.
 - Create `memory/.env` from the template, injecting your slug. **Re-runs never touch `memory/.env`.**
 
