@@ -190,7 +190,7 @@ A dedicated dataset slot, `self_improvement`, captures lessons learned **only** 
 
 ### Two MCP entry points
 
-- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Searches the `self_improvement` dataset filtered to `atom_type=self-improvement-lesson` plus the supplied context. Broadens via a fall-back ladder (drop `error_pattern` → `language` → `task_type` → `tags` → `project_module`, ending at `atom_type` only) and accumulates UNIQUE hits across rungs until at least 3 distinct hits or the ladder is exhausted. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is provided AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` and `feedback-rule` atoms from `knowledge` matching the same `project_module`.
+- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Searches the `self_improvement` dataset filtered to `atom_type=self-improvement-lesson` plus the supplied context. Broadens via a fall-back ladder (drop `error_pattern` → `language` → `task_type`) and accumulates UNIQUE hits across rungs until at least `min(3, maxResults)` distinct hits or the ladder is exhausted. `project_module` and `tags` are scoping signals the caller chose deliberately and are NEVER dropped. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is provided AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` and `feedback-rule` atoms from `knowledge` matching the same `project_module` (max 2 supplementary records, appended after lessons, never displacing them).
 - **`save_lesson(title, body, metadata, tags?, evidence?)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key — different lessons with the same `error_pattern` will MERGE in compile rather than multiply. The doc name `lesson-<slug>-<ts>.md` matches the format compile recognises, so inline-saved lessons participate in the same dedup-merge pipeline. Available on the next turn.
 
 ### Two capture paths feed `self_improvement`
@@ -376,7 +376,7 @@ Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lesson
 | `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms and writes one `daily-<ts>.md` document. Min-turns check is bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
 
-The hook timeout is 60s because the LLM call dominates wall-clock time.
+The hook timeout is 130s for the flush hooks (PreCompact/PostCompact/SessionEnd) and 15s for SessionStart. Flush calls an LLM that defaults to a 120s per-call timeout, so the hook needs at least that plus headroom; SessionStart only emits a reminder and spawns compile detached, so it returns quickly.
 
 ## What gets committed
 
@@ -387,6 +387,7 @@ The hook timeout is 60s because the LLM call dominates wall-clock time.
 | `/.agents`, `/.claude/settings.json` | **Yes** (your call) | Per-project agent + hook config. |
 | `memory/.env` | **No** (gitignored inside the boilerplate) | Contains your Dify API key. |
 | `memory/.compile-state.json` | **No** | One-line ops state (last compile date). Not memory. |
+| `memory/.compile.lock` | **No** | Transient lockfile preventing concurrent compile runs. |
 
 ## Verification
 
@@ -450,7 +451,7 @@ memory/
 │   ├── compile.mjs             # daily -> knowledge / self_improvement
 │   │                           # promotion (per-atom-type routing,
 │   │                           # metadata-filtered dedup-merge)
-│   ├── lib/{env,llm,dify-write,redact,slug,datasets}.mjs
+│   ├── lib/{env,llm,dify-write,redact,slug,datasets,lock}.mjs
 │   └── hooks/
 │       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
 │       ├── pre-compact.sh            # -> flush.mjs pre-compact

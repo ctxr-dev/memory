@@ -94,6 +94,7 @@ async function searchCmd(config, { query, datasetId, limit, filters, scoreThresh
         query,
         metadataCondition,
         scoreThreshold: Number.isFinite(threshold) ? threshold : undefined,
+        topK: max,
       });
       for (const rec of records) {
         const seg = rec?.segment || {};

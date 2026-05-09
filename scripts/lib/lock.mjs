@@ -30,7 +30,12 @@ import fs from "node:fs";
 //     compiles started by back-to-back SessionStart hooks — is fully
 //     covered by the atomic-create fast path.
 
-const DEFAULT_STALE_MS = 600_000; // 10 minutes
+// 30 minutes. compile.mjs runs LLM calls (default 120s timeout each) per
+// atom, plus a dedup search per atom, across N daily docs. A real run
+// with several dailies of several atoms each easily exceeds 10 minutes.
+// 30 minutes covers the typical case while still reclaiming a truly
+// stuck/dead lock within a reasonable wait.
+const DEFAULT_STALE_MS = 1_800_000;
 
 function isProcessAlive(pid) {
   if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) return false;

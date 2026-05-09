@@ -28,7 +28,12 @@ copy_dir_if_needed() {
 
   if find "$old_path" -mindepth 1 -print -quit | grep -q .; then
     echo "Migrating $old_path -> $new_path"
-    ditto "$old_path" "$new_path"
+    # `cp -a` preserves permissions, ownership where possible, symlinks,
+    # and timestamps on both Linux and macOS. Previously used `ditto`
+    # which is macOS-only and breaks Linux installs at first run.
+    # Trailing /. on source copies CONTENTS (not the dir itself) to match
+    # ditto's behaviour: ditto src dst writes into dst, not dst/src.
+    cp -a "$old_path/." "$new_path/"
   fi
 }
 

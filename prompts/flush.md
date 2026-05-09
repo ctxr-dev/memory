@@ -10,7 +10,7 @@ Produce a small set of typed atoms that will be useful to a different agent in a
 {
   "atoms": [
     {
-      "type": "decision" | "bug-root-cause" | "feedback-rule" | "project-lore" | "reference" | "pattern-gotcha" | "self-improvement-lesson",
+      "type": "<one of: decision, bug-root-cause, feedback-rule, project-lore, reference, pattern-gotcha, self-improvement-lesson>",
       "title": "imperative summary, ≤ 80 chars",
       "body": "≤ 500 chars. Lead with the rule/fact. Include 'Why:' and 'How to apply:' lines when applicable.",
       "tags": ["lowercase-hyphenated", "scope", "or-area"],

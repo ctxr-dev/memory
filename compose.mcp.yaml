@@ -84,7 +84,11 @@ services:
       WORKSPACE_MOUNT: /workspace
       ABSORB_MAX_FILE_BYTES: ${ABSORB_MAX_FILE_BYTES:-500000}
     depends_on:
+      # service_healthy waits for api's /health endpoint (defined in upstream
+      # Dify compose). Without this, the bridge container is "started"
+      # immediately while api is still booting, and the first MCP tool call
+      # (or scripts/dify-setup.sh) gets connection-refused for 30-60s.
       api:
-        condition: service_started
+        condition: service_healthy
     networks:
       - default

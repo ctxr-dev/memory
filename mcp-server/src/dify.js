@@ -558,7 +558,7 @@ function defaultRetrievalModelFor(indexingTechnique) {
   };
 }
 
-export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, retrievalModel } = {}) {
+export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, topK, retrievalModel } = {}) {
   if (!datasetId) throw new Error("retrieveChunks requires datasetId.");
   if (!query) throw new Error("retrieveChunks requires query.");
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
@@ -573,9 +573,10 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 
   const wantsThreshold = typeof scoreThreshold === "number" && scoreThreshold >= 0 && scoreThreshold <= 1;
   const wantsMetadata = !!metadataCondition;
+  const wantsTopK = Number.isFinite(topK) && topK > 0;
 
   let rm = explicitRm;
-  if ((wantsThreshold || wantsMetadata) && !rm) {
+  if ((wantsThreshold || wantsMetadata || wantsTopK) && !rm) {
     // Probe the dataset to decide between hybrid_search (high_quality) and
     // keyword_search (economy). Cached per-process.
     const tech = await indexingTechniqueFor(config, datasetId);
@@ -589,6 +590,12 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
     }
     if (wantsMetadata) {
       rm.metadata_filtering_conditions = metadataCondition;
+    }
+    if (wantsTopK) {
+      // Caller asks for N results; otherwise the dataset's default top_k
+      // (often 8) caps results regardless of how many we slice on the
+      // client. Without this, --limit 50 silently returns 8.
+      rm.top_k = Math.floor(topK);
     }
   }
 

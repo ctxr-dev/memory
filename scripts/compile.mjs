@@ -46,7 +46,15 @@ function readState() {
 }
 
 function writeState(state) {
-  fs.writeFileSync(COMPILE_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
+  // Atomic write: stage to .tmp then rename. The lockfile already
+  // serialises healthy concurrent writers, but a SIGKILL or hard crash
+  // mid-`writeFileSync` would leave the file truncated. readState
+  // recovers gracefully (returns defaultState) but that silently wipes
+  // metadata_retry counters — defeating the bounded-retry cap that
+  // prevents duplicate-create loops on a stuck daily.
+  const tmp = `${COMPILE_STATE_PATH}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
+  fs.renameSync(tmp, COMPILE_STATE_PATH);
 }
 
 function appendCompileLog(entry) {
@@ -279,7 +287,7 @@ async function main() {
   // .compile-state.json, mutate it independently, and the last writer
   // wins. The metadata_retry counter would regress and an atom could be
   // promoted twice (once by each compile).
-  const lockStaleMs = envInt("MEMORY_COMPILE_LOCK_STALE_MS", 600_000);
+  const lockStaleMs = envInt("MEMORY_COMPILE_LOCK_STALE_MS", 1_800_000);
   installLockReleaseHandlers(COMPILE_LOCK_PATH);
   const lock = acquireLock(COMPILE_LOCK_PATH, { staleMs: lockStaleMs, label: "compile.mjs" });
   if (!lock.ok) {

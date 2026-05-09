@@ -23,8 +23,14 @@ const DEFAULT_IGNORE = [
   ".turbo",
   ".turbo/**",
   "**/.DS_Store",
+  // Match at any depth, not just workspace root. The include list above
+  // already excludes .lock/.log file extensions, but defence-in-depth is
+  // cheap: a future `include` override that adds non-doc patterns won't
+  // accidentally pull in `.compile.lock` or rotated logs.
   "*.lock",
+  "**/*.lock",
   "*.log",
+  "**/*.log",
 ];
 
 const DEFAULT_DOC_GLOBS = [

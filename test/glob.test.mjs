@@ -135,6 +135,26 @@ test("findFiles: respects custom include + ignore", (t) => {
   assert.deepEqual(rels, ["a.js", "b.js"]);
 });
 
+test("findFiles: ignores .lock and .log files at any depth", (t) => {
+  // Defence-in-depth check. The default include list (markdown/text)
+  // already excludes .lock/.log by extension, but a custom include like
+  // `**/*` would otherwise pull these in. The ignore list must catch
+  // them at any nesting level so absorb_files cannot ingest e.g.
+  // `.compile.lock` written by an in-flight compile run.
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, ".compile.lock", '{"pid":123}');
+  w(root, "subdir/other.lock", "x");
+  w(root, "compile.log", "x");
+  w(root, "subdir/error.log", "x");
+
+  const out = findFiles(root, { include: ["**/*"] });
+  const rels = out.map((e) => e.relPath).sort();
+  assert.deepEqual(rels, ["kept.md"], `lock/log leaked: ${JSON.stringify(rels)}`);
+});
+
 test("findFiles: nonexistent root -> empty list (no throw)", () => {
   const out = findFiles(path.join(os.tmpdir(), "memboil-does-not-exist-xyz-12345"));
   assert.deepEqual(out, []);

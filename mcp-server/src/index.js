@@ -164,6 +164,7 @@ server.registerTool(
 
       const metadataCondition = filters ? buildMetadataCondition(filters) : null;
 
+      const limit = maxResults || config.maxResults;
       const settled = await Promise.allSettled(
         selectedDatasetIds.map(async (datasetId) => {
           const records = await retrieveChunks(config, {
@@ -171,6 +172,7 @@ server.registerTool(
             query,
             metadataCondition,
             scoreThreshold,
+            topK: limit,
           });
           return records.map((record) => compactRecord(datasetId, record));
         }),
@@ -190,7 +192,6 @@ server.registerTool(
         }
       });
 
-      const limit = maxResults || config.maxResults;
       records.sort((left, right) => (right.score ?? -1) - (left.score ?? -1));
 
       return jsonToolResponse({
@@ -491,8 +492,13 @@ server.registerTool(
       // step by step. Each step's filter set is built fresh from baseFilters
       // by removing the listed keys. Steps whose key is not present in
       // baseFilters become identical to the previous step and are
-      // deduplicated below. The final step is atom_type only.
-      const dropOrder = ["error_pattern", "language", "task_type", "tags", "project_module"];
+      // deduplicated below. We deliberately STOP after task_type — the
+      // documented contract is "broaden by dropping error_pattern, then
+      // language, then task_type". project_module and tags are scoping
+      // signals the caller actively chose; dropping them would leak
+      // unrelated lessons into the result. Final rung keeps
+      // {atom_type, project_module?, tags?} only.
+      const dropOrder = ["error_pattern", "language", "task_type"];
       const ladderRaw = [{ ...baseFilters }];
       const dropped = [];
       for (const key of dropOrder) {
@@ -526,6 +532,7 @@ server.registerTool(
           query,
           metadataCondition: condition,
           scoreThreshold: threshold,
+          topK: limit,
         });
         if (records.length === 0) continue;
         let added = 0;
@@ -541,7 +548,12 @@ server.registerTool(
           added += 1;
         }
         if (added > 0) rungAttribution.push({ filters, added });
-        if (lessonHits.length >= limit) break;
+        // Documented contract: broaden until at least 3 distinct hits OR
+        // the ladder is exhausted. The min(3, limit) form prevents
+        // over-broadening when the caller asks for a small result set
+        // (e.g. limit=2 stops at 2) while still respecting the "3 hits"
+        // floor for the typical limit=5 case.
+        if (lessonHits.length >= Math.min(3, limit)) break;
       }
       // Stable sort: by rungIndex ASC (strict rung first), then by score
       // DESC within each rung. This actually preserves the strict-first
@@ -575,9 +587,13 @@ server.registerTool(
       }
 
       // Lessons FIRST (the whole point of the tool); supplementary chunks
-      // appended after, never displacing lessons in the result. Total cap
-      // = limit overall.
-      const all = [...lessonHits, ...supplementary].slice(0, limit);
+      // appended after, never displacing lessons. We cap lessons at `limit`
+      // and append supplementary on top, so the caller always gets the full
+      // {bug-root-cause, feedback-rule} cross-reference (max 2 records) when
+      // includeKnowledge is on, even when lessons already filled `limit`.
+      // The previous slice(0, limit) silently truncated supplementary to 0
+      // whenever lessonHits.length >= limit.
+      const all = [...lessonHits.slice(0, limit), ...supplementary];
 
       return jsonToolResponse({
         query,
