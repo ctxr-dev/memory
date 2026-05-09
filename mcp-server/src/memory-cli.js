@@ -402,7 +402,7 @@ try {
     default:
       console.error(`Unknown subcommand: ${sub || "(none)"}`);
       console.error(
-        "Usage: memory-cli.js <search|write|save|list|read|disable|delete|list-datasets|create-dataset|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
+        "Usage: memory-cli.js <search|write|save|list|read|disable|delete|list-datasets|create-dataset|get-config|list-embedding-models|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
       );
       process.exit(2);
   }

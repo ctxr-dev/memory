@@ -611,8 +611,19 @@ export async function getDefaultEmbeddingModel(config) {
         config.timeoutMs,
       );
       const providers = Array.isArray(body?.data) ? body.data : [];
-      const active = providers.filter((p) => p && p.status === "active" && Array.isArray(p.models) && p.models.length > 0);
+      const active = providers
+        .filter((p) => p && p.status === "active" && Array.isArray(p.models) && p.models.length > 0)
+        // Sort alphabetically by provider URI so the chosen default is
+        // DETERMINISTIC across bridge restarts and across tenants where
+        // providers were installed in different orders. Without this,
+        // `active[0]` depends on Dify's internal ordering (install
+        // sequence), which can flip silently on a tenant rebuild.
+        .sort((a, b) => String(a.provider || "").localeCompare(String(b.provider || "")));
       if (active.length === 0) {
+        // tenant_empty IS a stable config state (the user hasn't
+        // configured any embedding model in the UI). Cache it so we
+        // don't re-probe on every retrieve. The user fixes this in the
+        // Dify UI and recreates the bridge to bust the cache.
         _embeddingDefaultCache = { provider: "", model: "", source: "tenant_empty" };
         return _embeddingDefaultCache;
       }
@@ -620,7 +631,7 @@ export async function getDefaultEmbeddingModel(config) {
       const chosenModel = chosen.models[0];
       if (active.length > 1) {
         process.stderr.write(
-          `dify.js: multiple embedding providers configured (${active.map((p) => p.provider).join(", ")}); using '${chosen.provider}' / '${chosenModel?.model}'. Set DIFY_EMBEDDING_MODEL_PROVIDER + DIFY_EMBEDDING_MODEL in memory/.env to pin a specific one.\n`,
+          `dify.js: multiple embedding providers configured (${active.map((p) => p.provider).join(", ")}); using '${chosen.provider}' / '${chosenModel?.model}' (alphabetical-first). Set DIFY_EMBEDDING_MODEL_PROVIDER + DIFY_EMBEDDING_MODEL in memory/.env to pin a specific one.\n`,
         );
       }
       _embeddingDefaultCache = {
@@ -630,12 +641,15 @@ export async function getDefaultEmbeddingModel(config) {
       };
       return _embeddingDefaultCache;
     } catch (err) {
-      // Probe failed (network / auth / Dify version drift). Don't crash
-      // the calling create/retrieve — let it proceed without
-      // vector_setting fields and let Dify produce its own friendlier
-      // error message.
-      _embeddingDefaultCache = { provider: "", model: "", source: "probe_failed", error: err?.message };
-      return _embeddingDefaultCache;
+      // Probe failed (network blip, transient Dify restart, etc). Do
+      // NOT cache the failure — leave _embeddingDefaultCache as null so
+      // the next call retries the probe. Caching a transient failure
+      // would mean a single network blip starves embedding-discovery
+      // for the rest of the bridge's lifetime. The current call still
+      // proceeds without vector_setting fields and lets Dify produce a
+      // friendlier error if it can't fall back internally.
+      process.stderr.write(`dify.js: embedding probe failed (transient, will retry on next call): ${err?.message}\n`);
+      return { provider: "", model: "", source: "probe_failed", error: err?.message };
     } finally {
       _embeddingDefaultPromise = null;
     }
