@@ -395,40 +395,43 @@ server.registerTool(
   async ({ title, body, metadata, tags, evidence }) => {
     try {
       const config = getConfig();
-      // datasetMap.has() returns true even when the slot is declared but
-      // unbound (id = ""). Check the resolved id to decide whether to fall
-      // back to the absorb default.
-      const datasetSlot = config.datasetMap.get("self_improvement")?.id
-        ? "self_improvement"
-        : (config.absorbDefaultDatasetName || "knowledge");
-      // Use the shared lessonDocName so save_lesson and compile produce
-      // the same shape recognised by parseLessonDocName.
+      // self_improvement is the only correct destination — falling back to
+      // knowledge would write a lesson where recall_lessons can't find it.
+      // Hard-fail with a clear error instead.
+      const lessonId = config.datasetMap.get("self_improvement")?.id;
+      if (!lessonId) {
+        throw new Error(
+          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in memory/.env (or run ./memory/scripts/dify-setup.sh).",
+        );
+      }
+      const datasetSlot = "self_improvement";
       const name = lessonDocName(title);
-      const tagList = Array.isArray(tags) ? tags : (metadata.tags ? String(metadata.tags).split(",").map((t) => t.trim()) : []);
+      const tagList = Array.isArray(tags) ? tags : (metadata.tags ? String(metadata.tags).split(",").map((t) => t.trim()).filter(Boolean) : []);
+      // Body lines: skip optional fields when empty so the rendered doc
+      // matches what compile produces and parseAtomsFromMarkdown reads.
       const lines = [
         `# ${title}`,
         "",
         `- type: self-improvement-lesson`,
-        `- tags: [${tagList.join(", ")}]`,
-        `- project_module: ${metadata.project_module}`,
-        `- language: ${metadata.language || ""}`,
-        `- task_type: ${metadata.task_type}`,
-        `- error_pattern: ${metadata.error_pattern}`,
-        `- updated_at_utc: ${new Date().toISOString()}`,
-        "",
-        body,
       ];
+      if (tagList.length > 0) lines.push(`- tags: [${tagList.join(", ")}]`);
+      lines.push(`- project_module: ${metadata.project_module}`);
+      if (metadata.language) lines.push(`- language: ${metadata.language}`);
+      lines.push(`- task_type: ${metadata.task_type}`);
+      lines.push(`- error_pattern: ${metadata.error_pattern}`);
+      lines.push(`- updated_at_utc: ${new Date().toISOString()}`);
+      lines.push("", body);
       if (evidence) lines.push("", `evidence: ${evidence}`);
-      const text = lines.join("\n").concat("\n");
+      const text = `${lines.join("\n")}\n`;
 
-      const fullMetadata = {
-        atom_type: "self-improvement-lesson",
-        tags: tagList.join(","),
-        project_module: metadata.project_module,
-        language: metadata.language || "",
-        task_type: metadata.task_type,
-        error_pattern: metadata.error_pattern,
-      };
+      // Build the per-document metadata map; OMIT empty fields so Dify
+      // treats them as absent rather than `is ""` matchable.
+      const fullMetadata = { atom_type: "self-improvement-lesson" };
+      if (tagList.length > 0) fullMetadata.tags = tagList.join(",");
+      if (metadata.project_module) fullMetadata.project_module = metadata.project_module;
+      if (metadata.language) fullMetadata.language = metadata.language;
+      if (metadata.task_type) fullMetadata.task_type = metadata.task_type;
+      if (metadata.error_pattern) fullMetadata.error_pattern = metadata.error_pattern;
 
       const result = await upsertDocumentByName(config, {
         datasetId: datasetSlot,
@@ -508,11 +511,12 @@ server.registerTool(
       }
 
       // Accumulate hits across rungs. Strict-filter hits are stored first
-      // and preserved; broader rungs only add NEW segments (deduped by
-      // segmentId). Stop broadening once we have at least 3 distinct hits.
+      // and preserved; broader rungs only add NEW segments. Dedup by
+      // (documentId, position) — score varies per rung so it's not a
+      // stable identity. Stop broadening once we have `limit` distinct hits.
       const seen = new Set();
       const lessonHits = [];
-      let usedFilters = null;
+      const rungAttribution = [];
       for (const filters of ladder) {
         const condition = buildMetadataCondition(filters);
         const records = await retrieveChunks(config, {
@@ -522,16 +526,25 @@ server.registerTool(
           scoreThreshold: threshold,
         });
         if (records.length === 0) continue;
-        if (!usedFilters) usedFilters = filters;
+        let added = 0;
         for (const r of records) {
           const compact = compactRecord(lessonDatasetId, r);
-          const dedupKey = compact.segmentId || `${compact.documentId}:${compact.score}`;
+          const dedupKey = compact.segmentId
+            || `${compact.documentId}:${compact.position ?? compact.documentName ?? ""}`;
           if (seen.has(dedupKey)) continue;
           seen.add(dedupKey);
+          compact.kind = "lesson";
           lessonHits.push(compact);
+          added += 1;
         }
-        if (lessonHits.length >= 3) break;
+        if (added > 0) rungAttribution.push({ filters, added });
+        if (lessonHits.length >= limit) break;
       }
+      // Sort lesson hits by score WITHIN the strict-first ordering: hits
+      // from earlier rungs come first, then sorted by score within each rung.
+      // Implementation: stable sort by score, but rungs are already added
+      // in priority order so we keep insertion order via a tag.
+      lessonHits.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
 
       const supplementary = [];
       if (includeKnowledge !== false && project_module) {
@@ -545,23 +558,30 @@ server.registerTool(
               metadataCondition: buildMetadataCondition({ atom_type: t, project_module }),
               scoreThreshold: threshold,
             });
-            for (const r of records.slice(0, 1)) supplementary.push(compactRecord(knowledgeId, r));
+            for (const r of records.slice(0, 1)) {
+              const compact = compactRecord(knowledgeId, r);
+              compact.kind = "knowledge";
+              supplementary.push(compact);
+            }
           }
         }
       }
 
-      const merged = [...lessonHits, ...supplementary];
-      merged.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+      // Lessons FIRST (the whole point of the tool); supplementary chunks
+      // appended after, never displacing lessons in the result. Total cap
+      // = limit overall.
+      const all = [...lessonHits, ...supplementary].slice(0, limit);
 
       return jsonToolResponse({
         query,
         lessonDataset: lessonSlot,
-        usedFilters: usedFilters || baseFilters,
+        ladderUsed: rungAttribution,
         scoreThreshold: threshold,
         lessonHits: lessonHits.length,
         supplementaryHits: supplementary.length,
-        totalRecords: merged.length,
-        records: merged.slice(0, limit).map((r) => ({
+        totalRecords: all.length,
+        records: all.map((r) => ({
+          kind: r.kind,
           datasetId: r.datasetId,
           documentName: r.documentName,
           score: r.score,

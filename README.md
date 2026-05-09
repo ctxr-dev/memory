@@ -1,11 +1,11 @@
-<h1 align="center">Local Dify MCP Memory Boilerplate</h1>
+<h1 align="center">🧠 Local Dify MCP Memory — the self-learning RAG that makes your AI stop repeating its mistakes</h1>
 
 <p align="center">
-  <strong>Typed, deduplicated project memory for AI coding agents.</strong>
+  <strong>Typed, deduplicated, self-improving project memory for AI coding agents.</strong>
 </p>
 
 <p align="center">
-  Local Dify Knowledge for high-precision RAG, a stdio MCP bridge for modern agent clients, and a two-stage <code>flush + compile</code> pipeline that distils sessions into typed atoms instead of dumping transcripts.
+  A local Dify Knowledge stack for high-precision RAG, a stdio MCP bridge for every modern agent client, a two-stage <code>flush + compile</code> pipeline that distils sessions into typed atoms instead of dumping transcripts, and a dedicated <code>self_improvement</code> dataset where the agent records every correction you give it — and looks up the lesson before related work, so it stops making the same mistake twice.
 </p>
 
 <p align="center">
@@ -78,7 +78,7 @@ After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-dri
 
 That is the entire install. The wizard handles the API key, the five default dataset slots (`daily`, `knowledge`, `plans`, `investigations`, `self_improvement`), the per-document metadata schema on each slot, and an optional first-pass absorb of your existing project documentation.
 
-### AI-driven install
+### 🤖 AI-driven install
 
 Paste this prompt into your agent (Claude Code, Cursor, Codex) running inside the target project root:
 
@@ -150,20 +150,28 @@ The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboa
 
 Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` (e.g. `DIFY_DATASET_RUNBOOKS_ID=`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot. After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines: `./memory/scripts/up.sh` (rebuilds + recreates) or `docker compose -p $COMPOSE_PROJECT_NAME up -d --no-build memory_mcp` for env-only refresh.
 
-### AI-driven flow
+### 🤖 AI-driven flow
 
 Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP server registered):
 
 ```text
 Set up the Dify memory boilerplate for this project. The MCP server is `<project-slug>-memory`. Do this:
 
-1. Call `list_datasets` to see what already exists in Dify.
-2. For each of these slots (daily, knowledge, plans, investigations, self_improvement), check whether a dataset with that name already exists.
+1. Verify DIFY_KNOWLEDGE_API_KEY is set in memory/.env. If not, STOP. Tell me to:
+   (a) Open the Dify UI URL printed by ./memory/scripts/ui-url.sh
+   (b) Sign in, configure an embedding model under Settings → Model Provider (REQUIRED before any high_quality dataset can be created)
+   (c) Knowledge → Service API → create a Knowledge API key
+   (d) Paste the key into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>
+   (e) Restart the bridge: ./memory/scripts/up.sh
+   THEN re-run me. Do not attempt to proceed without the key — `dify-setup.sh --non-interactive` will exit FATAL.
+
+2. Call `list_datasets` to see what already exists in Dify.
+3. For each of these slots (daily, knowledge, plans, investigations, self_improvement), check whether a dataset with that name already exists.
    - If it exists, tell me the id and ask whether to bind it.
-   - If it does not, ask whether to call `create_dataset` to create it.
-3. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
-4. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
-5. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
+   - If it does not, ask whether to call `create_dataset` to create it (high_quality + hybrid_search; requires the embedding model from step 1).
+4. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
+5. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
+6. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
 
 Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
 ```

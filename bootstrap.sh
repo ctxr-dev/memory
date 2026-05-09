@@ -103,13 +103,23 @@ if [ -z "$slug" ]; then
     slug="$derived"
   fi
 fi
+raw_input_slug="$slug"
 slug="$(sanitize_slug "$slug")"
 # Accept single-char slugs ("a") and multi-segment ("foo-bar"); reject
-# consecutive dashes ("a--b") and leading/trailing dashes.
+# consecutive dashes ("a--b") and leading/trailing dashes (after sanitize).
 if [ -z "$slug" ] || ! printf '%s' "$slug" | grep -qE '^[a-z0-9]+(-[a-z0-9]+)*$'; then
-  echo "Invalid slug: '$slug'. Use lowercase a-z, 0-9, with single dashes between segments." >&2
+  if [ "$raw_input_slug" != "$slug" ]; then
+    echo "Invalid slug: input '$raw_input_slug' sanitised to '$slug', which is not a valid slug." >&2
+  else
+    echo "Invalid slug: '$slug'." >&2
+  fi
+  echo "Slugs must contain only lowercase a-z, digits 0-9, and single dashes between segments. Examples: a, ab, foo-bar, billing-api." >&2
   exit 1
 fi
+# Note: sanitize_slug above silently rewrites uppercase to lowercase and
+# non-alnum to dashes, so inputs like "Foo Bar", "foo_bar", or "ABC" all
+# pass after rewrite. If you need strict input-validation, pass --slug
+# explicitly and ensure it already matches the regex.
 
 if [ -z "$title" ]; then
   title="$(printf '%s' "$slug" | tr '_-' '  ' \

@@ -218,24 +218,33 @@ export async function listAllDatasets(config, { keyword } = {}) {
   return all;
 }
 
-// Auto-created datasets get high_quality indexing (full-text + vector
-// indexes both populated) AND a hybrid_search retrieval default with
-// reranking enabled. This is "full text + vector" as the user asked for:
-// embedding similarity + BM25 inverted-index, fused via Dify's hybrid
-// retrieval. The reranking_enable flag is harmless when no reranker is
-// configured (Dify falls back to score-based fusion).
+// Auto-created datasets default to high_quality indexing + hybrid retrieval
+// (full-text + vector). Caveats:
+//  * high_quality REQUIRES a tenant-default embedding model in Dify; if
+//    none is configured the create call returns 400 with
+//    "No Embedding Model available". The dify-setup.sh wizard documents
+//    this prerequisite.
+//  * embedding_model + embedding_model_provider can be passed explicitly
+//    (read from DIFY_EMBEDDING_MODEL / DIFY_EMBEDDING_MODEL_PROVIDER) so
+//    dataset creation succeeds before the tenant default is set.
+//  * retrieval_model defaults to hybrid_search; reranking_enable is FALSE
+//    by default to avoid invoking a missing reranker on Dify <= 1.0;
+//    callers can flip it via DIFY_DEFAULT_RERANKING_ENABLE=true once a
+//    reranker is configured.
 export async function createDataset(config, {
   name,
   description,
   indexingTechnique = "high_quality",
   permission = "only_me",
   retrievalModel,
+  embeddingModel,
+  embeddingModelProvider,
 }) {
   if (!name) throw new Error("createDataset requires a name.");
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets`;
   const defaultRetrievalModel = {
     search_method: "hybrid_search",
-    reranking_enable: true,
+    reranking_enable: false,
     top_k: 8,
     score_threshold_enabled: false,
     score_threshold: 0,
@@ -247,6 +256,15 @@ export async function createDataset(config, {
     retrieval_model: retrievalModel || defaultRetrievalModel,
   };
   if (description) payload.description = description;
+  // Pass-through embedding model when the tenant default isn't usable.
+  const embedFromEnv = process.env.DIFY_EMBEDDING_MODEL || "";
+  const embedProviderFromEnv = process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "";
+  const finalEmbed = embeddingModel || embedFromEnv;
+  const finalEmbedProvider = embeddingModelProvider || embedProviderFromEnv;
+  if (finalEmbed && finalEmbedProvider) {
+    payload.embedding_model = finalEmbed;
+    payload.embedding_model_provider = finalEmbedProvider;
+  }
   return fetchJsonWithTimeout(
     endpoint,
     {
@@ -457,14 +475,14 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
 // api/core/rag/retrieval/dataset_retrieval.py) and issue #29044, the wire
 // JSON key is `metadata_filtering_conditions` and it lives INSIDE
 // `retrieval_model`. Top-level `metadata_condition` is silently dropped.
-
-const DEFAULT_HYBRID_RETRIEVAL_MODEL = {
-  search_method: "hybrid_search",
-  reranking_enable: true,
-  top_k: 8,
-  score_threshold_enabled: false,
-  score_threshold: 0,
-};
+//
+// We send `retrieval_model` ONLY when the caller needs to attach a
+// metadata filter / score threshold / explicit override. Otherwise we
+// omit it so Dify falls back to the dataset's own configured retrieval
+// settings (`dataset.retrieval_model or default_retrieval_model` per
+// hit_testing_service.py). This keeps economy datasets working: if we
+// always sent `hybrid_search`, economy datasets without a vector index
+// would 5xx.
 
 export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, retrievalModel } = {}) {
   if (!datasetId) throw new Error("retrieveChunks requires datasetId.");
@@ -473,25 +491,38 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
     datasetId,
   )}/retrieve`;
 
-  // Always send a retrieval_model (default hybrid search) so we can attach
-  // metadata_filtering_conditions to it. Caller-supplied retrievalModel
-  // wins; config-level (DIFY_RETRIEVAL_MODEL_JSON) wins over the default.
-  const rm = retrievalModel && typeof retrievalModel === "object"
+  const explicitRm = retrievalModel && typeof retrievalModel === "object"
     ? { ...retrievalModel }
     : config.retrievalModel
       ? { ...config.retrievalModel }
-      : { ...DEFAULT_HYBRID_RETRIEVAL_MODEL };
+      : null;
 
-  if (typeof scoreThreshold === "number" && scoreThreshold >= 0 && scoreThreshold <= 1) {
-    rm.score_threshold = scoreThreshold;
-    rm.score_threshold_enabled = true;
+  const wantsThreshold = typeof scoreThreshold === "number" && scoreThreshold >= 0 && scoreThreshold <= 1;
+  const wantsMetadata = !!metadataCondition;
+
+  let rm = explicitRm;
+  if ((wantsThreshold || wantsMetadata) && !rm) {
+    // Need to attach filter/threshold but caller supplied none. Build a
+    // minimal rm: copy the dataset's own search method via a lightweight
+    // GET would be ideal but adds an extra round-trip per call. Instead
+    // we send only the filter/threshold fields and let Dify merge with
+    // the dataset's configured defaults (per RetrievalModel Pydantic
+    // partial-update semantics in dataset_retrieval.py).
+    rm = {};
   }
 
-  if (metadataCondition) {
-    rm.metadata_filtering_conditions = metadataCondition;
+  if (rm) {
+    if (wantsThreshold) {
+      rm.score_threshold = scoreThreshold;
+      rm.score_threshold_enabled = true;
+    }
+    if (wantsMetadata) {
+      rm.metadata_filtering_conditions = metadataCondition;
+    }
   }
 
-  const payload = { query, retrieval_model: rm };
+  const payload = { query };
+  if (rm) payload.retrieval_model = rm;
   const body = await fetchJsonWithTimeout(
     endpoint,
     {

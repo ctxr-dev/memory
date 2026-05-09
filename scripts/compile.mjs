@@ -23,15 +23,24 @@ import { ATOM_TYPE_TO_DATASET, ATOM_TYPES, metadataForDify } from "./lib/dataset
 const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
 const SEARCH_LIMIT = envInt("MEMORY_COMPILE_SEARCH_LIMIT", 5);
+const METADATA_RETRY_LIMIT = envInt("MEMORY_COMPILE_METADATA_RETRY_LIMIT", 3);
+
+function defaultState() {
+  return {
+    last_attempted_date: "",
+    last_run_iso: "",
+    actions: { create: 0, update: 0, skip: 0, error: 0 },
+    metadata_retry: {},   // dailyDocId -> attempt count
+  };
+}
 
 function readState() {
-  if (!fs.existsSync(COMPILE_STATE_PATH)) {
-    return { last_attempted_date: "", last_run_iso: "", actions: { create: 0, update: 0, skip: 0, error: 0 } };
-  }
+  if (!fs.existsSync(COMPILE_STATE_PATH)) return defaultState();
   try {
-    return JSON.parse(fs.readFileSync(COMPILE_STATE_PATH, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(COMPILE_STATE_PATH, "utf8"));
+    return { ...defaultState(), ...raw, metadata_retry: raw.metadata_retry || {} };
   } catch {
-    return { last_attempted_date: "", last_run_iso: "", actions: { create: 0, update: 0, skip: 0, error: 0 } };
+    return defaultState();
   }
 }
 
@@ -274,6 +283,9 @@ async function main() {
   const sorted = filtered.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   console.error(`compile.mjs: found ${sorted.length} daily doc(s) to promote`);
 
+  // Load state up front so the per-daily loop can use + update
+  // metadata_retry counts. Saved at the bottom along with action counts.
+  const state = readState();
   const systemPrompt = loadPrompt();
   const counts = { create: 0, update: 0, skip: 0, error: 0 };
   let promotedDocs = 0;
@@ -365,16 +377,46 @@ async function main() {
         await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
         appendCompileLog({ event: "disable", document: daily.name });
         promotedDocs += 1;
+        // Clear any retry counter for this daily on success.
+        if (state.metadata_retry?.[daily.id]) {
+          delete state.metadata_retry[daily.id];
+        }
       } catch (err) {
         counts.error += 1;
         appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
       }
-    } else if (!allOk) {
-      appendCompileLog({ event: "kept-enabled", document: daily.name, reason: "atom errors; will retry next compile" });
+    } else if (!allOk && !DRY_RUN) {
+      // Bounded retry for metadata-write failures: after N attempts, give
+      // up and disable the daily anyway so we don't accumulate duplicate
+      // knowledge-* docs forever. Atom-level errors (LLM, network) get
+      // the same cap because we can't tell them apart at this layer.
+      const attempts = (state.metadata_retry?.[daily.id] || 0) + 1;
+      state.metadata_retry = state.metadata_retry || {};
+      state.metadata_retry[daily.id] = attempts;
+      if (attempts >= METADATA_RETRY_LIMIT) {
+        try {
+          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+          appendCompileLog({
+            event: "give-up-disable",
+            document: daily.name,
+            attempts,
+            reason: `${attempts} consecutive failed attempts; disabling daily to avoid duplicate-create loop`,
+          });
+          delete state.metadata_retry[daily.id];
+        } catch (err) {
+          appendCompileLog({ event: "give-up-disable-error", document: daily.name, error: err.message || String(err) });
+        }
+      } else {
+        appendCompileLog({
+          event: "kept-enabled",
+          document: daily.name,
+          reason: `atom errors; will retry next compile (attempt ${attempts}/${METADATA_RETRY_LIMIT})`,
+          attempts,
+        });
+      }
     }
   }
 
-  const state = readState();
   state.last_attempted_date = todayUtcDate();
   state.last_run_iso = new Date().toISOString();
   state.actions = {

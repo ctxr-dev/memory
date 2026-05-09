@@ -148,7 +148,8 @@ restart_bridge() {
     sleep 1
     attempts=$((attempts + 1))
   done
-  echo "WARNING: bridge restart did not become ready within 30s; continuing." >&2
+  echo "FATAL: bridge restart did not become ready within 30s." >&2
+  return 1
 }
 
 # ---------- preflight ----------
@@ -187,7 +188,7 @@ EOF
   set_env_var DIFY_KNOWLEDGE_API_KEY "$api_key"
   API_KEY="$api_key"
   echo "Restarting bridge with the new key..."
-  restart_bridge
+  restart_bridge || { echo "FATAL: cannot proceed without a healthy bridge." >&2; exit 1; }
 fi
 
 # ---------- discover existing datasets ----------
@@ -285,7 +286,7 @@ done
 
 # Restart bridge so env propagates (new IDs and any new slot lines).
 echo "Restarting bridge to pick up dataset bindings..."
-restart_bridge
+restart_bridge || { echo "FATAL: cannot proceed without a healthy bridge." >&2; exit 1; }
 
 # ---------- install metadata schema on every BOUND slot ----------
 # Boilerplate's filtered-retrieve and per-document metadata writes assume
@@ -347,7 +348,19 @@ if [ "$NON_INTERACTIVE" -eq 1 ]; then
 else
   echo
   if confirm "Scan the workspace for documents to absorb into a dataset?" y; then
-    target_slot="$(prompt 'Target slot for absorbed docs' 'knowledge')"
+    # Default target slot: knowledge if bound, otherwise the first bound slot.
+    knowledge_id="$(read_env_value DIFY_DATASET_KNOWLEDGE_ID "$ENV_FILE" 2>/dev/null || true)"
+    if [ -n "$knowledge_id" ]; then
+      default_target="knowledge"
+    else
+      default_target=""
+      for try_slot in "${declared_slots_arr[@]}"; do
+        try_id="$(read_env_value "$(slot_to_env_key "$try_slot")" "$ENV_FILE" 2>/dev/null || true)"
+        if [ -n "$try_id" ]; then default_target="$try_slot"; break; fi
+      done
+      [ -n "$default_target" ] || { echo "No bound slot to absorb into. Bind a slot first." >&2; default_target="knowledge"; }
+    fi
+    target_slot="$(prompt 'Target slot for absorbed docs' "$default_target")"
     include_globs="$(prompt 'Include globs (comma-separated)' '**/*.md,**/*.mdx,**/*.markdown,**/*.txt,**/*.rst,**/*.adoc')"
     scan_json="$(cli scan --include "$include_globs")"
     total="$(printf '%s' "$scan_json" | node -e 'const o=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(String(o.total||0))')"

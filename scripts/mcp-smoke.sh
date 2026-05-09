@@ -97,11 +97,21 @@ const compileSlot = config.compileDataset || "knowledge";
 const slots = Array.isArray(config.datasetSlots) ? config.datasetSlots : [];
 const flushBound = slots.find((s) => s.name === flushSlot)?.configuredId;
 const compileBound = slots.find((s) => s.name === compileSlot)?.configuredId;
+// Hard fail when neither the named slot NOR the legacy write dataset is set.
+// When the named slot is unbound but legacy fallback exists, warn — the
+// bridge will work, but writes will land on the legacy dataset, not the
+// per-slot one the user thinks is wired.
 if (!flushBound && !config.legacyWriteDatasetId) {
   fail(`Flush slot '${flushSlot}' has no configured id. Run ./memory/scripts/dify-setup.sh.`);
 }
 if (!compileBound && !config.legacyWriteDatasetId) {
   fail(`Compile slot '${compileSlot}' has no configured id. Run ./memory/scripts/dify-setup.sh.`);
+}
+if (!flushBound && config.legacyWriteDatasetId) {
+  console.error(`MCP smoke WARNING: flush slot '${flushSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./memory/scripts/dify-setup.sh to bind the slot.`);
+}
+if (!compileBound && config.legacyWriteDatasetId) {
+  console.error(`MCP smoke WARNING: compile slot '${compileSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./memory/scripts/dify-setup.sh to bind the slot.`);
 }
 
 const search = toolText(3);
