@@ -293,15 +293,19 @@ For Claude Desktop, Cursor, or a generic MCP client, merge this server into the 
 
 Keep the command exactly the same. Do not paste `DIFY_KNOWLEDGE_API_KEY` into any MCP client config.
 
-The bridge exposes:
+The bridge exposes nine MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
 
-- `get_memory_config`
-- `search_memory`
-- `write_memory`
-
-`search_memory` calls Dify's Knowledge retrieval endpoint and returns scored chunks with document metadata.
-
-`write_memory` creates a Dify document from concise memory text. The hooks use the same write path.
+| Tool | Purpose |
+|---|---|
+| `search_memory` | Retrieve scored chunks across configured datasets. |
+| `get_memory_config` | Inspect bridge configuration (no secrets). |
+| `write_memory` | Create-or-supersede a single document (low-level). |
+| `update_memory` | Required-supersedes variant; used by compile. |
+| `save_to_dataset` | Upsert by exact name into a named slot. |
+| `list_datasets` | Show Dify datasets + local slot bindings. |
+| `create_dataset` | Create a new Dify dataset. |
+| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
+| `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
 ## How To Use The Memory
 
@@ -428,8 +432,11 @@ Manual compile (after `memory/.env` is configured and the stack is up):
 ```bash
 node ./memory/scripts/compile.mjs              # promote any enabled daily-* docs
 node ./memory/scripts/compile.mjs --dry-run    # see decisions without writing to Dify
-node ./memory/scripts/compile.mjs --force      # ignore the once-per-day gate
+node ./memory/scripts/compile.mjs --force      # also re-process disabled daily-* docs
+                                               # (recovery pass; useful after a failed run)
 ```
+
+The once-per-day gate lives in `scripts/hooks/session-start.mjs` (it short-circuits when `.compile-state.json:last_attempted_date` is today). Running compile manually always proceeds.
 
 Claude Code hook details:
 

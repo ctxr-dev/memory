@@ -271,7 +271,6 @@ if [ ! -f "$env_file" ]; then
   {
     printf '\n'
     printf '# Auto-injected by bootstrap.sh\n'
-    printf 'MEMORY_SLUG=%s\n' "$slug"
     printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
     printf 'MCP_CONTAINER_NAME=%s\n' "$memory_server_name"
     printf 'COMPOSE_PROJECT_NAME=%s\n' "$compose_project_name"

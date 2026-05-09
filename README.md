@@ -108,7 +108,7 @@ Steps:
    git clone <boilerplate-git-url> ./memory
    ./memory/bootstrap.sh --slug <slug> --llm-provider <provider> [--no-hooks if I declined]
 
-8. Run the syntax/config validation listed in the boilerplate README's "Verification" section after install.
+8. Run the verification commands from the README's "Verification" section after install.
 
 9. Start the stack:
    ./memory/scripts/up.sh
@@ -285,8 +285,8 @@ When `--install-hooks` is passed (default on), `.claude/settings.json` is render
 | Event | Script | Effect |
 |---|---|---|
 | `SessionStart` | `scripts/hooks/session-start.mjs` | Emits an `additionalContext` reminder; lazily spawns compile in the background once per UTC day. |
-| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into atoms; appends to today's daily log. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
-| `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. |
+| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms and writes ONE new `daily-<ts>.md` document to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
+| `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms and writes one `daily-<ts>.md` document. Min-turns check is bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
 
 The hook timeout is 60s because the LLM call dominates wall-clock time.
@@ -301,6 +301,31 @@ The hook timeout is 60s because the LLM call dominates wall-clock time.
 | `memory/.env` | **No** (gitignored inside the boilerplate) | Contains your Dify API key. |
 | `memory/.compile-state.json` | **No** | One-line ops state (last compile date). Not memory. |
 
+## Verification
+
+Run after `bootstrap.sh` and again after `dify-setup.sh`:
+
+```bash
+# Static checks (no Docker required)
+bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
+node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
+node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
+
+# Stack health (Docker required)
+./memory/scripts/ps.sh
+./memory/scripts/ui-url.sh
+
+# End-to-end MCP smoke (after dify-setup.sh has bound at least one dataset)
+./memory/scripts/mcp-smoke.sh
+
+# Optional: dry-run a flush + compile pass without writing to Dify
+echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"Decision: Dify is the canonical store for project memory."}' \
+  | ./memory/scripts/hooks/post-compact.sh
+node ./memory/scripts/compile.mjs --dry-run
+```
+
+If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.
+
 ## Repository layout (cloned `./memory/`)
 
 ```text
@@ -312,12 +337,17 @@ memory/
 │   ├── up.sh, down.sh, ps.sh   # stack lifecycle
 │   ├── ui-url.sh               # discover the host UI port
 │   ├── dify-bootstrap.sh       # resolve + pin Dify version, clone vendor
+│   ├── dify-setup.sh           # interactive dataset binding + absorb wizard
 │   ├── mcp-config.sh           # print client snippets
 │   ├── mcp-smoke.sh            # JSON-RPC smoke against the bridge
 │   ├── compile.mjs             # daily -> knowledge promotion (lazy, dedup-merge)
-│   ├── dify-setup.sh           # interactive dataset binding + absorb wizard
 │   ├── lib/{env,llm,dify-write,redact,slug}.mjs
-│   └── hooks/{session-start,pre-compact,post-compact,session-end}.{sh,mjs}
+│   └── hooks/
+│       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
+│       ├── pre-compact.sh            # -> flush.mjs pre-compact
+│       ├── post-compact.sh           # -> flush.mjs post-compact
+│       ├── session-end.sh            # -> flush.mjs session-end
+│       └── flush.mjs                 # shared extractor for all three
 ├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
 ├── mcp-server/
 │   └── src/{index,dify,memory-cli,glob}.js
