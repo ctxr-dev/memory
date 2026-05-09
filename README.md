@@ -321,7 +321,7 @@ Both use upsert-by-exact-name (delete-then-create), so the contract is: **same n
 | `save_lesson` | Sugar over `save_to_dataset` for the `self_improvement` slot; required metadata.error_pattern is the dedup key. |
 | `list_datasets` | Show Dify datasets + local slot bindings. |
 | `create_dataset` | Create a new Dify dataset; bind it via `dify-setup.sh`. |
-| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
+| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (multi-stack vendor/build/cache/IDE protection: `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; any `ignore` patterns you pass are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
 ## Updates

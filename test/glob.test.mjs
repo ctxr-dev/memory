@@ -12,6 +12,7 @@ import {
   relPathToDocName,
   defaultGlobs,
   defaultIgnore,
+  mergeIgnore,
 } from "../mcp-server/src/glob.js";
 
 function mkTempTree() {
@@ -133,6 +134,203 @@ test("findFiles: respects custom include + ignore", (t) => {
   const out = findFiles(root, { include: ["**/*.js"], ignore: ["skip/**"] });
   const rels = out.map((e) => e.relPath).sort();
   assert.deepEqual(rels, ["a.js", "b.js"]);
+});
+
+test("mergeIgnore: caller patterns are ADDED to defaults, never replace them", () => {
+  const merged = mergeIgnore(["secrets/**", "private.md"]);
+  // Defaults must be present
+  assert.ok(merged.includes("**/node_modules"), "defaults must survive merge");
+  assert.ok(merged.includes("**/.venv"), "defaults must survive merge");
+  // User patterns are appended
+  assert.ok(merged.includes("secrets/**"));
+  assert.ok(merged.includes("private.md"));
+});
+
+test("mergeIgnore: empty/null/undefined caller input keeps defaults intact", () => {
+  for (const input of [undefined, null, [], [""], [null]]) {
+    const merged = mergeIgnore(input);
+    assert.ok(merged.includes("**/node_modules"), `defaults missing for input=${JSON.stringify(input)}`);
+  }
+});
+
+test("findFiles: caller-supplied ignore is ADDITIVE; defaults always apply", (t) => {
+  // Even with the user passing a custom ignore list, dependency / vendor
+  // dirs must NOT leak into the result. This is the contract that lets
+  // callers add restrictions without losing protection.
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, "node_modules/leaked.md", "should be ignored regardless");
+  w(root, "secret.md", "user wants to skip this");
+
+  const out = findFiles(root, { ignore: ["secret.md"] });
+  const rels = out.map((e) => e.relPath).sort();
+  assert.deepEqual(rels, ["kept.md"], `unexpected: ${JSON.stringify(rels)}`);
+});
+
+test("findFiles: prunes JS/TS ecosystem dirs at any depth (node_modules, .next, .turbo, .yarn, bower_components, jspm_packages, .svelte-kit, .vercel, coverage)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  for (const dir of ["node_modules", ".next", ".turbo", ".yarn", "bower_components", "jspm_packages", ".svelte-kit", ".vercel", "coverage", ".nyc_output", ".parcel-cache"]) {
+    w(root, `${dir}/leak.md`, "x");
+    w(root, `nested/${dir}/leak.md`, "x");
+  }
+  const out = findFiles(root);
+  const rels = out.map((e) => e.relPath);
+  assert.deepEqual(rels, ["kept.md"], `JS leak: ${JSON.stringify(rels)}`);
+});
+
+test("findFiles: prunes Python ecosystem dirs at any depth (__pycache__, .venv, venv, .tox, .pytest_cache, .mypy_cache, .ruff_cache, .ipynb_checkpoints, *.egg-info)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  for (const dir of ["__pycache__", ".venv", "venv", ".tox", ".nox", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".pyre", ".ipynb_checkpoints", "site-packages", "myproject.egg-info"]) {
+    w(root, `${dir}/leak.md`, "x");
+    w(root, `pkg/${dir}/leak.md`, "x");
+  }
+  const out = findFiles(root);
+  const rels = out.map((e) => e.relPath);
+  assert.deepEqual(rels, ["kept.md"], `Python leak: ${JSON.stringify(rels)}`);
+});
+
+test("findFiles: prunes Rust/Java/Maven/Scala target dir at any depth", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, "target/leak.md", "x");
+  w(root, "subcrate/target/leak.md", "x");
+  w(root, "module-a/target/classes/leak.md", "x");
+
+  const out = findFiles(root);
+  assert.deepEqual(out.map((e) => e.relPath), ["kept.md"]);
+});
+
+test("findFiles: prunes iOS / Xcode dirs at any depth (DerivedData, Pods, Carthage, xcuserdata, .swiftpm, .build)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  for (const dir of ["DerivedData", "Pods", "Carthage", "xcuserdata", ".swiftpm", ".build"]) {
+    w(root, `${dir}/leak.md`, "x");
+    w(root, `MyApp.xcodeproj/${dir}/leak.md`, "x");
+  }
+  const out = findFiles(root);
+  assert.deepEqual(out.map((e) => e.relPath), ["kept.md"]);
+});
+
+test("findFiles: prunes .NET dirs (obj) but NOT bin (intentional)", (t) => {
+  // bin/ is intentionally NOT in the default ignore list because many
+  // projects keep shell scripts and committed binaries under bin/.
+  // The default include list (markdown/text) already excludes .NET
+  // build artifacts, so leaving bin/ walkable is safe in practice.
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, "obj/leak.md", "x");
+  w(root, "Project/obj/leak.md", "x");
+  w(root, "bin/notes.md", "this would be kept (bin not ignored)");
+
+  const out = findFiles(root);
+  const rels = out.map((e) => e.relPath).sort();
+  assert.ok(rels.includes("kept.md"));
+  assert.ok(rels.includes("bin/notes.md"));
+  assert.ok(!rels.some((r) => r.startsWith("obj/") || r.includes("/obj/")));
+});
+
+test("findFiles: prunes Elixir / Erlang dirs (_build, deps, .elixir_ls)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, "_build/leak.md", "x");
+  w(root, "deps/foo/leak.md", "x");
+  w(root, ".elixir_ls/leak.md", "x");
+  w(root, "apps/myapp/_build/leak.md", "x");
+  w(root, "apps/myapp/deps/leak.md", "x");
+
+  const out = findFiles(root);
+  assert.deepEqual(out.map((e) => e.relPath), ["kept.md"]);
+});
+
+test("findFiles: prunes Haskell dirs (.stack-work, dist-newstyle)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, ".stack-work/leak.md", "x");
+  w(root, "dist-newstyle/leak.md", "x");
+  w(root, "subpkg/.stack-work/leak.md", "x");
+
+  const out = findFiles(root);
+  assert.deepEqual(out.map((e) => e.relPath), ["kept.md"]);
+});
+
+test("findFiles: prunes Terraform / Vagrant / Serverless state dirs", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, ".terraform/leak.md", "x");
+  w(root, "modules/vpc/.terraform/leak.md", "x");
+  w(root, ".serverless/leak.md", "x");
+  w(root, ".vagrant/leak.md", "x");
+  w(root, "state.tfstate", "{}");
+  w(root, "state.tfstate.backup", "{}");
+
+  const out = findFiles(root, { include: ["**/*"] });
+  const rels = out.map((e) => e.relPath).sort();
+  assert.deepEqual(rels, ["kept.md"], `Terraform leak: ${JSON.stringify(rels)}`);
+});
+
+test("findFiles: prunes IDE state (.idea, .vs) but keeps .vscode (intentional)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, ".idea/workspace.md", "x");
+  w(root, ".vs/launch.md", "x");
+  w(root, ".vscode/notes.md", "kept by design");
+
+  const out = findFiles(root);
+  const rels = out.map((e) => e.relPath).sort();
+  assert.deepEqual(rels, [".vscode/notes.md", "kept.md"]);
+});
+
+test("findFiles: ignores backup/swap files (~, .swp, .swo, .bak, .orig, .#*)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, "kept.md~", "vim backup");
+  w(root, ".kept.md.swp", "vim swap");
+  w(root, ".kept.md.swo", "vim swap2");
+  w(root, "kept.md.bak", "backup");
+  w(root, "kept.md.orig", "merge orig");
+  w(root, ".#kept.md", "emacs lock");
+
+  const out = findFiles(root, { include: ["**/*"] });
+  const rels = out.map((e) => e.relPath).sort();
+  assert.deepEqual(rels, ["kept.md"], `backup leak: ${JSON.stringify(rels)}`);
+});
+
+test("findFiles: ignores OS junk (.DS_Store, Thumbs.db, desktop.ini)", (t) => {
+  const root = mkTempTree();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  w(root, "kept.md", "x");
+  w(root, ".DS_Store", "macos");
+  w(root, "subdir/.DS_Store", "macos nested");
+  w(root, "Thumbs.db", "windows");
+  w(root, "subdir/desktop.ini", "windows nested");
+
+  const out = findFiles(root, { include: ["**/*"] });
+  assert.deepEqual(out.map((e) => e.relPath), ["kept.md"]);
 });
 
 test("findFiles: ignores .lock and .log files at any depth", (t) => {

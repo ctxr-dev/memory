@@ -18,7 +18,7 @@ import {
   retrieveChunks,
   upsertDocumentByName,
 } from "./dify.js";
-import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
+import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
 
 const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
@@ -622,7 +622,7 @@ server.registerTool(
   {
     title: "Scan workspace files for absorption candidates",
     description:
-      "Walk the read-only /workspace mount inside the bridge container and return matching files with their suggested doc names (relative path with '/' replaced by '_'). Default include globs cover .md/.mdx/.markdown/.txt/.rst/.adoc; default ignore covers .git, node_modules, vendor, .memory, dist, build. Pass `include` or `ignore` arrays to override.",
+      "Walk the read-only /workspace mount inside the bridge container and return matching files with their suggested doc names (relative path with '/' replaced by '_'). Default include globs cover .md/.mdx/.markdown/.txt/.rst/.adoc; pass `include` to replace. The default ignore list (multi-stack vendor/build/cache/IDE protection: .git, node_modules, .venv, target, vendor, dist, build, .next, Pods, _build, .terraform, etc.) is ALWAYS applied; any `ignore` patterns you pass are added on top, never used as a replacement. This guarantees dependency trees never leak into an ingest pass.",
     inputSchema: {
       include: z.array(z.string().trim().min(1)).optional(),
       ignore: z.array(z.string().trim().min(1)).optional(),
@@ -635,14 +635,16 @@ server.registerTool(
           `Workspace mount '${WORKSPACE_MOUNT}' missing. Recreate the bridge container after pulling the latest compose.mcp.yaml so the workspace volume is mounted.`,
         );
       }
+      const effectiveInclude = include && include.length > 0 ? include : defaultGlobs();
+      const effectiveIgnore = mergeIgnore(ignore);
       const matches = findFiles(WORKSPACE_MOUNT, {
-        include: include && include.length > 0 ? include : defaultGlobs(),
-        ignore: ignore && ignore.length > 0 ? ignore : defaultIgnore(),
+        include: effectiveInclude,
+        ignore: ignore,  // findFiles re-merges; passing user's raw list keeps semantics in one place
       });
       return jsonToolResponse({
         root: WORKSPACE_MOUNT,
-        include: include && include.length > 0 ? include : defaultGlobs(),
-        ignore: ignore && ignore.length > 0 ? ignore : defaultIgnore(),
+        include: effectiveInclude,
+        ignore: effectiveIgnore,
         total: matches.length,
         files: matches.map((m) => ({
           relPath: m.relPath,
