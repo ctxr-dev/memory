@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { MEMORY_DIR, DAILY_DIR, STATE_PATH, envValue } from "../lib/env.mjs";
+import { MEMORY_DIR, COMPILE_STATE_PATH, envValue } from "../lib/env.mjs";
 
 const RECURSION_GUARD = "memory_compile";
 
@@ -10,20 +10,12 @@ function todayUtcDate() {
 }
 
 function readState() {
-  if (!fs.existsSync(STATE_PATH)) return { last_compiled_date: "", compiled_files: {} };
+  if (!fs.existsSync(COMPILE_STATE_PATH)) return { last_attempted_date: "" };
   try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+    return JSON.parse(fs.readFileSync(COMPILE_STATE_PATH, "utf8"));
   } catch {
-    return { last_compiled_date: "", compiled_files: {} };
+    return { last_attempted_date: "" };
   }
-}
-
-function hasUnprocessedDailyLogs(state) {
-  if (!fs.existsSync(DAILY_DIR)) return false;
-  const today = todayUtcDate();
-  return fs
-    .readdirSync(DAILY_DIR)
-    .some((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f) && f.slice(0, 10) < today && !state.compiled_files[f]);
 }
 
 function spawnCompileDetached() {
@@ -44,9 +36,7 @@ function spawnCompileDetached() {
 function maybeTriggerCompile() {
   if (process.env.CLAUDE_INVOKED_BY === RECURSION_GUARD) return false;
   const state = readState();
-  const today = todayUtcDate();
-  if (state.last_compiled_date === today) return false;
-  if (!hasUnprocessedDailyLogs(state)) return false;
+  if (state.last_attempted_date === todayUtcDate()) return false;
   return spawnCompileDetached();
 }
 
@@ -65,10 +55,10 @@ const context = [
   `Project memory is available through the \`${memoryServerName}\` MCP server.`,
   "Use `search_memory` before relying on project-history assumptions, architecture decisions, integration details, or previous session conclusions.",
   "Use `write_memory` to record explicit durable decisions; pass `supersedes` to retire an existing entry.",
-  "Hooks distil PreCompact/PostCompact/SessionEnd into local daily logs (./memory/daily/). Compile runs lazily on the first SessionStart of a new UTC day to dedup-merge atoms into Dify.",
+  "Memory lives in Dify as two document families: `daily-<ts>.md` (raw flush output) and `knowledge-<slug>-<ts>.md` (deduped, merged). PreCompact/PostCompact/SessionEnd hooks write daily docs; once-per-day compile promotes daily atoms into knowledge docs and disables the source dailies.",
   compileTriggered
-    ? "Compile was triggered in the background for unprocessed daily logs."
-    : "No unprocessed daily logs to compile this session start.",
+    ? "Compile was triggered in the background to promote any unprocessed daily docs."
+    : "Compile was already attempted today; skipped this session start.",
 ].join("\n");
 
 console.log(

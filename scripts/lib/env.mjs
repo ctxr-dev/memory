@@ -5,8 +5,7 @@ const here = path.dirname(new URL(import.meta.url).pathname);
 export const MEMORY_DIR = path.resolve(here, "../..");
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "..");
 export const ENV_PATH = path.join(MEMORY_DIR, ".env");
-export const DAILY_DIR = path.join(MEMORY_DIR, "daily");
-export const STATE_PATH = path.join(MEMORY_DIR, "state.json");
+export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
 export function readEnvFile(file = ENV_PATH) {

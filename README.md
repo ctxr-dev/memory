@@ -44,8 +44,8 @@ Every agent loop produces a few decisions, a few bug root causes, and a lot of n
 
 This boilerplate replaces the dump with a two-stage pipeline:
 
-1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default, Codex as alternative, or Anthropic/OpenAI APIs) to extract a small set of typed atoms from the recent transcript: decisions, bug root causes, feedback rules, project lore, references, patterns/gotchas. Atoms land in a local daily log (`./memory/daily/YYYY-MM-DD.md`) — Dify is not touched yet.
-2. **Compile.** The first `SessionStart` of a new UTC day spawns `compile.mjs` in the background. For each atom in unprocessed daily logs, it queries Dify for near-duplicates and asks the LLM whether to **create**, **update** (supersede an existing doc), or **skip**. Only the survivors land in your knowledge base.
+1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default, Codex as alternative, or Anthropic/OpenAI APIs) to extract a small set of typed atoms from the recent transcript: decisions, bug root causes, feedback rules, project lore, references, patterns/gotchas. The atoms are written to Dify as one document named `daily-<YYYY-MM-DD-HHMMSSmmm>.md` per flush event, easy to scan chronologically in the Dify UI.
+2. **Compile.** The first `SessionStart` of a new UTC day spawns `compile.mjs` in the background. It lists enabled `daily-*.md` documents from Dify, parses the atoms, queries Dify for near-duplicate `knowledge-*.md` documents, and asks the LLM whether to **create**, **update** (supersede the existing knowledge doc), or **skip**. Surviving atoms become `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents. Source `daily-*.md` documents are then disabled (kept in the UI for audit, hidden from search).
 
 Result: most sessions contribute 0–3 small atoms, dedup-merged across history, with metadata and tags that make retrieval boringly correct.
 
@@ -92,20 +92,22 @@ That is the entire install.
 flowchart LR
   Hook["PreCompact / PostCompact / SessionEnd"] --> Flush["scripts/hooks/flush.mjs"]
   Flush --> LLM1["LLM extract (typed atoms)"]
-  LLM1 --> Daily["./memory/daily/YYYY-MM-DD.md"]
+  LLM1 --> DailyDoc["Dify: daily-&lt;ts&gt;.md (enabled)"]
   Start["SessionStart (lazy, once/day)"] --> Compile["scripts/compile.mjs"]
-  Compile --> LLM2["LLM dedup-merge"]
-  LLM2 --> Bridge["docker exec memory-cli (write/disable)"]
-  Bridge --> Dify["Dify Knowledge API"]
-  Dify --> Search["MCP search_memory (any session)"]
+  Compile --> ListDaily["List enabled daily-*.md from Dify"]
+  ListDaily --> LLM2["LLM dedup-merge vs knowledge-*"]
+  LLM2 --> KnowledgeDoc["Dify: knowledge-&lt;slug&gt;-&lt;ts&gt;.md"]
+  Compile --> DisableDaily["Disable processed daily-*.md"]
+  KnowledgeDoc --> Search["MCP search_memory (any session)"]
 ```
 
-Two stages, two LLM calls per cycle, one shared knowledge store.
+Two stages, two LLM calls per cycle, **everything stored in Dify**.
 
-- **Daily logs** are local-only. They never leave your project directory and are rotated after `MEMORY_DAILY_RETENTION_DAYS` (default 30) once compiled.
-- **Compile** is the only thing that writes to Dify. It uses the MCP bridge container (`docker exec`) so it shares the bridge's network access to the internal Dify API.
+- **No local memory files.** The only on-disk state is a tiny ops file `./memory/.compile-state.json` that records the last compile attempt date. Memory content lives only in Dify.
+- **Compile** is what runs the dedup-merge. It uses the MCP bridge container (`docker exec`) so it shares the bridge's network access to the internal Dify API.
+- **Daily docs are kept after promotion** but disabled, so they stop surfacing in `search_memory` while remaining visible in the Dify UI. Re-enable them in Dify if you ever need to recover.
 - **Recursion guard**: when the compile run starts a session of its own, the `CLAUDE_INVOKED_BY=memory_compile` env var prevents another compile from kicking off.
-- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or a stopped MCP container all cause flush/compile to skip with a stderr message and exit 0. Hooks never block your session.
+- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or a stopped MCP container all cause flush/compile to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
 
 ## What gets saved
 
@@ -172,7 +174,7 @@ The hook timeout is 60s because the LLM call dominates wall-clock time.
 | `/.memory` | **No** (gitignored) | Host-mounted Dify runtime data. |
 | `/.agents`, `/.claude/settings.json` | **Yes** (your call) | Per-project agent + hook config. |
 | `memory/.env` | **No** (gitignored inside the boilerplate) | Contains your Dify API key. |
-| `memory/daily/*.md` | **No** | Scratch; rotated after compile. |
+| `memory/.compile-state.json` | **No** | One-line ops state (last compile date). Not memory. |
 
 ## Repository layout (cloned `./memory/`)
 
@@ -197,9 +199,11 @@ memory/
 │   ├── agents/                 # rendered to <project>/.agents/
 │   ├── claude/settings.json    # rendered to <project>/.claude/
 │   └── gitignore.append        # appended to <project>/.gitignore
-├── daily/                      # session atoms (local, rotated)
-├── knowledge/                  # optional local cache mirror
 └── vendor/dify/                # cloned at first dify-bootstrap
+
+# Memory is stored entirely in Dify, named:
+#   daily-<YYYY-MM-DD-HHMMSSmmm>.md          (one per flush event)
+#   knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md  (one per deduped fact)
 ```
 
 For deeper Dify configuration, knowledge-base creation, retrieval tuning, persistence, and troubleshooting, see [STACK.md](STACK.md).

@@ -4,6 +4,8 @@ import {
   disableDocument,
   fetchJsonWithTimeout,
   getConfig,
+  getDocumentText,
+  listAllDocuments,
   requireDifyWriteConfig,
 } from "./dify.js";
 
@@ -100,6 +102,34 @@ async function writeCmd(config, { name, datasetId, supersedes, supersedesAction 
   };
 }
 
+async function listCmd(config, { datasetId, prefix, enabled }) {
+  const docs = await listAllDocuments(config, { datasetId, keyword: prefix });
+  const filtered = enabled === "true" || enabled === true
+    ? docs.filter((d) => d?.enabled === true)
+    : enabled === "false" || enabled === false
+      ? docs.filter((d) => d?.enabled === false)
+      : docs;
+  return {
+    datasetId: datasetId || requireDifyWriteConfig(config),
+    prefix: prefix || "",
+    total: filtered.length,
+    documents: filtered.map((d) => ({
+      id: d?.id,
+      name: d?.name,
+      enabled: d?.enabled,
+      indexingStatus: d?.indexing_status || d?.display_status,
+      createdAt: d?.created_at,
+      wordCount: d?.word_count,
+    })),
+  };
+}
+
+async function readCmd(config, { datasetId, documentId }) {
+  if (!documentId) throw new Error("--documentId <id> is required");
+  const text = await getDocumentText(config, { datasetId, documentId });
+  return { datasetId: datasetId || requireDifyWriteConfig(config), documentId, text };
+}
+
 async function disableCmd(config, { datasetId, documentId }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   return disableDocument(config, { datasetId, documentId });
@@ -123,6 +153,12 @@ try {
     case "write":
       result = await writeCmd(config, args);
       break;
+    case "list":
+      result = await listCmd(config, args);
+      break;
+    case "read":
+      result = await readCmd(config, args);
+      break;
     case "disable":
       result = await disableCmd(config, args);
       break;
@@ -131,7 +167,7 @@ try {
       break;
     default:
       console.error(`Unknown subcommand: ${sub || "(none)"}`);
-      console.error("Usage: memory-cli.js <search|write|disable|delete> [--flag value]");
+      console.error("Usage: memory-cli.js <search|write|list|read|disable|delete> [--flag value]");
       process.exit(2);
   }
   process.stdout.write(JSON.stringify(result));

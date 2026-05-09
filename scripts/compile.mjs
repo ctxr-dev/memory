@@ -1,60 +1,50 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
-import { DAILY_DIR, STATE_PATH, PROMPTS_DIR, envInt } from "./lib/env.mjs";
+import { COMPILE_STATE_PATH, PROMPTS_DIR, envInt } from "./lib/env.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
+  listDocuments,
+  readDocument,
   searchMemory,
   writeMemory,
+  disableDocument,
   DifyBridgeUnavailable,
 } from "./lib/dify-write.mjs";
+import { knowledgeDocName, parseDailyDocName, parseKnowledgeDocName } from "./lib/slug.mjs";
 
 const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
-const RETENTION_DAYS = envInt("MEMORY_DAILY_RETENTION_DAYS", 30);
 const SEARCH_LIMIT = envInt("MEMORY_COMPILE_SEARCH_LIMIT", 5);
 
 function readState() {
-  if (!fs.existsSync(STATE_PATH)) return { last_compiled_date: "", compiled_files: {} };
+  if (!fs.existsSync(COMPILE_STATE_PATH)) {
+    return { last_attempted_date: "", last_run_iso: "", actions: { create: 0, update: 0, skip: 0, error: 0 } };
+  }
   try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+    return JSON.parse(fs.readFileSync(COMPILE_STATE_PATH, "utf8"));
   } catch {
-    return { last_compiled_date: "", compiled_files: {} };
+    return { last_attempted_date: "", last_run_iso: "", actions: { create: 0, update: 0, skip: 0, error: 0 } };
   }
 }
 
 function writeState(state) {
-  fs.writeFileSync(STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
+  fs.writeFileSync(COMPILE_STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 function appendCompileLog(entry) {
-  const log = `${STATE_PATH}.compile-log`;
-  const ts = new Date().toISOString();
-  fs.appendFileSync(log, `${JSON.stringify({ ts, ...entry })}\n`);
-}
-
-function sha256(buf) {
-  return crypto.createHash("sha256").update(buf).digest("hex");
+  const log = `${COMPILE_STATE_PATH}.log`;
+  fs.appendFileSync(log, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
 }
 
 function todayUtcDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function listDailyFiles() {
-  if (!fs.existsSync(DAILY_DIR)) return [];
-  return fs
-    .readdirSync(DAILY_DIR)
-    .filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
-    .map((f) => ({ name: f, date: f.slice(0, 10), full: path.join(DAILY_DIR, f) }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-}
-
 function parseAtomsFromMarkdown(text) {
   const atoms = [];
   const blocks = text.split(/\n(?=### Atom )/);
   for (const block of blocks) {
-    if (!block.startsWith("### Atom ")) continue;
+    if (!block.startsWith("### Atom")) continue;
     const lines = block.split(/\r?\n/);
     let type, title, tags = [], body = "", evidence;
     let inBody = false;
@@ -74,12 +64,8 @@ function parseAtomsFromMarkdown(text) {
       if (!m) continue;
       const [, key, rest] = m;
       switch (key) {
-        case "type":
-          type = rest.trim();
-          break;
-        case "title":
-          title = rest.trim();
-          break;
+        case "type": type = rest.trim(); break;
+        case "title": title = rest.trim(); break;
         case "tags": {
           const inner = rest.trim().replace(/^\[|\]$/g, "");
           tags = inner ? inner.split(",").map((t) => t.trim()).filter(Boolean) : [];
@@ -92,8 +78,7 @@ function parseAtomsFromMarkdown(text) {
         case "evidence":
           try { evidence = JSON.parse(rest.trim()); } catch { evidence = rest.trim(); }
           break;
-        default:
-          break;
+        default: break;
       }
     }
     if (type && title && body) atoms.push({ type, title, body, tags, evidence });
@@ -102,34 +87,39 @@ function parseAtomsFromMarkdown(text) {
 }
 
 function loadPrompt() {
-  const file = path.join(PROMPTS_DIR, "compile.md");
-  return fs.readFileSync(file, "utf8");
+  return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8");
 }
 
-async function searchCandidates(atom) {
+async function knowledgeCandidates(atom) {
   const query = `${atom.title}${atom.tags.length ? " " + atom.tags.join(" ") : ""}`;
-  try {
-    const result = await searchMemory({ query, limit: SEARCH_LIMIT });
-    return Array.isArray(result?.records) ? result.records : [];
-  } catch (err) {
-    if (err instanceof DifyBridgeUnavailable) throw err;
-    throw err;
+  const result = await searchMemory({ query, limit: Math.max(SEARCH_LIMIT * 3, 15) });
+  const records = Array.isArray(result?.records) ? result.records : [];
+  const seen = new Set();
+  const knowledge = [];
+  for (const rec of records) {
+    if (!rec?.documentName || !parseKnowledgeDocName(rec.documentName)) continue;
+    if (seen.has(rec.documentId)) continue;
+    seen.add(rec.documentId);
+    knowledge.push(rec);
+    if (knowledge.length >= SEARCH_LIMIT) break;
   }
+  return knowledge;
 }
 
-function buildAtomDocumentText(atom) {
+function buildKnowledgeDocText(atom, mergedTextOverride) {
   const lines = [
     `# ${atom.title}`,
     "",
-    `type: ${atom.type}`,
-    `tags: ${atom.tags.join(", ")}`,
+    `- type: ${atom.type}`,
+    `- tags: [${atom.tags.join(", ")}]`,
+    `- updated_at_utc: ${new Date().toISOString()}`,
     "",
-    atom.body,
+    mergedTextOverride && mergedTextOverride.trim() ? mergedTextOverride.trim() : atom.body,
   ];
-  if (atom.evidence) {
+  if (!mergedTextOverride && atom.evidence) {
     lines.push("", `evidence: ${atom.evidence}`);
   }
-  return lines.join("\n");
+  return lines.join("\n").concat("\n");
 }
 
 async function decideAction(atom, candidates, systemPrompt) {
@@ -137,7 +127,7 @@ async function decideAction(atom, candidates, systemPrompt) {
     "NEW ATOM:",
     JSON.stringify(atom, null, 2),
     "",
-    "EXISTING CANDIDATES:",
+    "EXISTING KNOWLEDGE CANDIDATES:",
     candidates.length === 0
       ? "[]"
       : JSON.stringify(
@@ -154,90 +144,118 @@ async function decideAction(atom, candidates, systemPrompt) {
   return callLLMWithRetry({ systemPrompt, userPrompt, maxTokens: 800 });
 }
 
-async function executeAction(atom, decision) {
-  const safeName = `${atom.title.replace(/[^A-Za-z0-9 _.-]/g, " ").trim().slice(0, 120)}.md`;
+async function executeAction(atom, decision, candidates) {
+  if (decision.action === "skip") {
+    return { ok: true, action: "skip", reason: decision.reason };
+  }
   if (decision.action === "create") {
-    const text = buildAtomDocumentText(atom);
-    if (DRY_RUN) return { ok: true, dryRun: true, action: "create", name: safeName };
-    return writeMemory({ name: safeName, text });
+    const text = buildKnowledgeDocText(atom);
+    const name = knowledgeDocName(atom.title);
+    if (DRY_RUN) return { ok: true, dryRun: true, action: "create", name };
+    return writeMemory({ name, text });
   }
   if (decision.action === "update") {
-    const text = String(decision.merged_text || "").trim();
-    const name = String(decision.merged_name || safeName).slice(0, 180);
-    if (!text) throw new Error("update action missing merged_text");
     if (!decision.supersedes) throw new Error("update action missing supersedes");
-    if (DRY_RUN) return { ok: true, dryRun: true, action: "update", supersedes: decision.supersedes, name };
-    return writeMemory({ name, text, supersedes: decision.supersedes, supersedesAction: "disable" });
+    const merged = String(decision.merged_text || "").trim();
+    if (!merged) throw new Error("update action missing merged_text");
+    const candidate = candidates.find((c) => c.documentId === decision.supersedes);
+    const parsed = candidate ? parseKnowledgeDocName(candidate.documentName) : null;
+    const slugSource = parsed?.slug ? parsed.slug : (decision.merged_name || atom.title);
+    const text = buildKnowledgeDocText({ ...atom, title: decision.merged_name || atom.title }, merged);
+    const name = knowledgeDocName(slugSource);
+    if (DRY_RUN) {
+      return { ok: true, dryRun: true, action: "update", name, supersedes: decision.supersedes };
+    }
+    return writeMemory({
+      name,
+      text,
+      supersedes: decision.supersedes,
+      supersedesAction: "disable",
+    });
   }
-  if (decision.action === "skip") return { ok: true, action: "skip", reason: decision.reason };
   throw new Error(`unknown decision action: ${decision.action}`);
 }
 
-function rotateOldLogs(stateNow) {
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
-    .toISOString().slice(0, 10);
-  for (const file of listDailyFiles()) {
-    if (file.date >= cutoff) continue;
-    if (!stateNow.compiled_files[file.name]) continue;
-    fs.unlinkSync(file.full);
-    appendCompileLog({ event: "rotate", file: file.name });
-  }
-}
-
 async function main() {
-  const state = readState();
-  const today = todayUtcDate();
-  const files = listDailyFiles();
+  let dailies;
+  try {
+    const result = await listDocuments({ prefix: "daily-", enabled: "true" });
+    dailies = Array.isArray(result?.documents) ? result.documents : [];
+  } catch (err) {
+    if (err instanceof DifyBridgeUnavailable) {
+      console.error(`compile.mjs: bridge unavailable: ${err.message}`);
+      process.exit(0);
+    }
+    throw err;
+  }
 
-  if (files.length === 0) {
-    console.error("compile.mjs: no daily logs to compile");
+  const filtered = dailies.filter((d) => parseDailyDocName(d?.name));
+  if (filtered.length === 0) {
+    console.error("compile.mjs: no enabled daily-* docs to promote");
     return;
   }
 
-  let processed = 0;
-  let actionCounts = { create: 0, update: 0, skip: 0, error: 0 };
-  let systemPrompt;
+  const sorted = filtered.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  console.error(`compile.mjs: found ${sorted.length} daily doc(s) to promote`);
 
-  for (const file of files) {
-    if (!FORCE && file.date >= today) continue;
-    const buf = fs.readFileSync(file.full);
-    const hash = sha256(buf);
-    if (state.compiled_files[file.name] === hash) continue;
+  const systemPrompt = loadPrompt();
+  const counts = { create: 0, update: 0, skip: 0, error: 0 };
+  let promotedDocs = 0;
 
-    const atoms = parseAtomsFromMarkdown(buf.toString("utf8"));
-    if (atoms.length === 0) {
-      state.compiled_files[file.name] = hash;
-      appendCompileLog({ event: "compile", file: file.name, atoms: 0 });
+  for (const daily of sorted) {
+    let docText;
+    try {
+      const r = await readDocument({ documentId: daily.id });
+      docText = r?.text || "";
+    } catch (err) {
+      counts.error += 1;
+      appendCompileLog({ event: "read-error", document: daily.name, error: err.message || String(err) });
+      if (err instanceof DifyBridgeUnavailable) {
+        console.error(`compile.mjs: aborting, bridge gone: ${err.message}`);
+        process.exit(0);
+      }
       continue;
     }
 
-    if (!systemPrompt) systemPrompt = loadPrompt();
+    const atoms = parseAtomsFromMarkdown(docText);
+    if (atoms.length === 0) {
+      if (!DRY_RUN) {
+        try {
+          await disableDocument({ documentId: daily.id });
+          appendCompileLog({ event: "disable-empty", document: daily.name });
+        } catch (err) {
+          counts.error += 1;
+          appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+        }
+      }
+      continue;
+    }
 
+    let allOk = true;
     for (const atom of atoms) {
       try {
-        const candidates = await searchCandidates(atom);
+        const candidates = await knowledgeCandidates(atom);
         const decision = await decideAction(atom, candidates, systemPrompt);
         if (!decision || typeof decision !== "object" || !decision.action) {
           throw new LLMOutputInvalid("compile decision missing 'action'", JSON.stringify(decision));
         }
-        const result = await executeAction(atom, decision);
-        actionCounts[decision.action] = (actionCounts[decision.action] || 0) + 1;
+        const result = await executeAction(atom, decision, candidates);
+        counts[decision.action] = (counts[decision.action] || 0) + 1;
         appendCompileLog({
           event: "atom",
-          file: file.name,
+          source: daily.name,
           atomTitle: atom.title,
           action: decision.action,
           supersedes: decision.supersedes,
           dryRun: DRY_RUN,
         });
-        if (!DRY_RUN && result?.ok === false) {
-          throw new Error(JSON.stringify(result));
-        }
+        if (!DRY_RUN && result?.ok === false) throw new Error(JSON.stringify(result));
       } catch (err) {
-        actionCounts.error += 1;
+        allOk = false;
+        counts.error += 1;
         appendCompileLog({
           event: "atom-error",
-          file: file.name,
+          source: daily.name,
           atomTitle: atom.title,
           error: err instanceof Error ? err.message : String(err),
         });
@@ -248,16 +266,33 @@ async function main() {
       }
     }
 
-    state.compiled_files[file.name] = hash;
-    state.last_compiled_date = today;
-    writeState(state);
-    processed += 1;
+    if (allOk && !DRY_RUN) {
+      try {
+        await disableDocument({ documentId: daily.id });
+        appendCompileLog({ event: "disable", document: daily.name });
+        promotedDocs += 1;
+      } catch (err) {
+        counts.error += 1;
+        appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+      }
+    } else if (!allOk) {
+      appendCompileLog({ event: "kept-enabled", document: daily.name, reason: "atom errors; will retry next compile" });
+    }
   }
 
-  rotateOldLogs(state);
+  const state = readState();
+  state.last_attempted_date = todayUtcDate();
+  state.last_run_iso = new Date().toISOString();
+  state.actions = {
+    create: (state.actions?.create || 0) + counts.create,
+    update: (state.actions?.update || 0) + counts.update,
+    skip: (state.actions?.skip || 0) + counts.skip,
+    error: (state.actions?.error || 0) + counts.error,
+  };
+  writeState(state);
 
   console.error(
-    `compile.mjs: processed ${processed} log(s); actions create=${actionCounts.create} update=${actionCounts.update} skip=${actionCounts.skip} error=${actionCounts.error}`,
+    `compile.mjs: promoted ${promotedDocs} daily doc(s); actions create=${counts.create} update=${counts.update} skip=${counts.skip} error=${counts.error}`,
   );
 }
 

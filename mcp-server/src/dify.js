@@ -136,6 +136,76 @@ export function requireDifyWriteConfig(config) {
   return datasetId;
 }
 
+export async function listDocuments(config, { datasetId, keyword, page = 1, limit = 100 } = {}) {
+  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const params = new URLSearchParams();
+  if (keyword) params.set("keyword", keyword);
+  params.set("page", String(page));
+  params.set("limit", String(limit));
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents?${params.toString()}`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    },
+    config.timeoutMs,
+  );
+}
+
+export async function listAllDocuments(config, { datasetId, keyword } = {}) {
+  const all = [];
+  let page = 1;
+  const limit = 100;
+  while (true) {
+    const body = await listDocuments(config, { datasetId, keyword, page, limit });
+    const batch = Array.isArray(body?.data) ? body.data : [];
+    all.push(...batch);
+    if (!body?.has_more || batch.length === 0) break;
+    page += 1;
+    if (page > 100) break;
+  }
+  return all;
+}
+
+export async function getDocumentSegments(config, { datasetId, documentId, page = 1, limit = 100 } = {}) {
+  if (!documentId) throw new Error("getDocumentSegments requires documentId.");
+  const selectedDatasetId = datasetId || requireDifyWriteConfig(config);
+  const params = new URLSearchParams();
+  params.set("page", String(page));
+  params.set("limit", String(limit));
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/${encodeURIComponent(documentId)}/segments?${params.toString()}`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${config.apiKey}` },
+    },
+    config.timeoutMs,
+  );
+}
+
+export async function getDocumentText(config, { datasetId, documentId } = {}) {
+  const all = [];
+  let page = 1;
+  const limit = 100;
+  while (true) {
+    const body = await getDocumentSegments(config, { datasetId, documentId, page, limit });
+    const batch = Array.isArray(body?.data) ? body.data : [];
+    all.push(...batch.sort((a, b) => (a?.position ?? 0) - (b?.position ?? 0)).map((s) => s?.content || ""));
+    if (!body?.has_more || batch.length === 0) break;
+    page += 1;
+    if (page > 100) break;
+  }
+  return all.join("\n\n");
+}
+
 export async function deleteDocument(config, { datasetId, documentId }) {
   if (!documentId) {
     throw new Error("deleteDocument requires documentId.");

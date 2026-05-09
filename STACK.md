@@ -176,7 +176,7 @@ These are the important knobs:
 - `MEMORY_HOOK_SESSION_END_MIN_TURNS`: skip tiny sessions unless at least this many transcript turns exist.
 - `MEMORY_HOOK_PRECOMPACT_MIN_TURNS`: skip tiny pre-compact captures unless at least this many transcript turns exist.
 - `MEMORY_LLM_PROVIDER`: which LLM does flush + compile. See `.env.example`.
-- `MEMORY_DAILY_RETENTION_DAYS`: rotate compiled daily logs after this many days.
+- `MEMORY_COMPILE_SEARCH_LIMIT`: how many top knowledge candidates compile considers per atom (default 5).
 
 `DIFY_SESSION_PROCESS_RULE_PRESET=conversation` sends a Dify `process_rule` with:
 
@@ -396,23 +396,25 @@ Current hook events:
 What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 - `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
-- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract a small set of typed atoms and appends them to `./memory/daily/YYYY-MM-DD.md`. **Flush never writes to Dify.** Only the lazy compile stage does.
+- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later promotes those atoms into `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents and disables the source dailies.
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
-Manual flush test (extracts and appends to today's daily log if your LLM provider is configured):
+Manual flush test (extracts and writes a `daily-<ts>.md` document to Dify if your LLM provider is configured and the bridge is up):
 
 ```bash
 printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory because flat markdown does not scale."}' |
   ./memory/scripts/hooks/post-compact.sh
-cat memory/daily/$(date -u +%F).md
+# Find the doc in the Dify UI under your write dataset:
+#   daily-2026-05-09-120530123.md
 ```
 
 Manual compile (after `memory/.env` is configured and the stack is up):
 
 ```bash
-node ./memory/scripts/compile.mjs --force        # process every daily log now
-node ./memory/scripts/compile.mjs --dry-run      # see decisions without writing to Dify
+node ./memory/scripts/compile.mjs              # promote any enabled daily-* docs
+node ./memory/scripts/compile.mjs --dry-run    # see decisions without writing to Dify
+node ./memory/scripts/compile.mjs --force      # ignore the once-per-day gate
 ```
 
 Claude Code hook details:

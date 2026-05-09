@@ -76,3 +76,11 @@ export function disableDocument({ documentId, datasetId } = {}) {
 export function deleteDocument({ documentId, datasetId } = {}) {
   return execCli("delete", { documentId, datasetId });
 }
+
+export function listDocuments({ prefix, enabled, datasetId } = {}) {
+  return execCli("list", { prefix, enabled, datasetId });
+}
+
+export function readDocument({ documentId, datasetId } = {}) {
+  return execCli("read", { documentId, datasetId });
+}

@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DAILY_DIR, PROMPTS_DIR, envInt } from "../lib/env.mjs";
+import { PROMPTS_DIR, envInt } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
+import { dailyDocName } from "../lib/slug.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "../lib/llm.mjs";
+import { writeMemory, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
 
 class SkipMemory extends Error {}
 
@@ -101,13 +103,7 @@ function buildSourceMaterial(rawInput) {
     throw new SkipMemory(`no usable transcript content for ${mode}`);
   }
 
-  return {
-    sessionId,
-    cwd,
-    hookEvent,
-    body: sliceForLLM(body),
-    turnCount,
-  };
+  return { sessionId, cwd, hookEvent, body: sliceForLLM(body), turnCount };
 }
 
 function loadPrompt() {
@@ -127,7 +123,7 @@ const ATOM_TYPES = new Set([
   "pattern-gotcha",
 ]);
 
-function validateAtoms(parsed, sessionId, hookEvent) {
+function validateAtoms(parsed) {
   if (!parsed || !Array.isArray(parsed.atoms)) {
     throw new LLMOutputInvalid("LLM JSON missing 'atoms' array", JSON.stringify(parsed));
   }
@@ -148,51 +144,40 @@ function validateAtoms(parsed, sessionId, hookEvent) {
       body: body.slice(0, 500),
       tags,
       evidence: atom.evidence ? String(atom.evidence).slice(0, 240).trim() : undefined,
-      sessionId,
-      hookEvent,
     });
   }
   return cleaned;
 }
 
-function todayUtcDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function nowHms() {
-  const d = new Date();
-  return d.toISOString().slice(11, 19);
-}
-
-function ensureDailyHeader(file, dateStr) {
-  if (fs.existsSync(file)) return;
-  fs.writeFileSync(file, `# Daily flush log ${dateStr}\n\n`);
-}
-
-function appendAtoms(atoms) {
-  fs.mkdirSync(DAILY_DIR, { recursive: true });
-  const dateStr = todayUtcDate();
-  const file = path.join(DAILY_DIR, `${dateStr}.md`);
-  ensureDailyHeader(file, dateStr);
+function renderDailyDocument({ atoms, source }) {
+  const sid = String(source.sessionId).slice(0, 8);
+  const headerLines = [
+    `# Daily flush ${source.hookEvent}`,
+    "",
+    `- captured_at_utc: ${new Date().toISOString()}`,
+    `- hook_event: ${source.hookEvent}`,
+    `- session_id: ${source.sessionId}`,
+    `- session_short: ${sid}`,
+    `- workspace: ${path.basename(String(source.cwd || ""))}`,
+    `- atom_count: ${atoms.length}`,
+    `- pending_promotion: true`,
+    "",
+  ];
 
   const blocks = atoms.map((atom) => {
-    const sid = String(atom.sessionId || "").slice(0, 8);
     const lines = [
-      `### Atom (${nowHms()} · ${sid} · ${atom.hookEvent})`,
+      `### Atom · ${atom.type} · ${atom.title}`,
       `- type: ${atom.type}`,
       `- title: ${atom.title}`,
       `- tags: [${atom.tags.join(", ")}]`,
       `- body: |`,
-      ...atom.body.split(/\r?\n/).map((line) => `    ${line}`),
+      ...atom.body.split(/\r?\n/).map((l) => `    ${l}`),
     ];
-    if (atom.evidence) {
-      lines.push(`- evidence: ${JSON.stringify(atom.evidence)}`);
-    }
+    if (atom.evidence) lines.push(`- evidence: ${JSON.stringify(atom.evidence)}`);
     return lines.join("\n");
   });
 
-  fs.appendFileSync(file, `${blocks.join("\n\n")}\n\n`);
-  return file;
+  return [...headerLines, ...blocks].join("\n").concat("\n");
 }
 
 async function main() {
@@ -204,7 +189,9 @@ async function main() {
   try {
     parsed = await callLLMWithRetry({
       systemPrompt,
-      userPrompt: `Hook event: ${source.hookEvent}\nSession id: ${source.sessionId}\nCwd: ${source.cwd}\n\n--- TRANSCRIPT ---\n\n${source.body}`,
+      userPrompt:
+        `Hook event: ${source.hookEvent}\nSession id: ${source.sessionId}\nCwd: ${source.cwd}\n\n` +
+        `--- TRANSCRIPT ---\n\n${source.body}`,
       maxTokens: 1500,
     });
   } catch (err) {
@@ -217,13 +204,25 @@ async function main() {
     throw err;
   }
 
-  const atoms = validateAtoms(parsed, source.sessionId, source.hookEvent);
+  const atoms = validateAtoms(parsed);
   if (atoms.length === 0) {
     throw new SkipMemory("LLM returned no usable atoms (transcript not durable)");
   }
 
-  const file = appendAtoms(atoms);
-  console.error(`flush.mjs: wrote ${atoms.length} atom(s) to ${file}`);
+  const docName = dailyDocName();
+  const text = renderDailyDocument({ atoms, source });
+
+  try {
+    const result = await writeMemory({ name: docName, text });
+    console.error(
+      `flush.mjs: wrote ${atoms.length} atom(s) to Dify document ${docName} (datasetId=${result?.datasetId || "?"})`,
+    );
+  } catch (err) {
+    if (err instanceof DifyBridgeUnavailable) {
+      throw new SkipMemory(`Dify bridge unavailable: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 try {

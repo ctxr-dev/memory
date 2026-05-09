@@ -7,10 +7,5 @@ node_modules/
 .dify-version
 vendor/dify/
 
-# Local memory state (only the placeholders are tracked)
-daily/*
-!daily/.keep
-knowledge/*
-!knowledge/.keep
-state.json
-state.json.compile-log
+# Operational state files (ops only, not memory content)
+.compile-state.json
