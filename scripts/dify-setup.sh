@@ -277,11 +277,63 @@ for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
   echo
 done
 
-set_env_var DIFY_DATASETS "$(echo "$declared_slots" | tr -d ' ')"
-
-# Restart bridge so env propagates.
+# Restart bridge so env propagates (new IDs and any new slot lines).
 echo "Restarting bridge to pick up dataset bindings..."
 restart_bridge
+
+# ---------- install metadata schema on every BOUND slot ----------
+# Boilerplate's filtered-retrieve and per-document metadata writes assume
+# every slot has the six fields below. Idempotent: skipped if the field
+# already exists on the dataset.
+SCHEMA_FIELDS=(atom_type tags project_module language task_type error_pattern)
+
+install_metadata_schema() {
+  local slot="$1"
+  local fields_json
+  fields_json="$(cli list-metadata-fields --datasetId "$slot" 2>/dev/null || true)"
+  if ! printf '%s' "$fields_json" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' >/dev/null 2>&1; then
+    echo "    WARNING: could not list metadata fields for '$slot' (skipping schema install)." >&2
+    return 0
+  fi
+  for field in "${SCHEMA_FIELDS[@]}"; do
+    has="$(printf '%s' "$fields_json" | node -e "
+      const o = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+      const f = (o.doc_metadata || []).find((x) => x && x.name === '$field');
+      process.stdout.write(f ? 'yes' : 'no');
+    ")"
+    if [ "$has" = "yes" ]; then
+      echo "    field '$field' already present"
+    else
+      echo "    creating field '$field' (string)"
+      cli create-metadata-field --datasetId "$slot" --name "$field" --type string >/dev/null \
+        || echo "    WARNING: failed to create field '$field' on '$slot'" >&2
+    fi
+  done
+}
+
+echo
+echo "Installing metadata schema on bound slots..."
+for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
+  slot="$(echo "$slot" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+  env_key="$(slot_to_env_key "$slot")"
+  current_id="$(read_env_value "$env_key" "$ENV_FILE" 2>/dev/null || true)"
+  [ -n "$current_id" ] || continue
+  echo "  slot: $slot"
+  install_metadata_schema "$slot"
+done
+
+# Offer to enable Dify's built-in metadata fields (document_name,
+# upload_date, last_update_date, etc.) so they are also filterable.
+if [ "$NON_INTERACTIVE" -eq 1 ] || confirm "Enable Dify built-in metadata fields (document_name, upload_date, last_update_date) on bound slots?" y; then
+  for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
+    slot="$(echo "$slot" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    env_key="$(slot_to_env_key "$slot")"
+    current_id="$(read_env_value "$env_key" "$ENV_FILE" 2>/dev/null || true)"
+    [ -n "$current_id" ] || continue
+    cli set-built-in-metadata --datasetId "$slot" --enabled true >/dev/null \
+      || echo "  WARNING: failed to enable built-in metadata on '$slot'" >&2
+  done
+fi
 
 # ---------- optional absorb ----------
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
