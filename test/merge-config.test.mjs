@@ -48,6 +48,48 @@ test("isOurHookEntry: handles malformed entries safely", () => {
   assert.equal(isOurHookEntry({ hooks: [{ type: "command" }] }), false); // no command field
 });
 
+test("isOurHookEntry: REJECTS user paths even when they contain the substring 'memory/scripts/hooks/' (anchor regression)", () => {
+  // Audit-flagged false-positive: a user with a hook at
+  // ./tools/memory/scripts/hooks/custom.sh would be silently deleted
+  // on bootstrap re-run by a plain substring marker. The signature
+  // anchor includes the literal `"$CLAUDE_PROJECT_DIR"/` prefix, which
+  // a user writing their own hook is overwhelmingly unlikely to
+  // reproduce verbatim, so user-rooted paths under their own memory/
+  // sub-tree are correctly recognised as theirs.
+  for (const userPath of [
+    "./tools/memory/scripts/hooks/custom.sh",
+    "./mytools/memory/scripts/hooks/x.sh",
+    "wrappermemory/scripts/hooks/x.sh",
+    "/abs/user/memory/scripts/hooks/custom.sh",
+    "memory/scripts/hooks/x.sh",  // bare relative
+  ]) {
+    const userEntry = {
+      matcher: "",
+      hooks: [{ type: "command", command: userPath, timeout: 5 }],
+    };
+    assert.equal(isOurHookEntry(userEntry), false, `should not match user path: ${userPath}`);
+  }
+});
+
+test("isOurHookEntry: ACCEPTS our generated forms (full $CLAUDE_PROJECT_DIR signature)", () => {
+  // The signature is the full byte sequence:
+  //   "$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/
+  // including the closing quote from the template render. This is what
+  // every shipped template produces; nothing else should match.
+  for (const oursPath of [
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/pre-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/post-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh',
+  ]) {
+    const oursEntry = {
+      matcher: "",
+      hooks: [{ type: "command", command: oursPath, timeout: 5 }],
+    };
+    assert.equal(isOurHookEntry(oursEntry), true, `should match ours: ${oursPath}`);
+  }
+});
+
 // ---------- mergeHooksConfig ----------
 
 const OUR_TEMPLATE = {
@@ -186,6 +228,80 @@ test("mergeHooksConfig: mixed event with both user and our entries -> user kept,
   assert.equal(reinstalled.hooks.SessionStart.length, 2);
   assert.equal(reinstalled.hooks.SessionStart[0].hooks[0].command, "./scripts/user-hook.sh");
   assert.equal(reinstalled.hooks.SessionStart[1].hooks[0].timeout, 60);
+});
+
+test("mergeHooksConfig: nested user path 'tools/memory/scripts/hooks/...' is preserved on re-run", () => {
+  // Direct regression test for the anchored-marker fix. A user whose
+  // build system happens to put scripts under a `memory/scripts/hooks/`
+  // sub-tree (different parent dir) MUST keep their hook across re-runs.
+  const userExisting = {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: "./tools/memory/scripts/hooks/custom.sh", timeout: 5 }],
+        },
+      ],
+    },
+  };
+  const merged = mergeHooksConfig(userExisting, OUR_TEMPLATE);
+  // User entry survives, ours appended.
+  assert.equal(merged.hooks.SessionStart.length, 2);
+  assert.equal(merged.hooks.SessionStart[0].hooks[0].command, "./tools/memory/scripts/hooks/custom.sh");
+  // Re-run idempotent.
+  const reRun = mergeHooksConfig(merged, OUR_TEMPLATE);
+  assert.equal(reRun.hooks.SessionStart.length, 2);
+  assert.equal(reRun.hooks.SessionStart[0].hooks[0].command, "./tools/memory/scripts/hooks/custom.sh");
+});
+
+test("mergeHooksConfig: bundled inner-hook entry preserves user command, replaces only ours", () => {
+  // Edge case: a single event entry has BOTH ours AND a user inner
+  // hook (rare; happens when a user hand-edits to bundle). The
+  // per-inner-hook filtering (vs the previous per-entry filter) must
+  // preserve the user's inner hook while stripping ours, so on re-run
+  // the user's hook is NOT lost.
+  const userExisting = {
+    hooks: {
+      SessionEnd: [
+        {
+          matcher: "",
+          hooks: [
+            { type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh', timeout: 130 },
+            { type: "command", command: "./scripts/user-cleanup.sh", timeout: 10 },
+          ],
+        },
+      ],
+    },
+  };
+  const merged = mergeHooksConfig(userExisting, OUR_TEMPLATE);
+  // The original entry should be preserved with ONLY the user's inner
+  // hook left, then ours appended as a separate entry.
+  assert.equal(merged.hooks.SessionEnd.length, 2);
+  assert.equal(merged.hooks.SessionEnd[0].hooks.length, 1);
+  assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, "./scripts/user-cleanup.sh");
+  // Ours appended as a fresh entry.
+  assert.ok(merged.hooks.SessionEnd[1].hooks[0].command.includes("/memory/scripts/hooks/session-end.sh"));
+});
+
+test("mergeHooksConfig: entry that was 100% ours is dropped, not kept as empty stub", () => {
+  // After installing once, a re-install must NOT leave an entry whose
+  // `hooks` array has been emptied. The drop-when-empty rule keeps the
+  // file clean and idempotent.
+  const userExisting = {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 15 }],
+        },
+      ],
+    },
+  };
+  const merged = mergeHooksConfig(userExisting, OUR_TEMPLATE);
+  // Should have exactly one entry (the freshly-injected ours), not two
+  // (an empty stub from the user's old entry + ours).
+  assert.equal(merged.hooks.SessionStart.length, 1);
+  assert.equal(merged.hooks.SessionStart[0].hooks.length, 1);
 });
 
 test("mergeHooksConfig: does not mutate inputs", () => {

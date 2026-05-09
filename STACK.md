@@ -361,6 +361,8 @@ It is mirrored into Claude Code's project settings:
 
 That means Claude Code can run the hooks from this workspace without touching your global settings. If those files are absent, the MCP memory server is still usable, but continuous automatic session capture is not active.
 
+**Re-runs are non-destructive.** `bootstrap.sh` invokes `scripts/merge-config.mjs` (pure Node, no `jq`) to structurally merge the rendered `hooks.json` and `settings.json` into the user's existing files. The boilerplate identifies its own entries by the literal command signature `"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/...`; any hook entry that does NOT carry that signature is preserved verbatim across re-runs. The same merge strategy applies to `.agents/mcp.json` (only the bridge server entry is replaced; other MCP servers in the user's config are untouched). See `scripts/lib/merge-config.mjs` for the contract; `test/merge-config.test.mjs` locks idempotency, isolation, and the anchored-signature guarantee.
+
 Current hook events:
 
 ```json
