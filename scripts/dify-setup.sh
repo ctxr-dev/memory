@@ -260,14 +260,13 @@ Then:
      default Embedding Model. Recommended:
        OpenAI:  text-embedding-3-small  (best cost/quality, 1536 dim)
        Ollama:  bge-m3                  (strongest local choice)
-  4. Then ALSO add the same values to memory/.env so the bridge can
-     send them with every retrieval call (Dify 1.14+ requires the
-     embedding fields inline in retrieval_model.weights.vector_setting):
-       DIFY_EMBEDDING_MODEL=text-embedding-3-small
-       DIFY_EMBEDDING_MODEL_PROVIDER=langgenius/openai/openai
-     (or the Ollama URI: langgenius/ollama/ollama)
-  5. Recreate the bridge: ./memory/scripts/up.sh memory_mcp
-  6. Re-run this script.
+  4. Re-run this script.
+
+The bridge AUTO-DISCOVERS the model name + provider URI from the Dify
+tenant on first use; you do NOT need to add DIFY_EMBEDDING_MODEL or
+DIFY_EMBEDDING_MODEL_PROVIDER to memory/.env. Those env vars are an
+optional override for users who have multiple providers configured and
+want to pin a specific one.
 EOF
   exit 1
 fi
