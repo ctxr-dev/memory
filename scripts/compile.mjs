@@ -224,6 +224,17 @@ async function executeAction(atom, decision, candidates, targetDataset) {
     const merged = String(decision.merged_text || "").trim();
     if (!merged) throw new Error("update action missing merged_text");
     const candidate = candidates.find((c) => c.documentId === decision.supersedes);
+    // The LLM may hallucinate a documentId not in the candidate set.
+    // Without this check, writeMemory would create a new doc and then
+    // disableDocument would 404 against a nonexistent id, leaving a
+    // duplicate in the target dataset. Refuse and let the retry path
+    // re-prompt for a valid decision.
+    if (!candidate) {
+      throw new LLMOutputInvalid(
+        `update.supersedes='${decision.supersedes}' is not in the candidate set; the LLM hallucinated an id`,
+        JSON.stringify(decision),
+      );
+    }
     const parser = parserForAtom(atom);
     const parsed = candidate ? parser(candidate.documentName) : null;
     const slugSource = parsed?.slug ? parsed.slug : (decision.merged_name || atom.title);
@@ -290,6 +301,12 @@ async function main() {
   // metadata_retry counts. Saved at the bottom along with action counts.
   const state = readState();
   const systemPrompt = loadPrompt();
+
+  // Schema-missing warnings: print to stderr at most ONCE per dataset per
+  // compile run so an operator notices that promoted docs are
+  // un-filterable. Without this, the warning was buried in the JSON log
+  // and silently lost.
+  const warnedSchemaMissing = new Set();
   const counts = { create: 0, update: 0, skip: 0, error: 0 };
   let promotedDocs = 0;
 
@@ -347,6 +364,13 @@ async function main() {
         const metadataFailed = metadataResult && metadataResult.ok !== true;
         const metadataWarning = metadataResult && metadataResult.ok === true && metadataResult.warning;
 
+        if (metadataWarning && !warnedSchemaMissing.has(targetDataset)) {
+          warnedSchemaMissing.add(targetDataset);
+          console.error(
+            `compile.mjs: WARNING: metadata schema missing on dataset '${targetDataset}'. Promoted docs are un-filterable until you run ./memory/scripts/dify-setup.sh.`,
+          );
+        }
+
         appendCompileLog({
           event: "atom",
           source: daily.name,
@@ -372,6 +396,10 @@ async function main() {
           error: err instanceof Error ? err.message : String(err),
         });
         if (err instanceof DifyBridgeUnavailable || err instanceof LLMProviderUnavailable) {
+          // Persist any in-memory state mutations (action counts, prior
+          // dailies' retry counters) before exiting so the next compile
+          // run sees the latest state.
+          try { writeState(state); } catch { /* swallow — state write best-effort */ }
           console.error(`compile.mjs: aborting (${err.constructor.name}): ${err.message}`);
           process.exit(0);
         }
