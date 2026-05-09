@@ -3,13 +3,20 @@ name: self-improvement
 description: Use the project memory to look up self-improvement lessons before related work, persist new lessons the moment the user corrects you, and route every "save to memory" / "memorize" request to the RAG store instead of any client-local memory system.
 ---
 
-# Memory routing — the hard rule
+# Memory routing — RAG is the default when healthy
 
-> When the user says **"save to memory", "memorize this", "remember that", "save it for later"**, or any equivalent, ALWAYS use one of the MCP tools below. **NEVER write to your client's local file-based memory** (Claude Code's `~/.claude/projects/.../memory/*.md`, Cursor's project memory, etc.) when this MCP server is registered.
+> When the user says **"save to memory", "memorize this", "remember that", "save it for later"**, or any equivalent, the project's RAG memory MCP server is the **DEFAULT** destination — as long as it is registered and healthy.
 >
-> Local-file memory is per-client and per-session: invisible to every other agent and to your future self in another session. The RAG memory is shared across every agent on this project, persists in Dify, and is the entire reason the boilerplate exists. Defaulting to local-file memory silently bypasses it and gives the user the impression nothing is being saved.
+> **Why default to RAG:** local-file memory (Claude Code's `~/.claude/projects/.../memory/*.md`, Cursor's project memory, etc.) is per-client and per-session: invisible to every other agent and to your future self in another session. The RAG memory is shared across every agent on this project, persists in Dify, and is the entire reason the boilerplate exists. Picking local-file memory when RAG is available silently bypasses it and gives the user the impression nothing was actually saved where it counts.
 >
-> Routing decision tree:
+> **Health probe:** treat the RAG path as healthy if a `save_to_dataset` / `save_lesson` call succeeds. If it errors (bridge container down, no datasets bound, network unreachable), the RAG path is unhealthy.
+>
+> **Decision:**
+>
+> 1. **RAG healthy** → use one of the MCP tools below (decision tree). Do NOT also write to local memory; that creates two sources of truth.
+> 2. **RAG unhealthy or unregistered** → fall back to your client's local file-based memory and tell the user in one short line that you did so (e.g., "saved to local memory, RAG bridge is down"). Don't refuse to save just because the cloud side is dead — the user's intent matters more than where it lands.
+>
+> Routing decision tree (when RAG is healthy):
 >
 > | What you're saving | Tool | Slot |
 > |---|---|---|
