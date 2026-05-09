@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   buildDatasetMap,
+  buildMetadataCondition,
   createDataset,
+  createDatasetMetadataField,
   createDocumentByText,
   deleteDocument,
   disableDocument,
@@ -12,8 +14,12 @@ import {
   getDocumentText,
   listAllDatasets,
   listAllDocuments,
+  listDatasetMetadataFields,
   requireDifyWriteConfig,
   resolveDatasetId,
+  retrieveChunks,
+  setBuiltInMetadata,
+  updateDocumentMetadata,
   upsertDocumentByName,
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
@@ -53,47 +59,67 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function searchCmd(config, { query, datasetId, limit }) {
+function parseJsonFlag(raw, fieldName) {
+  if (raw == null || raw === "" || raw === true) return null;
+  try {
+    const parsed = JSON.parse(String(raw));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (err) {
+    throw new Error(`--${fieldName} must be valid JSON: ${err.message}`);
+  }
+}
+
+async function searchCmd(config, { query, datasetId, limit, filters, scoreThreshold }) {
   if (!query || typeof query !== "string") throw new Error("--query <string> is required");
   const datasets = datasetId
     ? [resolveDatasetId(config, datasetId) || datasetId]
     : config.datasetIds;
   if (datasets.length === 0) {
-    throw new Error("No dataset configured. Set DIFY_DATASETS or pass --datasetId.");
+    throw new Error("No dataset configured. Run ./memory/scripts/dify-setup.sh or pass --datasetId.");
   }
   const max = Number.parseInt(limit, 10) || config.maxResults;
+  const filterObj = parseJsonFlag(filters, "filters");
+  const metadataCondition = filterObj ? buildMetadataCondition(filterObj) : null;
+  const threshold =
+    scoreThreshold == null || scoreThreshold === true
+      ? undefined
+      : Number.parseFloat(String(scoreThreshold));
+
   const all = [];
+  const errors = [];
   for (const dsId of datasets) {
-    const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(dsId)}/retrieve`;
-    const payload = { query };
-    if (config.retrievalModel) payload.retrieval_model = config.retrievalModel;
-    const body = await fetchJsonWithTimeout(
-      endpoint,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      },
-      config.timeoutMs,
-    );
-    const records = Array.isArray(body?.records) ? body.records : [];
-    for (const rec of records) {
-      const seg = rec?.segment || {};
-      const doc = seg.document || {};
-      all.push({
+    try {
+      const records = await retrieveChunks(config, {
         datasetId: dsId,
-        score: typeof rec?.score === "number" ? rec.score : null,
-        documentId: seg.document_id || doc.id || null,
-        documentName: doc.name || null,
-        content: seg.content || "",
+        query,
+        metadataCondition,
+        scoreThreshold: Number.isFinite(threshold) ? threshold : undefined,
       });
+      for (const rec of records) {
+        const seg = rec?.segment || {};
+        const doc = seg.document || {};
+        all.push({
+          datasetId: dsId,
+          score: typeof rec?.score === "number" ? rec.score : null,
+          documentId: seg.document_id || doc.id || null,
+          documentName: doc.name || null,
+          content: seg.content || "",
+        });
+      }
+    } catch (err) {
+      errors.push({ datasetId: dsId, message: err instanceof Error ? err.message : String(err) });
     }
   }
   all.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
-  return { query, datasets, totalRecords: all.length, records: all.slice(0, max) };
+  return {
+    query,
+    datasets,
+    metadataCondition,
+    scoreThreshold: Number.isFinite(threshold) ? threshold : null,
+    errors,
+    totalRecords: all.length,
+    records: all.slice(0, max),
+  };
 }
 
 async function writeCmd(config, { name, datasetId, supersedes, supersedesAction }) {
@@ -119,11 +145,12 @@ async function writeCmd(config, { name, datasetId, supersedes, supersedesAction 
   };
 }
 
-async function saveCmd(config, { name, datasetId }) {
+async function saveCmd(config, { name, datasetId, metadata }) {
   if (!name) throw new Error("--name <string> is required");
   const text = (await readStdin()).trim();
   if (!text) throw new Error("No text on stdin");
-  return upsertDocumentByName(config, { datasetId, name, text });
+  const md = parseJsonFlag(metadata, "metadata");
+  return upsertDocumentByName(config, { datasetId, name, text, metadata: md });
 }
 
 async function listCmd(config, { datasetId, prefix, enabled }) {
@@ -157,6 +184,31 @@ async function readCmd(config, { datasetId, documentId }) {
 async function disableCmd(config, { datasetId, documentId }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   return disableDocument(config, { datasetId, documentId });
+}
+
+async function listMetadataFieldsCmd(config, { datasetId }) {
+  return listDatasetMetadataFields(config, { datasetId });
+}
+
+async function createMetadataFieldCmd(config, { datasetId, name, type }) {
+  if (!name) throw new Error("--name <field-name> is required");
+  return createDatasetMetadataField(config, {
+    datasetId,
+    name,
+    type: type || "string",
+  });
+}
+
+async function setBuiltInMetadataCmd(config, { datasetId, enabled }) {
+  const want = enabled === "false" || enabled === false ? false : true;
+  return setBuiltInMetadata(config, { datasetId, enabled: want });
+}
+
+async function updateDocMetadataCmd(config, { datasetId, documentId, metadata }) {
+  if (!documentId) throw new Error("--documentId <id> is required");
+  const md = parseJsonFlag(metadata, "metadata");
+  if (!md) throw new Error("--metadata <json-object> is required");
+  return updateDocumentMetadata(config, { datasetId, documentId, metadataMap: md });
 }
 
 async function deleteCmd(config, { datasetId, documentId }) {
@@ -290,10 +342,14 @@ try {
     case "find-by-name": result = await findByNameCmd(config, args); break;
     case "scan": result = await scanCmd(config, args); break;
     case "absorb": result = await absorbCmd(config, args); break;
+    case "list-metadata-fields": result = await listMetadataFieldsCmd(config, args); break;
+    case "create-metadata-field": result = await createMetadataFieldCmd(config, args); break;
+    case "set-built-in-metadata": result = await setBuiltInMetadataCmd(config, args); break;
+    case "update-doc-metadata": result = await updateDocMetadataCmd(config, args); break;
     default:
       console.error(`Unknown subcommand: ${sub || "(none)"}`);
       console.error(
-        "Usage: memory-cli.js <search|write|save|list|read|disable|delete|list-datasets|create-dataset|find-by-name|scan|absorb> [--flag value]",
+        "Usage: memory-cli.js <search|write|save|list|read|disable|delete|list-datasets|create-dataset|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
       );
       process.exit(2);
   }

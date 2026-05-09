@@ -237,6 +237,123 @@ export async function createDataset(config, { name, description, indexingTechniq
   );
 }
 
+// ---------- Metadata fields ----------
+//
+// Dify only supports field types: string, number, time. There are no array
+// fields; the boilerplate stores tags as a comma-separated string queried
+// with the `contains` operator.
+//
+// Endpoints used:
+//   GET    /datasets/{id}/metadata                           list fields
+//   POST   /datasets/{id}/metadata                           create field
+//   POST   /datasets/{id}/metadata/built-in/{enable|disable} toggle built-ins
+//   POST   /datasets/{id}/documents/metadata                 set per-doc metadata
+
+export async function listDatasetMetadataFields(config, { datasetId } = {}) {
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/metadata`;
+  return fetchJsonWithTimeout(
+    endpoint,
+    { method: "GET", headers: { Authorization: `Bearer ${config.apiKey}` } },
+    config.timeoutMs,
+  );
+}
+
+export async function createDatasetMetadataField(config, { datasetId, name, type = "string" }) {
+  if (!name) throw new Error("createDatasetMetadataField requires a name.");
+  if (!["string", "number", "time"].includes(type)) {
+    throw new Error(`Unsupported metadata field type '${type}'. Use string|number|time.`);
+  }
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/metadata`;
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ type, name }),
+    },
+    config.timeoutMs,
+  );
+}
+
+export async function setBuiltInMetadata(config, { datasetId, enabled = true } = {}) {
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const action = enabled ? "enable" : "disable";
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/metadata/built-in/${action}`;
+  return fetchJsonWithTimeout(
+    endpoint,
+    { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` } },
+    config.timeoutMs,
+  );
+}
+
+// Resolve {fieldName -> fieldId} for a dataset (memoised by datasetId for the
+// lifetime of one call). Uses listDatasetMetadataFields.
+export async function loadMetadataFieldIndex(config, { datasetId } = {}) {
+  const body = await listDatasetMetadataFields(config, { datasetId });
+  const fields = Array.isArray(body?.doc_metadata) ? body.doc_metadata : [];
+  const byName = new Map();
+  for (const f of fields) {
+    if (f?.name && f?.id) byName.set(f.name, { id: f.id, type: f.type });
+  }
+  return byName;
+}
+
+// metadataMap: plain { fieldName: value } object. Resolves field ids via
+// loadMetadataFieldIndex and posts to the documents/metadata endpoint.
+// Skips fields that are missing on the dataset (log to caller via return).
+export async function updateDocumentMetadata(config, { datasetId, documentId, metadataMap } = {}) {
+  if (!documentId) throw new Error("updateDocumentMetadata requires documentId.");
+  const md = metadataMap && typeof metadataMap === "object" ? metadataMap : {};
+  if (Object.keys(md).length === 0) return { ok: true, skipped: "empty metadata" };
+
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const fieldIndex = await loadMetadataFieldIndex(config, { datasetId: selectedDatasetId });
+
+  const metadataList = [];
+  const skippedFields = [];
+  for (const [name, value] of Object.entries(md)) {
+    const f = fieldIndex.get(name);
+    if (!f) { skippedFields.push(name); continue; }
+    metadataList.push({ id: f.id, name, value: value == null ? "" : String(value) });
+  }
+  if (metadataList.length === 0) {
+    return { ok: false, skippedFields, message: "no fields matched dataset metadata schema" };
+  }
+
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/metadata`;
+  const payload = {
+    operation_data: [
+      { document_id: documentId, metadata_list: metadataList },
+    ],
+  };
+  const body = await fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    config.timeoutMs,
+  );
+  return { ok: true, response: body, skippedFields };
+}
+
 export async function listDocuments(config, { datasetId, keyword, page = 1, limit = 100 } = {}) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const params = new URLSearchParams();
@@ -307,6 +424,75 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
   return all.join("\n\n");
 }
 
+// ---------- Retrieve with metadata filters + score threshold ----------
+//
+// metadataCondition is the Dify-shaped object:
+//   { logical_operator: "and" | "or", conditions: [{ name, comparison_operator, value }] }
+//
+// Per Dify docs the filter is passed at the top level of the retrieve payload
+// as `metadata_condition`. If a future Dify version moves it under
+// `retrieval_model`, switch the key here once.
+
+export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, retrievalModel } = {}) {
+  if (!datasetId) throw new Error("retrieveChunks requires datasetId.");
+  if (!query) throw new Error("retrieveChunks requires query.");
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    datasetId,
+  )}/retrieve`;
+
+  const baseRetrievalModel =
+    retrievalModel && typeof retrievalModel === "object"
+      ? { ...retrievalModel }
+      : config.retrievalModel
+        ? { ...config.retrievalModel }
+        : null;
+
+  if (typeof scoreThreshold === "number" && scoreThreshold >= 0 && scoreThreshold <= 1) {
+    const rm = baseRetrievalModel || {};
+    rm.score_threshold = scoreThreshold;
+    rm.score_threshold_enabled = true;
+    return runRetrieve(endpoint, config, query, rm, metadataCondition);
+  }
+
+  return runRetrieve(endpoint, config, query, baseRetrievalModel, metadataCondition);
+}
+
+async function runRetrieve(endpoint, config, query, retrievalModel, metadataCondition) {
+  const payload = { query };
+  if (retrievalModel) payload.retrieval_model = retrievalModel;
+  if (metadataCondition) payload.metadata_condition = metadataCondition;
+  const body = await fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    config.timeoutMs,
+  );
+  return Array.isArray(body?.records) ? body.records : [];
+}
+
+// Build a Dify metadata_condition from a flat {fieldName: value} map. All
+// conditions are AND-combined. `tags` uses `contains`; everything else uses
+// `is`. Empty values are skipped so callers can pass partial filters.
+export function buildMetadataCondition(filters, { logicalOperator = "and", containsFields = ["tags"] } = {}) {
+  if (!filters || typeof filters !== "object") return null;
+  const conditions = [];
+  for (const [name, raw] of Object.entries(filters)) {
+    if (raw == null) continue;
+    const value = String(raw).trim();
+    if (!value) continue;
+    const op = containsFields.includes(name) ? "contains" : "is";
+    conditions.push({ name, comparison_operator: op, value });
+  }
+  if (conditions.length === 0) return null;
+  return { logical_operator: logicalOperator, conditions };
+}
+
 export async function findDocumentByExactName(config, { datasetId, name }) {
   if (!name) throw new Error("findDocumentByExactName requires name.");
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
@@ -314,7 +500,7 @@ export async function findDocumentByExactName(config, { datasetId, name }) {
   return docs.find((d) => d?.name === name) || null;
 }
 
-export async function upsertDocumentByName(config, { datasetId, name, text }) {
+export async function upsertDocumentByName(config, { datasetId, name, text, metadata }) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const existing = await findDocumentByExactName(config, { datasetId: selectedDatasetId, name });
 
@@ -322,6 +508,28 @@ export async function upsertDocumentByName(config, { datasetId, name, text }) {
   // case is a transient duplicate name in Dify until the next compile pass
   // resolves it; that is preferable to losing the only copy of a fact.
   const created = await createDocumentByText(config, { datasetId: selectedDatasetId, name, text });
+
+  // Apply metadata after create (Dify's create-by-text endpoint does not
+  // accept metadata in the same call). Failure to set metadata leaves the
+  // document in place; we surface it via metadataError.
+  let metadataError;
+  let metadataResult;
+  if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
+    const newDocId = created?.document?.id || created?.id;
+    if (newDocId) {
+      try {
+        metadataResult = await updateDocumentMetadata(config, {
+          datasetId: selectedDatasetId,
+          documentId: newDocId,
+          metadataMap: metadata,
+        });
+      } catch (err) {
+        metadataError = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      metadataError = "create-by-text response missing document.id; cannot set metadata";
+    }
+  }
 
   let deleteError;
   if (existing?.id) {
@@ -337,6 +545,8 @@ export async function upsertDocumentByName(config, { datasetId, name, text }) {
     datasetId: selectedDatasetId,
     replacedId: existing?.id || null,
     created,
+    metadataResult,
+    metadataError,
     deleteError,
   };
 }

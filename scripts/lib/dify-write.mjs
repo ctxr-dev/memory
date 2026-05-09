@@ -85,8 +85,35 @@ export function readDocument({ documentId, datasetId } = {}) {
   return execCli("read", { documentId, datasetId });
 }
 
-export function saveMemory({ name, text, datasetId } = {}) {
-  return execCli("save", { name, datasetId }, { stdin: text });
+export function saveMemory({ name, text, datasetId, metadata } = {}) {
+  const flags = { name, datasetId };
+  if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
+  return execCli("save", flags, { stdin: text });
+}
+
+export function searchMemoryFiltered({ query, datasetId, limit, filters, scoreThreshold } = {}) {
+  const flags = { query, datasetId, limit };
+  if (filters && typeof filters === "object") flags.filters = JSON.stringify(filters);
+  if (scoreThreshold != null) flags.scoreThreshold = String(scoreThreshold);
+  return execCli("search", flags);
+}
+
+export function listMetadataFields({ datasetId } = {}) {
+  return execCli("list-metadata-fields", { datasetId });
+}
+
+export function createMetadataField({ datasetId, name, type } = {}) {
+  return execCli("create-metadata-field", { datasetId, name, type });
+}
+
+export function setBuiltInMetadata({ datasetId, enabled } = {}) {
+  return execCli("set-built-in-metadata", { datasetId, enabled: String(enabled !== false) });
+}
+
+export function updateDocMetadata({ datasetId, documentId, metadata } = {}) {
+  const flags = { datasetId, documentId };
+  if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
+  return execCli("update-doc-metadata", flags);
 }
 
 export function listDatasets() {
