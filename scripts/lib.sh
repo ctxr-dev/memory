@@ -43,7 +43,7 @@ docker_compose() {
   load_memory_env
 
   if [ ! -f "$DIFY_DOCKER_DIR/docker-compose.yaml" ]; then
-    echo "Dify is not bootstrapped. Run: $MEMORY_DIR/scripts/bootstrap.sh" >&2
+    echo "Dify is not bootstrapped. Run: $MEMORY_DIR/scripts/dify-bootstrap.sh" >&2
     exit 1
   fi
 
