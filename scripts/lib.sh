@@ -21,8 +21,14 @@ MEMORY_ENV="$MEMORY_DIR/.env"
 # Happens when the boilerplate was cloned at the repo root (`git clone … .`
 # instead of `git clone … ./memory`), which would bind-mount $HOME (or /)
 # into the bridge container at /workspace.
+#
+# WORKSPACE_DIR is `pwd -P`-resolved above, so we must compare against BOTH
+# $HOME and the resolved form of $HOME. On Linux it is common for $HOME to
+# itself be a symlink (e.g. /home/foo -> /mnt/data/foo); without resolving,
+# the string comparison would miss and the guard would silently fail.
+home_resolved="$(cd "$HOME" 2>/dev/null && pwd -P 2>/dev/null || echo "$HOME")"
 case "$WORKSPACE_DIR" in
-  "$HOME"|/|/root)
+  "$HOME"|"$home_resolved"|/|/root)
     echo "FATAL: WORKSPACE_DIR resolves to '$WORKSPACE_DIR', which is your home or root." >&2
     echo "  Clone the boilerplate INTO a project subdirectory:" >&2
     echo "    cd ~/your-project && git clone <repo> ./memory" >&2
@@ -30,6 +36,7 @@ case "$WORKSPACE_DIR" in
     exit 1
     ;;
 esac
+unset home_resolved
 
 read_env_value() {
   local key="$1"
