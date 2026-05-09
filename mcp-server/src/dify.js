@@ -258,11 +258,14 @@ export async function createDataset(config, {
     score_threshold_enabled: false,
     score_threshold: 0,
   };
+  // Spread-merge so a caller-supplied retrievalModel doesn't drop the
+  // reranking_mode/weights defaults (which Dify requires for the persisted
+  // dataset model in newer versions).
   const payload = {
     name,
     indexing_technique: indexingTechnique,
     permission,
-    retrieval_model: retrievalModel || defaultRetrievalModel,
+    retrieval_model: { ...defaultRetrievalModel, ...(retrievalModel || {}) },
   };
   if (description) payload.description = description;
   // Pass-through embedding model when the tenant default isn't usable.
@@ -501,13 +504,59 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
 // JSON key is `metadata_filtering_conditions` and it lives INSIDE
 // `retrieval_model`. Top-level `metadata_condition` is silently dropped.
 //
-// We send `retrieval_model` ONLY when the caller needs to attach a
-// metadata filter / score threshold / explicit override. Otherwise we
-// omit it so Dify falls back to the dataset's own configured retrieval
-// settings (`dataset.retrieval_model or default_retrieval_model` per
-// hit_testing_service.py). This keeps economy datasets working: if we
-// always sent `hybrid_search`, economy datasets without a vector index
-// would 5xx.
+// When the caller needs to attach a filter / threshold / explicit override
+// we MUST send a complete retrieval_model (Dify's RetrievalModel Pydantic
+// schema requires `search_method`). To stay correct on BOTH high_quality
+// and economy datasets, we probe the dataset's `indexing_technique` once
+// (cached per process) and pick semantic_search-ish behaviour when the
+// dataset has no vector index.
+
+const datasetIndexCache = new Map(); // datasetId -> "high_quality" | "economy"
+
+export async function getDatasetInfo(config, { datasetId } = {}) {
+  if (!datasetId) throw new Error("getDatasetInfo requires datasetId.");
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(datasetId)}`;
+  return fetchJsonWithTimeout(
+    endpoint,
+    { method: "GET", headers: { Authorization: `Bearer ${config.apiKey}` } },
+    config.timeoutMs,
+  );
+}
+
+async function indexingTechniqueFor(config, datasetId) {
+  if (datasetIndexCache.has(datasetId)) return datasetIndexCache.get(datasetId);
+  try {
+    const info = await getDatasetInfo(config, { datasetId });
+    const tech = info?.indexing_technique || "high_quality";
+    datasetIndexCache.set(datasetId, tech);
+    return tech;
+  } catch {
+    // If probe fails, assume high_quality (the boilerplate's default).
+    return "high_quality";
+  }
+}
+
+function defaultRetrievalModelFor(indexingTechnique) {
+  if (indexingTechnique === "economy") {
+    // Economy datasets have no vector index — keyword-only retrieval is
+    // the only option Dify accepts.
+    return {
+      search_method: "keyword_search",
+      reranking_enable: false,
+      top_k: 8,
+    };
+  }
+  return {
+    search_method: "hybrid_search",
+    reranking_enable: false,
+    reranking_mode: "weighted_score",
+    weights: {
+      vector_setting: { vector_weight: 0.7 },
+      keyword_setting: { keyword_weight: 0.3 },
+    },
+    top_k: 8,
+  };
+}
 
 export async function retrieveChunks(config, { datasetId, query, metadataCondition, scoreThreshold, retrievalModel } = {}) {
   if (!datasetId) throw new Error("retrieveChunks requires datasetId.");
@@ -527,23 +576,10 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 
   let rm = explicitRm;
   if ((wantsThreshold || wantsMetadata) && !rm) {
-    // Need to attach filter/threshold but caller supplied none. Dify's
-    // RetrievalModel Pydantic schema (knowledge_entities.py) requires
-    // `search_method`, so we cannot send a partial. Use hybrid_search as
-    // the safe default — Dify will accept it on high_quality datasets
-    // (the boilerplate's create-time default). Economy datasets that
-    // never set hybrid retrieval will reject this; in that case the
-    // caller should supply an explicit retrievalModel.
-    rm = {
-      search_method: "hybrid_search",
-      reranking_enable: false,
-      reranking_mode: "weighted_score",
-      weights: {
-        vector_setting: { vector_weight: 0.7 },
-        keyword_setting: { keyword_weight: 0.3 },
-      },
-      top_k: 8,
-    };
+    // Probe the dataset to decide between hybrid_search (high_quality) and
+    // keyword_search (economy). Cached per-process.
+    const tech = await indexingTechniqueFor(config, datasetId);
+    rm = defaultRetrievalModelFor(tech);
   }
 
   if (rm) {

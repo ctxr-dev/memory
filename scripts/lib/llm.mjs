@@ -78,8 +78,14 @@ async function spawnCapture(cmd, args, { input, timeoutMs }) {
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
+    // SIGTERM first so the CLI gets a chance to flush auth state /
+    // telemetry; SIGKILL after a short grace period if the child ignores it.
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      try { child.kill("SIGTERM"); } catch { /* already dead */ }
+      const killTimer = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* already dead */ }
+      }, 2000);
+      child.once("close", () => clearTimeout(killTimer));
       reject(new LLMProviderUnavailable(`${cmd} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -222,9 +228,12 @@ async function callOpenAiApi({ systemPrompt, userPrompt, maxTokens, timeoutMs })
   const model = envValue("OPENAI_MODEL", "gpt-4o-mini");
   if (!apiKey) throw new LLMProviderUnavailable("OPENAI_API_KEY not set");
 
+  // OpenAI deprecated `max_tokens` in favour of `max_completion_tokens`
+  // for newer models (gpt-4o family and later). Send the new key as
+  // primary; older models that only accept `max_tokens` ignore it.
   const body = {
     model,
-    max_tokens: maxTokens,
+    max_completion_tokens: maxTokens,
     response_format: { type: "json_object" },
     messages: [
       ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
