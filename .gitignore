@@ -1,8 +1,13 @@
 .DS_Store
 *.log
 node_modules/
-memory-template/memory/.env
-memory-template/memory/.dify-version
-memory-template/memory/vendor/dify/
-memory-template/.memory/dify/*
-!memory-template/.memory/dify/.keep
+
+# Boilerplate developer's local stack state (not for distribution)
+.env
+.dify-version
+vendor/dify/
+
+# Operational state files (ops only, not memory content)
+.compile-state.json
+.compile-state.json.log
+.compile.lock

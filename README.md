@@ -1,387 +1,530 @@
-<h1 align="center">Local Dify MCP Memory Boilerplate</h1>
+<h1 align="center">🧠 Local Dify MCP Memory — the self-learning RAG that makes your AI stop repeating its mistakes</h1>
 
 <p align="center">
-  <strong>Inspectable local project memory for AI coding agents.</strong>
+  <strong>Typed, deduplicated, self-improving project memory for AI coding agents.</strong>
 </p>
 
 <p align="center">
-  Dify Knowledge for high-precision RAG, a stdio MCP bridge for modern agent clients, and optional hooks that preserve fresh session context before it disappears.
+  A local Dify Knowledge stack for high-precision RAG, a stdio MCP bridge for every modern agent client, a two-stage <code>flush + compile</code> pipeline that distils sessions into typed atoms instead of dumping transcripts, and a dedicated <code>self_improvement</code> dataset where the agent records every correction you give it (and looks up the lesson before related work, so it stops making the same mistake twice).
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
-  <img alt="Open Source" src="https://img.shields.io/badge/Open%20Source-yes-brightgreen">
   <img alt="Local First" src="https://img.shields.io/badge/Local--First-memory-0A7C66">
   <img alt="Dify" src="https://img.shields.io/badge/RAG-Dify-2F6FEB">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-stdio-6E56CF">
   <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-2496ED">
   <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20+-339933">
-  <img alt="Bash" src="https://img.shields.io/badge/Shell-Bash-4EAA25">
-  <img alt="Postgres" src="https://img.shields.io/badge/DB-Postgres-4169E1">
-  <img alt="Weaviate" src="https://img.shields.io/badge/Vector-Weaviate-00B388">
   <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-supported-D97706">
+  <img alt="Codex/OpenAI" src="https://img.shields.io/badge/Codex-supported-10A37F">
   <img alt="Cursor" src="https://img.shields.io/badge/Cursor-supported-111827">
-  <img alt="Codex/OpenAI" src="https://img.shields.io/badge/Codex%2FOpenAI-supported-10A37F">
-  <img alt="Hooks" src="https://img.shields.io/badge/Hooks-opt--in-7C3AED">
-  <img alt="Persistence" src="https://img.shields.io/badge/Persistence-.memory%2Fdify-0EA5E9">
-  <img alt="Version Pinning" src="https://img.shields.io/badge/Dify-version%20pinned-F59E0B">
-  <img alt="Secrets" src="https://img.shields.io/badge/Secrets-.env%20ignored-DC2626">
-  <img alt="Host Paths" src="https://img.shields.io/badge/Host%20Paths-not%20hardcoded-64748B">
 </p>
 
 <p align="center">
-  <a href="#copyable-ai-install-prompt">Install with AI</a>
+  <a href="#install">Install</a>
   |
-  <a href="#install-into-a-project">Manual install</a>
+  <a href="#how-memory-is-built">Pipeline</a>
   |
-  <a href="#client-support">Clients</a>
+  <a href="#what-gets-saved">Categories</a>
   |
-  <a href="#continuous-memory-hooks">Hooks</a>
+  <a href="#updates">Updates</a>
+  |
+  <a href="#client-config">Clients</a>
+  |
+  <a href="STACK.md">Stack docs</a>
 </p>
 
 <p align="center">
   <img src="img.png" alt="Dify Knowledge UI showing project memory knowledge bases" width="920">
 </p>
 
-> Give every project its own local memory system: Dify for inspectable high-precision RAG, a stdio MCP bridge for Codex/OpenAI, Claude Desktop, Cursor, and other MCP clients, and optional hooks for continuous session capture.
+## Why this exists
 
-The goal is intentionally practical: an AI agent should be able to install this into a fresh repo, ask only the necessary questions, start the local stack, wire the MCP client where possible, and leave you with one human task: open Dify, create the knowledge bases, and paste the generated API values into `memory/.env`.
+Dumping raw transcripts into a vector store turns a signal-to-noise problem into an embedding-space problem: at scale, retrieval surfaces the noise.
 
-## At A Glance
+This boilerplate replaces the dump with a two-stage pipeline:
 
-| Need | What this gives you |
-| --- | --- |
-| Inspect memory instead of trusting magic | Dify Knowledge UI with datasets, chunks, indexing state, and retrieval tests |
-| Keep projects isolated | Per-project container names, Compose project names, images, and `.memory/dify/` data |
-| Use modern AI clients | MCP snippets for Codex/OpenAI, Claude Desktop, Cursor, and generic MCP JSON |
-| Preserve session knowledge | Optional hooks for `SessionStart`, `PreCompact`, `PostCompact`, and `SessionEnd` |
-| Avoid hidden state | No hardcoded host paths, no copied secrets, no vendored Dify runtime data |
+1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default; Codex, Anthropic, or OpenAI also supported) to extract typed atoms (decisions, bug root causes, feedback rules, lore, references, gotchas) into one `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document per flush.
+2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It reads enabled `daily-*.md` docs, dedup-merges atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip), then disables the source dailies (kept for audit, hidden from search).
+
+Most sessions contribute 0 to 3 small atoms, dedup-merged across history, with metadata that makes retrieval boringly correct.
+
+## Install
+
+The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates. Two phases, drive each manually or via an AI prompt:
+
+| Phase | What it does | Manual | AI-driven |
+|---|---|---|---|
+| **1. Host install** | clone, render configs, start Docker stack | [Manual install](#manual-install) | [🤖 AI-driven install](#-ai-driven-install) |
+| **2. Dify onboarding** *(after MCP-client restart)* | API key, dataset slots, metadata schema, optional doc absorb | [Manual flow](#manual-flow) | [🤖 AI-driven flow](#-ai-driven-flow) |
+
+> **Why two prompts?** The MCP server only becomes callable AFTER your client (Claude Desktop, Cursor, Codex) restarts to pick it up. Phase 2 uses MCP tools (`list_datasets`, `create_dataset`, `absorb_files`, ...) that don't exist before that restart, so it can't share a session with Phase 1. Run Phase 1, restart your client, then run Phase 2.
+
+### Prerequisites
+
+- Docker Desktop 4.x+ with Docker Compose 2.24.4+
+- Node 20+ (used at install AND runtime; no `jq` or other extras needed)
+- bash 3.2+, plus standard POSIX utilities (`awk`, `sed`, `grep`, `find`, `mktemp`, `tr`, `cut`)
+- `git`, `curl`
+
+**Cross-platform:** macOS and Linux are first-class. **Windows works via WSL2 or Git Bash:** bootstrap is bash-only and intentionally avoids `jq`, `realpath`, `gsed`, or any other non-portable binary.
+
+<details>
+<summary>Windows-specific gotchas</summary>
+
+- **Line endings**: the repo ships `.gitattributes` forcing LF on shell + Node + config files. If you cloned with `core.autocrlf=true` (Git for Windows default) BEFORE these directives existed locally, run `git add --renormalize . && git checkout .` to fix any CRLF in your working tree, otherwise `bash` will choke on `#!/usr/bin/env bash\r`.
+- **Docker Desktop file sharing**: under Docker Desktop → Settings → Resources, enable the drive (non-WSL) or the WSL2 distro that contains your project. Without this, the workspace bind mounts empty and `scan_documents` / `absorb_files` see no source files.
+- **Symlinks**: the repo ships zero symlinks; do not introduce any locally without enabling Windows Developer Mode (or accept that Git will substitute a 1-line text file for the symlink target).
+</details>
+
+### Manual install
+
+```bash
+# from inside the project root
+git clone https://github.com/ctxr-dev/memory ./memory
+./memory/bootstrap.sh --slug <project-slug>
+./memory/scripts/up.sh    # FIRST RUN IS SLOW: clones the upstream Dify repo
+                          # into memory/vendor/dify, pulls Dify images, and
+                          # builds the bridge. Expect 2-5 minutes and a
+                          # few GB of pulls. up.sh prints the Dify UI URL
+                          # at the end.
+```
+
+`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `memory/.env` from the template.
+
+**Existing config files are structurally merged, never overwritten:** your hooks, MCP servers, and permissions all pass through verbatim and only boilerplate-owned entries are added or refreshed (see [Updates → Merge contract](#merge-contract)). Re-runs leave `memory/.env` untouched.
+
+After the stack is up, finish wiring with the [onboarding wizard](#manual-flow) (or the [AI-driven flow](#-ai-driven-flow)).
+
+### 🤖 AI-driven install
+
+> **Phase 1 of 2.** Host-side install only (clone, bootstrap, docker stack up). Run [Phase 2](#-ai-driven-flow) AFTER the stack is up AND your MCP client restarts.
+
+Paste this prompt into your agent (Claude Code, Cursor, Codex) running inside the target project root:
+
+```text
+Install the local Dify MCP memory boilerplate into this project. Target the current working directory unless I explicitly give you another path.
+
+Steps:
+
+1. Confirm the boilerplate Git URL with me first if you cannot infer it. Default: https://github.com/ctxr-dev/memory
+
+2. Ask me for the project slug. Lowercase ASCII a-z, 0-9, hyphen (e.g. billing-api, docs-site). If I give you a name, propose a sanitised slug derived from the project folder name and confirm. The slug becomes the per-project Docker container, image, and Compose project name, so multiple projects can run their own memory stacks without collisions.
+
+3. Ask me which LLM provider to use for the flush + compile pipeline:
+   - claude (recommended; spawns `claude -p`, no API key needed)
+   - codex (spawns `codex exec --json`, no API key needed)
+   - anthropic (REST with ANTHROPIC_API_KEY in memory/.env)
+   - openai (REST with OPENAI_API_KEY in memory/.env)
+   Detect which CLIs are on PATH before asking. If only one is available, default to it and ask me to confirm.
+
+4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
+
+5. Ask which MCP clients I want registered: Claude Desktop, Cursor, Codex/OpenAI, generic. Note the choices for step 8; the actual snippets only exist after bootstrap.sh runs.
+
+6. Verify host prerequisites or tell me exactly what is missing:
+   - docker (Docker Desktop or engine) with `docker compose` 2.24.4+
+   - node 20+
+   - git, curl, bash 3.2+
+   bootstrap.sh itself only enforces docker + node + docker-compose-version; git and curl are needed by `git clone` and the Dify-version probe. No `jq`, `realpath`, or other extras are required (the install path is intentionally portable to Git Bash on Windows).
+
+7. Run the install. If I chose Codex/OpenAI as a client in step 5 AND the `codex` CLI is on PATH, append `--register-codex` so bootstrap auto-runs `codex mcp add` for me; otherwise tell me to run that command manually after step 8:
+   git clone <boilerplate-git-url> ./memory
+   ./memory/bootstrap.sh --slug <slug> --llm-provider <provider> [--no-hooks if I declined] [--register-codex if Codex picked]
+
+8. Static verification only (Docker not yet required; the stack is not up yet):
+   bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
+   node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
+   node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
+   ( cd ./memory && npm test )
+
+   Then print the requested client snippets from `./memory/.agents/clients/` (now that bootstrap has rendered them):
+   ./memory/scripts/mcp-config.sh all
+   For Codex (if not auto-registered in step 7):
+   codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
+
+9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (typically 2-5 minutes, multi-GB):
+   ./memory/scripts/up.sh
+   (`up.sh` invokes `ui-url.sh` itself, so the Dify UI URL is printed when it finishes.)
+
+10. Tell me the exact next steps after the stack is up:
+    a) Open the printed Dify UI URL.
+    b) Create the admin account, configure an embedding model under Settings -> Model Provider (REQUIRED before any high_quality dataset can be created).
+    c) Open Knowledge -> Service API, create a Knowledge API key.
+    d) Restart your MCP client (Claude Desktop / Cursor / Codex / your terminal-spawned agent) so it picks up the new memory MCP server. The server only becomes callable after this restart.
+    e) Run `./memory/scripts/dify-setup.sh` to wire datasets, install the per-document metadata schema, and (optionally) absorb my existing docs. ALTERNATIVELY paste the second AI prompt from the README (under "Onboarding -> AI-driven flow") to a fresh agent session for an MCP-driven walkthrough that uses list_datasets / create_dataset / scan_documents / absorb_files instead of the wizard.
+    f) Final end-to-end smoke (only valid after step e): `./memory/scripts/mcp-smoke.sh` — read-only round-trip across get_memory_config, search_memory (plain + filtered), and recall_lessons.
+
+Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
+```
+
+## Onboarding
+
+`dify-setup.sh` is a re-runnable wizard. Once Dify is up and you've configured an embedding model under **Settings → Model Provider** in the UI, it asks at most:
+
+1. **`DIFY_KNOWLEDGE_API_KEY`**: paste it (or skip if already in `memory/.env`).
+2. **For each dataset slot** (every `DIFY_DATASET_<NAME>_ID=` line in `memory/.env`; defaults: `daily, knowledge, plans, investigations, self_improvement`): auto-create with that name (high_quality + hybrid_search), paste an existing id, or skip.
+3. **Metadata schema**: installs the six per-document fields (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) on every bound slot, plus optional Dify built-ins (`document_name`, `upload_date`, `last_update_date`).
+4. **Bridge restart**: propagates new env to the MCP bridge.
+5. **Absorb existing docs?**: optional. Scans the workspace, picks files into slots (default `knowledge`), upserts each as `relative_path_with_underscores.md`. Re-running overwrites instead of duplicating.
+
+Add a slot later by appending a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` and re-running `dify-setup.sh`; it only asks about new slots.
+
+### Manual flow
+
+```bash
+./memory/scripts/up.sh           # start Dify + MCP bridge
+./memory/scripts/ui-url.sh       # open the printed Dify UI URL
+                                 # In Dify: admin -> embedding model -> Service API -> create Knowledge API key
+./memory/scripts/dify-setup.sh   # paste key, bind/create slots, optional absorb
+./memory/scripts/mcp-smoke.sh    # validate
+```
+
+After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines:
+
+```bash
+./memory/scripts/up.sh memory_mcp   # rebuilds + recreates only the bridge service
+                                    # (small image, typically <10s)
+```
+
+(A raw `docker compose ... up -d memory_mcp` from the workspace root would fail because Docker Compose can't find `docker-compose.yaml` there; the `./memory/scripts/` wrappers add the correct `-f` flags via `scripts/lib.sh`.)
+
+### 🤖 AI-driven flow
+
+> **Phase 2 of 2.** Run [Phase 1](#-ai-driven-install) FIRST, then **restart your MCP client** so the new `<slug>-memory` server is registered. Only paste this prompt after that restart: it uses MCP tools (`list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, `save_lesson`, `recall_lessons`) that don't exist until then.
+
+Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP server registered):
+
+```text
+Set up the Dify memory boilerplate for this project. The MCP server is `<project-slug>-memory`. Do this:
+
+1. Call `get_memory_config` to confirm DIFY_KNOWLEDGE_API_KEY is set (the bridge surfaces `apiKeyConfigured: true|false` without leaking the key). If false, STOP and tell me to:
+   (a) Open the Dify UI URL printed by ./memory/scripts/ui-url.sh
+   (b) Sign in, configure an embedding model under Settings → Model Provider (REQUIRED before any high_quality dataset can be created)
+   (c) Knowledge → Service API → create a Knowledge API key
+   (d) Paste the key into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>
+   (e) Recreate the bridge so the new env is picked up:
+       ./memory/scripts/up.sh memory_mcp
+   THEN re-run me. Do not attempt to proceed without the key — `dify-setup.sh --non-interactive` will exit FATAL.
+
+2. Call `list_datasets` to see what already exists in Dify.
+3. For each of these slots (daily, knowledge, plans, investigations, self_improvement), check whether a dataset with that name already exists.
+   - If it exists, tell me the id and ask whether to bind it.
+   - If it does not, ask whether to call `create_dataset` to create it (high_quality + hybrid_search; requires the embedding model from step 1).
+4. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
+5. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
+6. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
+
+7. Sanity round-trip (proves the metadata schema you installed in step 4 actually works): call `save_lesson` with a deliberately-tagged smoke lesson (title "Onboarding smoke", error_pattern "smoke-test", project_module "smoke", task_type "unknown"), then immediately call `recall_lessons(query="smoke", project_module="smoke")`. The lesson must round-trip. If it does NOT, the metadata schema install probably failed; tell me to re-run `./memory/scripts/dify-setup.sh`.
+
+Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
+```
+
+### Saving plans, investigations, or other artefacts manually
+
+`save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
+
+For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode`) are not yet shipped. Until they land, agents can call these tools directly mid-session.
+
+## Self-improvement loop
+
+A dedicated `self_improvement` dataset captures lessons learned **only** from negative or corrective user feedback. Agents check it before related work via `recall_lessons`.
+
+### Two MCP entry points
+
+- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Filters `self_improvement` by `atom_type=self-improvement-lesson` plus context. Broadens via fall-back ladder (drops `error_pattern` → `language` → `task_type`) until `min(3, maxResults)` UNIQUE hits or the ladder is exhausted. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is set AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` + `feedback-rule` from `knowledge` (max 2, appended after lessons, never displacing them).
+- **`save_lesson(title, body, metadata, tags?, evidence?)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key: same `error_pattern` MERGES rather than multiplies in compile. The doc name `lesson-<slug>-<ts>.md` matches the format compile recognises, so inline-saved lessons participate in the same dedup-merge pipeline. Available on the next turn.
+
+### Two capture paths feed `self_improvement`
+
+1. **Inline (`save_lesson`)**: agent observes correction mid-session and persists immediately. Queryable on the very next turn.
+2. **Flush extraction**: `prompts/flush.md` recognises a `self-improvement-lesson` atom type with the same triggers; lessons missed mid-session are captured at hook boundaries. Compile then routes them to `self_improvement` and dedup-merges by `error_pattern`.
+
+### Lesson triggers
+
+| ✅ Save | ❌ Don't save |
+|---|---|
+| Direct correction ("no", "stop doing X", reverting your work, "wrong") | Routine clarification or neutral redirection ("let's switch to X") |
+| Repeat correction ("I told you before", "again", "same mistake") | User changing their mind about scope |
+| Wrong-tool / wrong-step / wrong-format | User self-blame ("oh wait, I gave you the wrong file") |
+| | Exploration or thinking out loud |
+
+### Metadata schema
+
+Six per-document fields, installed by `dify-setup.sh` on every bound slot (Dify only supports string/number/time, so `tags` is comma-separated, queried with `contains`):
+
+| Field | Used by `recall_lessons` for | Notes |
+|---|---|---|
+| `atom_type` | filter by atom type | one of seven types; `self-improvement-lesson` is the lesson key |
+| `project_module` | filter by part-of-codebase | lowercase, hyphenated; `unknown` when unsure |
+| `language` | filter by programming language | empty for language-agnostic lessons |
+| `task_type` | filter by task category | enum: planning, implementation, debugging, refactor, review, deploy, docs, unknown |
+| `error_pattern` | filter and DEDUP by failure mode | required for `save_lesson`; short kebab-case slug like `missing-await`, `bsd-sed-no-arg` |
+| `tags` | fulltext-style fallback | comma-separated list, queried with `contains` |
+
+Built-in Dify fields (`document_name`, `upload_date`, `last_update_date`) can be enabled by the wizard for recency-based filtering.
+
+### Retrieval contract
+
+`search_memory({ query, datasets?, filters?, scoreThreshold?, maxResults? })` applies `filters` as a Dify `metadata_condition` (AND-combined; `tags` uses `contains`, others use `is`) BEFORE the embedding rank, then drops anything below `scoreThreshold`. **Do not load the whole store**: filtered + thresholded retrieval is the contract.
+
+## How memory is built
 
 ```mermaid
-flowchart LR
-  Agent["AI agent session"] --> Hooks["Optional hooks"]
-  Agent --> MCP["MCP bridge (stdio)"]
-  Hooks --> MCP
-  MCP --> Dify["Dify Knowledge API"]
-  Dify --> UI["Inspectable Knowledge UI"]
-  Dify --> Future["Future agent retrieval"]
+flowchart TB
+  subgraph Capture["① Capture (per session)"]
+    direction TB
+    Hook["PreCompact / PostCompact / SessionEnd"] --> Flush["scripts/hooks/flush.mjs"]
+    Flush --> LLM1["LLM extract (typed atoms)"]
+  end
+
+  LLM1 --> DailyDataset[("Dify dataset 'daily'<br/>daily-&lt;ts&gt;.md")]
+
+  subgraph Promote["② Promote (lazy, once/UTC day)"]
+    direction TB
+    Start["SessionStart"] --> Compile["scripts/compile.mjs"]
+    Compile --> ReadDaily["Read enabled daily-*.md"]
+    ReadDaily --> LLM2["LLM dedup-merge vs 'knowledge'"]
+  end
+
+  DailyDataset --> ReadDaily
+  LLM2 --> KnowledgeDataset[("Dify dataset 'knowledge'<br/>knowledge-&lt;slug&gt;-&lt;ts&gt;.md")]
+  LLM2 --> SelfImprovement[("Dify dataset 'self_improvement'<br/>lesson-&lt;slug&gt;-&lt;ts&gt;.md")]
+  Compile --> DisableDaily["Disable processed daily-*.md"]
+
+  subgraph OnDemand["③ On-demand (any session)"]
+    direction TB
+    Absorb["MCP absorb_files"]
+    Save["MCP save_to_dataset / save_lesson / write_memory"]
+  end
+
+  Absorb --> KnowledgeDataset
+  Save --> AnyDataset[("Dify named slots<br/>plans, investigations, ...")]
+  Save --> SelfImprovement
+
+  DailyDataset --> Search(["MCP search_memory / recall_lessons"])
+  KnowledgeDataset --> Search
+  SelfImprovement --> Search
+  AnyDataset --> Search
 ```
 
-## Why This Exists
+**Everything lives in Dify**, organised by named slots, retrieved via metadata-filtered queries.
 
-A Karpathy-style `LLM Wiki`, or an `llms.txt`-style folder of LLM-friendly project notes, is a great starting point. For tiny projects, a few Markdown files are fast, transparent, and easy for agents to read.
+- **Named slots**: each `DIFY_DATASET_<NAME>_ID=` line in `memory/.env` declares one slot. Defaults: `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add lines to add slots (`DIFY_DATASET_RUNBOOKS_ID=`, ...). No second list to maintain.
+- **Per-atom-type routing**: compile sends `self-improvement-lesson` atoms to `self_improvement` and everything else to `knowledge`. Inline `save_lesson` hits `self_improvement` directly.
+- **Naming inside Dify**:
+  - `daily-<YYYY-MM-DD-HHMMSSmmm>.md`: one per flush event (dedup-merged out by compile).
+  - `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: one per deduped fact (compile may write a new version with the same `<slug>` and a new `<ts>`, then disable the prior).
+  - `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: self-improvement lessons in `self_improvement`.
+  - `<relative_path_with_underscores>.md`: absorbed user docs (`docs/auth/jwt.md` becomes `docs_auth_jwt.md`).
+  - `<your-name>.md`: anything you upsert via `save_to_dataset` (plans, investigations, decisions). Same name overwrites; iterate freely.
+- **Daily docs are kept after promotion** but disabled (audit trail in UI, hidden from `search_memory`).
+- **No local memory files.** Only on-disk state is `./memory/.compile-state.json` (last compile attempt date).
+- **Recursion guard**: `CLAUDE_INVOKED_BY=memory_compile` prevents compile from triggering its own compile.
+- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or stopped MCP container all cause flush/compile/absorb to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
 
-But once the project grows, the wiki starts fighting you:
+## What gets saved
 
-- every file becomes another thing the model must remember to open
-- old decisions mix with new decisions
-- duplicate notes drift out of sync
-- exact symbols, file names, incidents, and architectural decisions become hard to retrieve
-- long-running agent sessions need a place to persist what happened before compaction or shutdown
+Two routes: **automatic distillation** (flush + compile) and **on-demand upserts** (absorb + save_to_dataset).
 
-At that point, you usually do not need more Markdown. You need a real local RAG system with chunk inspection, retrieval testing, hybrid search, reranking, durable storage, and MCP access. This boilerplate is the migration path from "small LLM wiki" to "project memory that can keep up."
+### Automatic atoms
 
-## What You Get
+Seven atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
 
-- A local Dify stack per project, isolated by Docker Compose project/container names.
-- Dify Knowledge UI for inspecting documents, chunks, embeddings, retrieval tests, and API keys.
-- Host-mounted persistence under `.memory/dify/`.
-- A deterministic MCP bridge that uses stdio, not another exposed host port.
-- Client snippets for Codex/OpenAI, Claude Desktop, Cursor, and generic MCP JSON.
-- Optional Claude Code hooks for `SessionStart`, `PreCompact`, `PostCompact`, and `SessionEnd`.
-- No copied runtime data, no copied secrets, and no hardcoded host paths.
-- A single copyable AI prompt designed for repeatable installs into future projects.
+| Type | Use when | Routes to |
+|---|---|---|
+| `decision` | "We chose X over Y because Z." Architectural or product choice with rationale. | `knowledge` |
+| `bug-root-cause` | The misleading symptom, the actual cause, and the trap to avoid. (Not the diff: that's in git.) | `knowledge` |
+| `feedback-rule` | A workflow rule the user gave you. Conventions, exit predicates, do/don't. | `knowledge` |
+| `project-lore` | Who's doing what, deadlines, integration quirks not in the code. Decays fast; atoms include dates. | `knowledge` |
+| `reference` | A pointer to a dashboard, runbook, or external project, with the reason to consult it. | `knowledge` |
+| `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. | `knowledge` |
+| `self-improvement-lesson` | NEGATIVE OR CORRECTIVE user feedback revealing a behaviour the AI should change next time. | `self_improvement` |
 
-## What It Looks Like
+### On-demand uploads
 
-The screenshot above is the Dify Knowledge UI that backs the project memory: visible datasets, document counts, indexing settings, retrieval testing, and a Service API key that the MCP bridge uses.
+Both use upsert-by-exact-name (delete-then-create): **same name → updated content; different name → new document**.
 
-Thanks to the Dify team and community for building the local-first RAG platform that makes this kind of inspectable project memory practical. This repo is only a thin project template and MCP bridge around that excellent foundation.
+| MCP tool | When | Naming + identity |
+|---|---|---|
+| `absorb_files(files[], dataset?, dryRun?)` | Index existing project docs (`docs/**/*.md`, `ARCHITECTURE.md`, RFCs). | `relative/path/with/slashes.md` becomes `relative_path_with_slashes.md`. Re-running overwrites the same Dify document. |
+| `save_to_dataset(dataset, name, text, metadata?)` | Save a plan, investigation, decision record, runbook. | The `name` IS the identity. Polishing the same `plan-auth-rewrite.md` later replaces the prior version. |
 
-## Copyable AI Install Prompt
+### MCP tools
 
-Copy this prompt into an AI agent when you want to install this boilerplate into a new project:
+| Tool | Purpose |
+|---|---|
+| `search_memory` | Retrieve scored chunks across configured datasets. Accepts `filters` (metadata) + `scoreThreshold` for precise, context-efficient recall. |
+| `recall_lessons` | "Look before you leap" entry point. Filters `self_improvement` by inferred task context with broadening fall-back; optionally pulls `bug-root-cause` + `feedback-rule` from `knowledge`. |
+| `get_memory_config` | Inspect bridge configuration without exposing secrets. |
+| `write_memory` / `update_memory` | Create-or-supersede a single document (low-level; compile uses `update_memory`). |
+| `save_to_dataset` | Upsert by exact name with optional `metadata` (durable-artefact path). |
+| `save_lesson` | Sugar over `save_to_dataset` for `self_improvement`; required `metadata.error_pattern` is the dedup key. |
+| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. |
+| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (`.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; user `ignore` patterns are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
+| `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
-```text
-Install the local Dify MCP memory boilerplate into this project.
-
-Target the current project directory unless I explicitly give you another target.
-
-First, determine the boilerplate Git URL. Use the URL of this GitHub repository if available. If you cannot see the repository URL, ask me for it before doing anything else.
-
-Then clone the boilerplate repository into a tracked temporary location:
-memory_boilerplate_repo_url="<confirmed-boilerplate-git-url>"
-tmp_dir="$(mktemp -d)"
-git clone "$memory_boilerplate_repo_url" "$tmp_dir/memory-boilerplate"
-
-Before installing, ask me for the project slug to use. Explain that this slug is needed to generate isolated Docker Compose, container, image, and MCP server names so multiple projects can run their own memory stacks without conflicts. The slug should be lowercase ASCII using only `a-z`, `0-9`, and `-`, for example `billing-api` or `docs-site`. If I provide a human project name instead of a slug, suggest a sanitized slug derived from the target project folder name or project name and ask for confirmation before installing. After install, read the exact `Memory MCP server` value printed by the installer and use that exact value in all later commands.
-
-Also ask whether I want to install active continuous memory hooks now. Explain that hooks can automatically capture SessionEnd, PreCompact, and PostCompact context into Dify once memory/.env is configured; before Dify is configured they skip cleanly. Claude Code hooks are supported directly, while other clients need hook support or can use MCP manually. Do not install active hook config unless I explicitly confirm. If I decline hooks, install the MCP memory stack only.
-
-Requirements:
-- Before installing, verify host prerequisites or tell me exactly what is missing: Docker with Docker Compose 2.24.4+ using `docker compose version`, git, curl, bash, standard Unix tools, `openssl` or `shasum`/`sha256sum`, Node.js 20+ for hooks/validation/smoke tests, Python 3.11+ for validation snippets, and network access to GitHub plus Docker/npm registries.
-- Do not copy real .memory data from any other project.
-- Do not copy memory/.env secrets from any other project.
-- Keep memory/vendor empty in the template; let memory/scripts/bootstrap.sh clone Dify at setup time.
-- Let the first bootstrap resolve the current Dify release and pin it in memory/.dify-version.
-- Preserve stdio MCP transport: docker exec -i <slug>-memory node src/index.js.
-- Do not introduce hardcoded host paths.
-- Install the template with project-specific names generated from the slug.
-- Ensure the project .gitignore ignores generated memory/.env, memory/vendor contents, and .memory/dify runtime data while keeping .keep placeholders.
-- Ask which MCP client(s) I want configured now: Codex/OpenAI, Claude Desktop, Cursor, or generic MCP JSON. Configure every confirmed client automatically when possible by merging the generated server entry from `.agents/mcp.json` or `.agents/clients/` into that client's existing config, preserving unrelated settings and never writing secrets into client config.
-- Install active hook config only if I confirmed hooks. If confirmed, pass `--install-hooks` and validate `.agents/hooks.json` plus `.claude/settings.json`; otherwise do not create those active hook files.
-- If Codex/OpenAI was selected and the `codex` CLI is available, register MCP with: codex mcp add <actual-memory-server-name> -- docker exec -i <actual-memory-server-name> node src/index.js.
-- For Claude Desktop, Cursor, or another MCP client, ask for the config file path if it is not discoverable from the current environment. If no writable config path is available or I decline config edits, print the matching generated snippet from `.agents/clients/` or `./memory/scripts/mcp-config.sh` as the explicit fallback.
-- If hooks were confirmed, tell me exactly which hook files were installed and that no extra manual hook setup is needed for Claude Code. For non-Claude hook-capable clients, print the event-to-script mapping from `memory/README.md`.
-- Run the exact syntax/config validation checks listed below after install.
-- Start the stack with ./memory/scripts/up.sh.
-- Print the Dify UI URL from ./memory/scripts/ui-url.sh.
-- Tell me exactly which values I need to add to memory/.env after creating the Dify Knowledge API key and dataset IDs in the UI.
-
-Installation command shape:
-"$tmp_dir/memory-boilerplate/install.sh" <target-project-dir> --slug <confirmed-slug>
-
-If I confirmed hooks, use this command shape instead:
-"$tmp_dir/memory-boilerplate/install.sh" <target-project-dir> --slug <confirmed-slug> --install-hooks
-
-Validation commands to run from the target project after install:
-python3 -m json.tool .agents/mcp.json >/dev/null
-python3 -m json.tool .agents/clients/generic-mcp.json >/dev/null
-python3 -m json.tool .agents/clients/claude-desktop.json >/dev/null
-python3 -m json.tool .agents/clients/cursor.json >/dev/null
-python3 - <<'PY'
-import tomllib
-with open('.agents/clients/openai-codex.toml', 'rb') as f:
-    tomllib.load(f)
-PY
-bash -n memory/scripts/*.sh memory/scripts/hooks/*.sh
-node --check memory/mcp-server/src/dify.js
-node --check memory/mcp-server/src/index.js
-node --check memory/mcp-server/src/ingest-session.js
-node --check memory/scripts/hooks/session-memory-hook.mjs
-node --check memory/scripts/hooks/session-start.mjs
-./memory/scripts/mcp-config.sh all
-
-If hooks were confirmed and installed, also run:
-python3 -m json.tool .agents/hooks.json >/dev/null
-python3 -m json.tool .claude/settings.json >/dev/null
-
-After I configure memory/.env, restart the MCP bridge with the exact memory server name printed by the installer, then validate with:
-./memory/scripts/up.sh <actual-memory-server-name>
-./memory/scripts/mcp-smoke.sh
-```
-
-The installed project layout is:
-
-```text
-memory/              stack scripts, MCP bridge, Dify compose override
-.memory/             host-mounted Dify runtime data, created per project
-.agents/             universal MCP config and client adapter snippets
-.agents/hooks.json   optional hook manifest, only installed with --install-hooks
-.claude/settings.json optional Claude Code hook adapter, only installed with --install-hooks
-```
-
-No real Dify data is included in this boilerplate. The template contains only `.memory/dify/.keep`. The installed `memory/vendor/` directory is also empty except for `.keep`; `./memory/scripts/bootstrap.sh` resolves the current Dify release on first bootstrap, writes the chosen tag to `memory/.dify-version`, and clones that pinned release into `memory/vendor/dify`.
-
-## Prerequisites
-
-The runtime stack is Dockerized, but the installer, validation scripts, and optional hooks still need a few host tools:
-
-- Docker with Docker Compose 2.24.4 or newer. The compose override uses `!override` and `!reset`, so validate with `docker compose version`.
-- `git` and `curl` so bootstrap can resolve and clone Dify.
-- `bash` for the installer and helper scripts.
-- Standard Unix tools: `sed`, `awk`, `grep`, `find`, `mktemp`, `cmp`, `tail`, `chmod`, and `cp`.
-- `openssl`, `shasum`, or `sha256sum` for local secret generation during bootstrap.
-- Node.js 20+ for hook entrypoints, MCP source validation, and `mcp-smoke.sh`.
-- Python 3.11+ for the README validation snippets.
-- Network access to GitHub, Docker registries, and the npm registry during first bootstrap/build.
-
-If hooks are not installed, Node is still useful for validation and smoke checks, while the MCP bridge itself runs inside Docker.
-
-## Install Into A Project
-
-From this boilerplate repo:
+## Updates
 
 ```bash
-./install.sh /path/to/project --slug project-slug
+cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
+./memory/scripts/up.sh memory_mcp   # recreate the bridge so it picks up env changes
 ```
 
-To install active continuous-memory hooks at the same time:
+Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
+
+### Merge contract
+
+| File class | Behaviour on re-run |
+|---|---|
+| **Mixed-content** (`.claude/settings.json`, `.agents/{hooks,mcp}.json`, `.mcp.json`) | Structurally merged via `scripts/merge-config.mjs` (pure Node, no `jq`). Your existing entries (your own MCP servers, your own hook commands, your `permissions`, your `model`, anything else at the top level) pass through verbatim. Only entries whose `command` carries the boilerplate's signature (`"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/...`) are stripped and re-installed; for `.mcp.json`, only the `<slug>-memory` server entry is owned by the boilerplate. Re-runs are byte-stable when nothing changes. |
+| **Owned-only** (`.agents/clients/*`, `.agents/mcp/<server>.mcp.json`, `.agents/README.md`) | 100% generated by the boilerplate. Bootstrap REFUSES to overwrite if you have edited them: prints a conflict list and exits non-zero. Either delete the file then re-run, or move your edits elsewhere. |
+| **Skill / rule files** (`.claude/skills/*.md`, `.agents/rules/*.md`) | Always overwritten on re-run; treat them as canonical from the boilerplate. |
+
+### What gets committed
+
+| Path | Tracked | Why |
+|---|---|---|
+| `/memory` | **No** | The cloned boilerplate has its own `.git`. |
+| `/.memory` | **No** | Host-mounted Dify runtime data. |
+| `/.agents`, `/.claude/settings.json`, `/.mcp.json` | **Yes** | Per-project agent config: vendor-neutral hooks/MCP + Claude Code hooks + project-scope MCP server registration. |
+| `memory/.env` | **No** | Contains your Dify API key. |
+| `memory/.compile-state.json`, `memory/.compile.lock` | **No** | One-line ops state / transient lockfile. Not memory. |
+
+> **Upgrading from a pre-`pwd -P` checkout (one-time):** if you cloned into a path with a symlink in it (common on macOS with iCloud-synced `~/Documents`, or Linux dev VMs with bind-mounted project trees) AND ran the boilerplate before scripts standardised on `pwd -P`, the next `up.sh` after `git pull` resolves `MEMORY_DATA_DIR` to the **physical** path. Docker treats that as a different bind source, so existing Dify storage volumes appear empty (your data is still on disk under the old, symlink-form path). Run `./memory/scripts/migrate-persistent-data.sh` once to copy state into the resolved location, then `./memory/scripts/up.sh`. Fresh installs are unaffected.
+
+## Client config
+
+Generated client snippets live under `.agents/clients/` after bootstrap:
 
 ```bash
-./install.sh /path/to/project --slug project-slug --install-hooks
+./memory/scripts/mcp-config.sh all              # print every client snippet
+./memory/scripts/mcp-config.sh codex            # | claude-desktop | cursor
 ```
-
-If you omit `--slug`, the installer derives it from the target directory name. The slug is used to generate isolated names:
-
-```text
-project-slug-memory
-project-slug-memory-stack
-project-slug-memory-mcp:local
-```
-
-This prevents container and Docker Compose conflicts across projects.
-
-The installer refuses to overwrite existing different files. Hook config is opt-in: `.agents/hooks.json` and `.claude/settings.json` are only installed when `--install-hooks` is passed. For projects that already have `.agents/` or `.claude/settings.json`, merge manually or move conflicting files first.
-
-The installer also appends idempotent entries to the target project's root `.gitignore` so generated secrets, cloned Dify vendor files, and `.memory/dify` runtime data are not accidentally committed. `memory/.dify-version` is intentionally not ignored; commit it when you want every machine to use the same Dify release.
-
-## Client Support
-
-The template is not Claude-only. The installed `.agents/` folder is the canonical source for agent/client configuration:
-
-```text
-.agents/mcp.json                         canonical MCP server JSON
-.agents/mcp/<slug>-memory.mcp.json       per-server snippet
-.agents/clients/generic-mcp.json         generic MCP JSON
-.agents/clients/claude-desktop.json      Claude Desktop snippet
-.agents/clients/cursor.json              Cursor snippet
-.agents/clients/openai-codex.toml        Codex/OpenAI TOML snippet
-.agents/hooks.json                       optional hook manifest, only with --install-hooks
-```
-
-Use the helper to print client-specific config from the installed project:
-
-```bash
-./memory/scripts/mcp-config.sh all
-./memory/scripts/mcp-config.sh codex
-./memory/scripts/mcp-config.sh claude-desktop
-./memory/scripts/mcp-config.sh cursor
-```
-
-Codex/OpenAI can be registered directly:
-
-```bash
-codex mcp add project-slug-memory -- docker exec -i project-slug-memory node src/index.js
-```
-
-When `--install-hooks` is used, Claude Code hooks are mirrored into `.claude/settings.json` because Claude Code expects that project settings file. Other clients can still use the MCP tools even if they do not support hook events.
-
-## Start The Stack
-
-In the target project:
-
-```bash
-./memory/scripts/up.sh
-./memory/scripts/ui-url.sh
-```
-
-On first run, `up.sh` resolves the current Dify release and pins it in `memory/.dify-version`. Later restarts reuse that version instead of silently upgrading against existing `.memory/dify` database/vector data. Open the printed Dify UI URL, create the admin account/workspace, configure embedding/reranker providers, and create one or more Knowledge bases.
-
-## Configure Dify API Access
-
-In Dify:
-
-1. Open `Knowledge`.
-2. Create the Knowledge base that should receive session memory.
-3. Open `Service API`.
-4. Create/copy the Knowledge API key.
-5. Copy dataset IDs for the Knowledge bases you want available through MCP.
-
-Then edit `memory/.env` in the target project:
-
-```bash
-DIFY_KNOWLEDGE_API_KEY=...
-DIFY_DATASET_IDS=dataset-uuid-1,dataset-uuid-2
-DIFY_WRITE_DATASET_ID=session-memory-dataset-uuid
-```
-
-Restart only the MCP bridge:
-
-```bash
-./memory/scripts/up.sh project-slug-memory
-```
-
-Validate:
-
-```bash
-./memory/scripts/mcp-smoke.sh
-```
-
-## MCP Transport
-
-The MCP bridge uses stdio. It does not open a host port.
-
-MCP clients launch:
-
-```bash
-docker exec -i project-slug-memory node src/index.js
-```
-
-Then they exchange JSON-RPC over stdin/stdout. Dify itself is reached from inside Docker at `http://api:5001/v1`.
-
-For Claude Desktop, Cursor, or a generic MCP client, merge the generated `.agents/mcp.json` server or the matching `.agents/clients/` snippet into that client's MCP config.
 
 For Codex/OpenAI:
 
 ```bash
-codex mcp add project-slug-memory -- docker exec -i project-slug-memory node src/index.js
+codex mcp add <project-slug>-memory -- docker exec -i <project-slug>-memory node src/index.js
 ```
 
-Or install and register in one step:
+For Claude Desktop, Cursor, or generic MCP clients, merge `.agents/mcp.json` (or the matching `.agents/clients/<client>` snippet) into your client's MCP config. Do not paste API keys into client configs; they live only in `memory/.env`.
+
+When `--install-hooks` is on (default), `.claude/settings.json` is rendered with the four lifecycle events wired to `./memory/scripts/hooks/`. Other clients can adapt `.agents/hooks.json` to their own hook format; see [STACK.md](STACK.md) for the event-to-script table.
+
+### Skills + rules
+
+`bootstrap.sh` renders every `templates/skills/*.md` into BOTH:
+
+- `.claude/skills/<name>.md` (only when `--install-hooks`): Claude Code's project skills directory; auto-loaded.
+- `.agents/rules/<name>.md` (always): vendor-neutral. Cursor / Codex / generic clients can import from here.
+
+Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract).
+
+## Hook reference
+
+| Event | Script | Effect |
+|---|---|---|
+| `SessionStart` | `scripts/hooks/session-start.mjs` | Emits an `additionalContext` reminder; lazily spawns compile in the background once per UTC day. |
+| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
+| `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
+| `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
+
+Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
+
+## Verification
+
+Each tier lists its prereqs; stop at the latest one your environment can satisfy.
 
 ```bash
-./install.sh /path/to/project --slug project-slug --register-codex
+# Tier 1 — Static. Requires: bootstrap.sh only. No Docker, no LLM.
+bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
+node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
+node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
+
+# Tier 2 — Hermetic unit tests. Requires: node 20+.
+( cd ./memory && npm test )
+# (`npm test` invokes `node --test test/*.test.mjs` from inside ./memory/,
+# so the glob is expanded against ./memory/test/. Running it from the parent
+# would fail because the glob expands BEFORE the cd.)
+
+# Tier 3 — Stack health. Requires: up.sh has been run.
+./memory/scripts/ps.sh
+./memory/scripts/ui-url.sh
+
+# Tier 4 — End-to-end MCP smoke. Requires: up.sh + dify-setup.sh + DIFY_KNOWLEDGE_API_KEY + ≥1 dataset bound.
+# Read-only by design: initialize, get_memory_config, plain + filtered search_memory,
+# recall_lessons round-trip with a deliberately-no-match query. Fails with a
+# "Run dify-setup.sh" hint if any prereq is missing.
+./memory/scripts/mcp-smoke.sh
+
+# Tier 5 — Entry-point smoke. Requires: bootstrap only.
+# Without bridge + slots + LLM provider, both scripts SKIP gracefully (stderr, exit 0).
+# That's the property we verify here: hooks never block the user's session.
+echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"Decision: Dify is the canonical store for project memory."}' \
+  | ./memory/scripts/hooks/post-compact.sh
+node ./memory/scripts/compile.mjs --dry-run
+
+# Tier 6 — Direct CLI checks. Requires: bridge container running.
+# Verify the metadata schema is installed on the self_improvement slot.
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
+  node src/memory-cli.js list-metadata-fields --datasetId self_improvement
+# expect doc_metadata to include atom_type, tags, project_module,
+# language, task_type, error_pattern.
+
+# Filtered search smoke against the self_improvement slot.
+# (RETRIEVES only; pair with a save_lesson MCP call from your agent for a
+# true save -> recall round-trip.)
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
+  node src/memory-cli.js search --datasetId self_improvement \
+  --query "smoke" --filters '{"atom_type":"self-improvement-lesson"}'
 ```
 
-## Continuous Memory Hooks
+If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.
 
-Hooks are opt-in. Install them during setup with:
-
-```bash
-./install.sh /path/to/project --slug project-slug --install-hooks
-```
-
-The hook-enabled install creates:
+## Repository layout (cloned `./memory/`)
 
 ```text
-.agents/hooks.json
-.claude/settings.json
+memory/
+├── bootstrap.sh                # render project-root files; idempotent
+├── compose.mcp.yaml            # Docker Compose override for the MCP bridge
+├── .env.example                # template for memory/.env
+├── scripts/
+│   ├── up.sh, down.sh, ps.sh   # stack lifecycle
+│   ├── ui-url.sh               # discover the host UI port
+│   ├── dify-bootstrap.sh       # resolve + pin Dify version, clone vendor
+│   ├── dify-setup.sh           # interactive dataset binding + metadata
+│   │                           # schema installer + absorb wizard
+│   ├── mcp-config.sh           # print client snippets
+│   ├── mcp-smoke.sh            # JSON-RPC smoke against the bridge
+│   ├── compile.mjs             # daily -> knowledge / self_improvement
+│   │                           # promotion (per-atom-type routing,
+│   │                           # metadata-filtered dedup-merge)
+│   ├── merge-config.mjs        # CLI used by bootstrap.sh to structurally
+│   │                           # merge our hooks/MCP entries into the
+│   │                           # user's existing config without losing
+│   │                           # user content
+│   ├── lib/{env,llm,dify-write,redact,slug,datasets,lock,merge-config}.mjs
+│   └── hooks/
+│       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
+│       ├── pre-compact.sh            # -> flush.mjs pre-compact
+│       ├── post-compact.sh           # -> flush.mjs post-compact
+│       ├── session-end.sh            # -> flush.mjs session-end
+│       └── flush.mjs                 # shared extractor (incl. self-
+│                                     # improvement-lesson type + metadata)
+├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
+├── mcp-server/src/{index,dify,memory-cli,glob,slug}.js
+├── templates/
+│   ├── agents/                       # rendered to <project>/.agents/
+│   ├── claude/settings.json          # rendered to <project>/.claude/
+│   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
+│   └── gitignore.append              # appended to <project>/.gitignore
+└── vendor/dify/                # cloned at first dify-bootstrap
+
+# Memory is stored entirely in Dify, organised by named slot, named:
+#   daily-<YYYY-MM-DD-HHMMSSmmm>.md             (one per flush event, daily slot)
+#   knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md  (one per deduped fact, knowledge slot)
+#   lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md     (one per deduped lesson, self_improvement slot)
 ```
 
-Those files configure Claude Code hooks:
-
-```text
-SessionStart
-PreCompact
-PostCompact
-SessionEnd
-```
-
-`PreCompact`, `PostCompact`, and `SessionEnd` write directly into Dify through the MCP bridge container. They do not create session-note sidecar files. `SessionStart` injects a short reminder that project memory is available through MCP.
-
-Until `memory/.env` contains a Knowledge API key and write dataset ID, write hooks skip cleanly and print the missing configuration. After Dify is configured, upload/API failures are surfaced as real hook errors.
-
-Hook-created Dify documents use the `conversation` process-rule preset by default:
-
-```text
-separator: "\n\n### "
-max_tokens: 700
-chunk_overlap: 120
-remove_extra_spaces: true
-remove_urls_emails: false
-```
-
-Tune these in target `memory/.env`:
-
-```bash
-DIFY_SESSION_PROCESS_RULE_PRESET=conversation
-DIFY_SESSION_PROCESS_RULE_JSON=
-MEMORY_HOOK_MAX_TURNS=30
-MEMORY_HOOK_MAX_CHARS=80000
-MEMORY_HOOK_SESSION_END_MIN_TURNS=1
-MEMORY_HOOK_PRECOMPACT_MIN_TURNS=5
-```
-
-## What Not To Commit
-
-Do not commit generated secrets unless you intentionally want them in the project repository:
-
-```text
-memory/.env
-memory/vendor/dify/
-```
-
-`.memory/dify/` contains real Dify runtime data: Postgres, vector index, uploaded files, plugin state, and Redis data. Commit or back it up only if you intentionally want to preserve that local memory state in the repository.
-
-The generated stack pins the default local Dify profile to Postgres plus Weaviate and bind-mounts that runtime state under `.memory/dify/`. If you intentionally change Dify to another vector store or external database, add matching bind mounts or external backups before relying on the same persistence guarantee.
+For deeper Dify configuration, knowledge-base creation, retrieval tuning, persistence, and troubleshooting, see [STACK.md](STACK.md).

@@ -1,0 +1,56 @@
+# Force LF line endings on every text file shipped with the boilerplate.
+#
+# WHY: Git for Windows defaults to `core.autocrlf=true`, which rewrites
+# text files to CRLF on checkout. A CRLF in `#!/usr/bin/env bash` makes
+# the kernel look for an interpreter literally named `bash\r`, which
+# does not exist — every shipped script then fails with
+#   /usr/bin/env: 'bash\r': No such file or directory
+# under WSL (and silently misbehaves under Git Bash with surprising
+# mid-script errors). The same concern applies to .mjs files invoked via
+# `#!/usr/bin/env node` and to compose.mcp.yaml + Dockerfile parsed by
+# Docker. Forcing eol=lf via .gitattributes overrides the user's
+# autocrlf setting for these paths and makes the Windows install path
+# the README advertises actually work.
+#
+# Add new extensions here whenever a new shipped text file shape arrives
+# (e.g. *.toml, *.ini). Binary files MUST be marked `binary` so Git
+# does not try to convert them.
+
+* text=auto eol=lf
+
+# Shell + Node scripts (executed as text)
+*.sh text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+
+# Configuration formats
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.env text eol=lf
+.env.example text eol=lf
+.dockerignore text eol=lf
+.gitignore text eol=lf
+
+# Docs + prompts
+*.md text eol=lf
+*.markdown text eol=lf
+*.txt text eol=lf
+
+# Container assets
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+
+# Binary catch-alls (do NOT touch)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tgz binary

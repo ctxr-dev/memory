@@ -1,0 +1,94 @@
+services:
+  init_permissions:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/app/storage:/app/api/storage
+
+  api:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/app/storage:/app/api/storage
+
+  worker:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/app/storage:/app/api/storage
+
+  db_postgres:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/db/data:/var/lib/postgresql/data
+
+  redis:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/redis/data:/data
+
+  sandbox:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/sandbox/dependencies:/dependencies
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/sandbox/conf:/conf
+
+  plugin_daemon:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/plugin_daemon:/app/storage
+    ports: !reset []
+
+  nginx:
+    volumes: !override
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/nginx.conf.template:/etc/nginx/nginx.conf.template
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/proxy.conf.template:/etc/nginx/proxy.conf.template
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/https.conf.template:/etc/nginx/https.conf.template
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/conf.d:/etc/nginx/conf.d
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/docker-entrypoint.sh:/docker-entrypoint-mount.sh
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/nginx/ssl:/etc/ssl
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/conf/live:/etc/letsencrypt/live
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/conf:/etc/letsencrypt
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/www:/var/www/html
+
+  certbot:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/conf:/etc/letsencrypt
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/www:/var/www/html
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/logs:/var/log/letsencrypt
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/certbot/conf/live:/etc/letsencrypt/live
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/certbot/update-cert.template.txt:/update-cert.template.txt
+      - ${DIFY_DOCKER_DIR:?Set DIFY_DOCKER_DIR via memory/scripts/lib.sh}/certbot/docker-entrypoint.sh:/docker-entrypoint.sh
+
+  weaviate:
+    volumes: !override
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via memory/scripts/lib.sh}/dify/weaviate:/var/lib/weaviate
+
+  memory_mcp:
+    build:
+      context: ${MEMORY_DIR:?Set MEMORY_DIR via memory/scripts/up.sh}
+      dockerfile: mcp-server/Dockerfile
+    image: ${MCP_IMAGE_NAME:?Set MCP_IMAGE_NAME via memory/.env (bootstrap.sh writes it)}
+    container_name: ${MCP_CONTAINER_NAME:?Set MCP_CONTAINER_NAME via memory/.env (bootstrap.sh writes it)}
+    command: ["sleep", "infinity"]
+    restart: unless-stopped
+    volumes:
+      - ${WORKSPACE_DIR:?Set WORKSPACE_DIR via memory/scripts/lib.sh}:/workspace:ro
+    # env_file forwards every line of memory/.env into the container, so any
+    # DIFY_DATASET_<NAME>_ID line the user adds is auto-propagated. The
+    # `environment:` block below only enumerates entries that need a default
+    # or have to be derived from compose-side state.
+    env_file:
+      - ${MEMORY_ENV:?Set MEMORY_ENV via memory/scripts/lib.sh}
+    environment:
+      DIFY_API_URL: ${DIFY_API_URL:-http://api:5001/v1}
+      DIFY_FLUSH_DATASET: ${DIFY_FLUSH_DATASET:-daily}
+      DIFY_COMPILE_DATASET: ${DIFY_COMPILE_DATASET:-knowledge}
+      DIFY_ABSORB_DEFAULT_DATASET: ${DIFY_ABSORB_DEFAULT_DATASET:-knowledge}
+      DIFY_SESSION_INDEXING_TECHNIQUE: ${DIFY_SESSION_INDEXING_TECHNIQUE:-high_quality}
+      DIFY_SESSION_DOC_FORM: ${DIFY_SESSION_DOC_FORM:-text_model}
+      DIFY_SESSION_DOC_LANGUAGE: ${DIFY_SESSION_DOC_LANGUAGE:-English}
+      DIFY_SESSION_PROCESS_RULE_PRESET: ${DIFY_SESSION_PROCESS_RULE_PRESET:-conversation}
+      MCP_MEMORY_MAX_RESULTS: ${MCP_MEMORY_MAX_RESULTS:-8}
+      MCP_MEMORY_TIMEOUT_MS: ${MCP_MEMORY_TIMEOUT_MS:-20000}
+      WORKSPACE_MOUNT: /workspace
+      ABSORB_MAX_FILE_BYTES: ${ABSORB_MAX_FILE_BYTES:-500000}
+    depends_on:
+      # service_healthy waits for api's /health endpoint (defined in upstream
+      # Dify compose). Without this, the bridge container is "started"
+      # immediately while api is still booting, and the first MCP tool call
+      # (or scripts/dify-setup.sh) gets connection-refused for 30-60s.
+      api:
+        condition: service_healthy
+    networks:
+      - default
