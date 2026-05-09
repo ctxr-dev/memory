@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A local Dify Knowledge stack for high-precision RAG, a stdio MCP bridge for every modern agent client, a two-stage <code>flush + compile</code> pipeline that distils sessions into typed atoms instead of dumping transcripts, and a dedicated <code>self_improvement</code> dataset where the agent records every correction you give it — and looks up the lesson before related work, so it stops making the same mistake twice.
+  A local Dify Knowledge stack for high-precision RAG, a stdio MCP bridge for every modern agent client, a two-stage <code>flush + compile</code> pipeline that distils sessions into typed atoms instead of dumping transcripts, and a dedicated <code>self_improvement</code> dataset where the agent records every correction you give it (and looks up the lesson before related work, so it stops making the same mistake twice).
 </p>
 
 <p align="center">
@@ -40,33 +40,42 @@
 
 ## Why this exists
 
-Every agent loop produces a few decisions, a few bug root causes, and a lot of noise. Dumping raw transcripts into a vector store turns that signal-to-noise problem into an embedding-space problem: at scale, retrieval surfaces the noise.
+Dumping raw transcripts into a vector store turns a signal-to-noise problem into an embedding-space problem: at scale, retrieval surfaces the noise.
 
 This boilerplate replaces the dump with a two-stage pipeline:
 
-1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default, Codex as alternative, or Anthropic/OpenAI APIs) to extract a small set of typed atoms from the recent transcript: decisions, bug root causes, feedback rules, project lore, references, patterns/gotchas. The atoms are written to Dify as one document named `daily-<YYYY-MM-DD-HHMMSSmmm>.md` per flush event, easy to scan chronologically in the Dify UI.
-2. **Compile.** The first `SessionStart` of a new UTC day spawns `compile.mjs` in the background. It lists enabled `daily-*.md` documents from Dify, parses the atoms, queries Dify for near-duplicate `knowledge-*.md` documents, and asks the LLM whether to **create**, **update** (supersede the existing knowledge doc), or **skip**. Surviving atoms become `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents. Source `daily-*.md` documents are then disabled (kept in the UI for audit, hidden from search).
+1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default; Codex, Anthropic, or OpenAI also supported) to extract typed atoms (decisions, bug root causes, feedback rules, lore, references, gotchas) into one `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document per flush.
+2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It reads enabled `daily-*.md` docs, dedup-merges atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip), then disables the source dailies (kept for audit, hidden from search).
 
-Result: most sessions contribute 0–3 small atoms, dedup-merged across history, with metadata and tags that make retrieval boringly correct.
+Most sessions contribute 0 to 3 small atoms, dedup-merged across history, with metadata that makes retrieval boringly correct.
 
 ## Install
 
-The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates. Two flows: install it yourself, or have an agent drive it.
+The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates. Two phases, drive each manually or via an AI prompt:
+
+| Phase | What it does | Manual | AI-driven |
+|---|---|---|---|
+| **1. Host install** | clone, render configs, start Docker stack | [Manual install](#manual-install) | [🤖 AI-driven install](#-ai-driven-install) |
+| **2. Dify onboarding** *(after MCP-client restart)* | API key, dataset slots, metadata schema, optional doc absorb | [Manual flow](#manual-flow) | [🤖 AI-driven flow](#-ai-driven-flow) |
+
+> **Why two prompts?** The MCP server only becomes callable AFTER your client (Claude Desktop, Cursor, Codex) restarts to pick it up. Phase 2 uses MCP tools (`list_datasets`, `create_dataset`, `absorb_files`, ...) that don't exist before that restart, so it can't share a session with Phase 1. Run Phase 1, restart your client, then run Phase 2.
 
 ### Prerequisites
 
 - Docker Desktop 4.x+ with Docker Compose 2.24.4+
-- Node 20+ (used at install AND runtime — no `jq` or other extras needed)
+- Node 20+ (used at install AND runtime; no `jq` or other extras needed)
 - bash 3.2+, plus standard POSIX utilities (`awk`, `sed`, `grep`, `find`, `mktemp`, `tr`, `cut`)
 - `git`, `curl`
 
-**Cross-platform:** macOS and Linux are first-class. **Windows works via WSL2 or Git Bash** — bootstrap is bash-only and the install scripts intentionally avoid `jq`, `realpath`, `gsed`, or any other non-portable binary so a Git Bash shell with Docker Desktop is sufficient. Docker bind-mount path translation is handled by Docker Desktop itself.
+**Cross-platform:** macOS and Linux are first-class. **Windows works via WSL2 or Git Bash:** bootstrap is bash-only and intentionally avoids `jq`, `realpath`, `gsed`, or any other non-portable binary.
 
-Windows-specific gotchas:
+<details>
+<summary>Windows-specific gotchas</summary>
 
-- **Line endings**: the repo ships `.gitattributes` forcing LF on every shell + Node + config file. If you cloned with `core.autocrlf=true` (Git for Windows default) BEFORE these directives existed locally, run `git add --renormalize . && git checkout .` to fix any CRLF in your working tree, otherwise `bash` will choke on `#!/usr/bin/env bash\r`.
-- **Docker Desktop file sharing**: in Docker Desktop → Settings → Resources, ensure the drive (Windows non-WSL) or the WSL2 distro (WSL2 path) that contains your project is enabled for file sharing. Without this, the `${WORKSPACE_DIR}:/workspace:ro` bind in `compose.mcp.yaml` mounts an empty directory and `scan_documents` / `absorb_files` will see no source files.
-- **Symlinks**: the repo intentionally ships zero symlinks; do not introduce any locally without enabling Windows Developer Mode (or accept that Git will substitute a 1-line text file for the symlink target).
+- **Line endings**: the repo ships `.gitattributes` forcing LF on shell + Node + config files. If you cloned with `core.autocrlf=true` (Git for Windows default) BEFORE these directives existed locally, run `git add --renormalize . && git checkout .` to fix any CRLF in your working tree, otherwise `bash` will choke on `#!/usr/bin/env bash\r`.
+- **Docker Desktop file sharing**: under Docker Desktop → Settings → Resources, enable the drive (non-WSL) or the WSL2 distro that contains your project. Without this, the workspace bind mounts empty and `scan_documents` / `absorb_files` see no source files.
+- **Symlinks**: the repo ships zero symlinks; do not introduce any locally without enabling Windows Developer Mode (or accept that Git will substitute a 1-line text file for the symlink target).
+</details>
 
 ### Manual install
 
@@ -81,26 +90,15 @@ git clone https://github.com/ctxr-dev/memory ./memory
                           # at the end.
 ```
 
-`bootstrap.sh` will:
+`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `memory/.env` from the template.
 
-- Render `.agents/` (vendor-neutral; for Cursor / Codex / Claude Desktop / generic MCP clients) and — when `--install-hooks` is on (default) — also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, Claude Code's `/mcp` command does NOT see the new memory server even when the bridge container is up). **Existing files are structurally merged, never overwritten:** if you already have hooks, MCP servers, or permissions configured, your entries pass through verbatim and only our entries are added or refreshed. The merge is implemented in `scripts/lib/merge-config.mjs` (pure Node, no `jq`); re-runs are byte-stable when nothing changes.
-- Append the boilerplate block to your project `.gitignore` (so `/memory` and `/.memory` are ignored). Idempotent: a marker line guards re-runs.
-- Detect available LLM CLIs (`claude` first, then `codex`) and ask which one to use for distillation; falls back to `anthropic` / `openai` when an API key is set.
-- Create `memory/.env` from the template, injecting your slug. **Re-runs never touch `memory/.env`.**
+**Existing config files are structurally merged, never overwritten:** your hooks, MCP servers, and permissions all pass through verbatim and only boilerplate-owned entries are added or refreshed (see [Updates → Merge contract](#merge-contract)). Re-runs leave `memory/.env` untouched.
 
-After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-driven, see [Onboarding](#onboarding)):
-
-```bash
-./memory/scripts/dify-setup.sh   # paste API key, bind/create slots, install metadata
-./memory/scripts/mcp-smoke.sh    # ONLY valid AFTER dify-setup binds slots; otherwise
-                                 # exits non-zero with a "Run dify-setup.sh" hint.
-```
-
-That is the entire install. The wizard handles the API key, the five default dataset slots (`daily`, `knowledge`, `plans`, `investigations`, `self_improvement`), the per-document metadata schema on each slot, and an optional first-pass absorb of your existing project documentation.
+After the stack is up, finish wiring with the [onboarding wizard](#manual-flow) (or the [AI-driven flow](#-ai-driven-flow)).
 
 ### 🤖 AI-driven install
 
-This is the FIRST of two AI prompts shipped with the boilerplate. It covers the host-side install only (clone, bootstrap, docker stack up). The SECOND prompt — under [Onboarding § AI-driven flow](#-ai-driven-flow) — wires Dify datasets via MCP tools AFTER the install. They're separate because most MCP clients (Claude Desktop, Cursor, Codex) need a restart to pick up the new memory server, so the same agent session can't span both phases. Run this prompt first, restart your client when it tells you to, then paste the onboarding prompt.
+> **Phase 1 of 2.** Host-side install only (clone, bootstrap, docker stack up). Run [Phase 2](#-ai-driven-flow) AFTER the stack is up AND your MCP client restarts.
 
 Paste this prompt into your agent (Claude Code, Cursor, Codex) running inside the target project root:
 
@@ -160,20 +158,17 @@ Steps:
 Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
 ```
 
-The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboarding)) finishes the Dify-side wiring after the stack is up.
-
 ## Onboarding
 
-`dify-setup.sh` is a re-runnable wizard. Once Dify is up and you have admin/embedding configured in the UI, it asks at most four kinds of questions:
+`dify-setup.sh` is a re-runnable wizard. Once Dify is up and you've configured an embedding model under **Settings → Model Provider** in the UI, it asks at most:
 
-1. **`DIFY_KNOWLEDGE_API_KEY`** — paste it now (or skip if you already added it to `memory/.env`).
-2. **For each dataset slot** declared in `memory/.env` (every `DIFY_DATASET_<NAME>_ID=` line is one slot; defaults are `daily, knowledge, plans, investigations, self_improvement`):
-   - Auto-create a Dify dataset with that exact name (high_quality + hybrid_search by default — full-text + vector indexes both populated) and bind its id to `DIFY_DATASET_<NAME>_ID`.
-   - Or paste an existing dataset id you want to re-use.
-   - Or skip the slot.
-3. **Metadata schema** — for every bound slot, the wizard installs the six per-document metadata fields (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) and offers to enable Dify's built-in fields (`document_name`, `upload_date`, `last_update_date`).
-4. **Bridge restart** — the wizard restarts the MCP bridge so the new env propagates.
-5. **Absorb existing docs?** — optional. Scans the workspace for matching files, lets you pick which ones go into which slot (defaults to `knowledge`), then upserts each as a Dify document with name = relative path with `/` replaced by `_` (e.g. `docs/auth/jwt.md` becomes `docs_auth_jwt.md`). Re-running the absorb later overwrites the same doc instead of duplicating.
+1. **`DIFY_KNOWLEDGE_API_KEY`**: paste it (or skip if already in `memory/.env`).
+2. **For each dataset slot** (every `DIFY_DATASET_<NAME>_ID=` line in `memory/.env`; defaults: `daily, knowledge, plans, investigations, self_improvement`): auto-create with that name (high_quality + hybrid_search), paste an existing id, or skip.
+3. **Metadata schema**: installs the six per-document fields (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) on every bound slot, plus optional Dify built-ins (`document_name`, `upload_date`, `last_update_date`).
+4. **Bridge restart**: propagates new env to the MCP bridge.
+5. **Absorb existing docs?**: optional. Scans the workspace, picks files into slots (default `knowledge`), upserts each as `relative_path_with_underscores.md`. Re-running overwrites instead of duplicating.
+
+Add a slot later by appending a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` and re-running `dify-setup.sh`; it only asks about new slots.
 
 ### Manual flow
 
@@ -185,19 +180,18 @@ The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboa
 ./memory/scripts/mcp-smoke.sh    # validate
 ```
 
-Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` (e.g. `DIFY_DATASET_RUNBOOKS_ID=`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot. After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines:
+After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines:
 
 ```bash
-./memory/scripts/up.sh memory_mcp   # rebuilds + recreates only the bridge service.
-                                    # Bridge image is small (npm ci + COPY src);
-                                    # rebuild is typically under 10 seconds.
+./memory/scripts/up.sh memory_mcp   # rebuilds + recreates only the bridge service
+                                    # (small image, typically <10s)
 ```
 
-(Note: a raw `docker compose ... up -d memory_mcp` from the workspace root would fail because Docker Compose can't find `docker-compose.yaml` there. The `./memory/scripts/` wrappers add the correct `-f compose.mcp.yaml` and `-f vendor/dify/docker/docker-compose.yaml` flags via `scripts/lib.sh`.)
+(A raw `docker compose ... up -d memory_mcp` from the workspace root would fail because Docker Compose can't find `docker-compose.yaml` there; the `./memory/scripts/` wrappers add the correct `-f` flags via `scripts/lib.sh`.)
 
 ### 🤖 AI-driven flow
 
-This is the SECOND of two AI prompts. Run [the install prompt](#-ai-driven-install) first; restart your MCP client to pick up the new memory server; THEN paste this one. It uses the MCP tools (`list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, `save_lesson`, `recall_lessons`) which only become callable after the bridge container is registered with your client.
+> **Phase 2 of 2.** Run [Phase 1](#-ai-driven-install) FIRST, then **restart your MCP client** so the new `<slug>-memory` server is registered. Only paste this prompt after that restart: it uses MCP tools (`list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, `save_lesson`, `recall_lessons`) that don't exist until then.
 
 Paste the prompt below to your agent (Claude Code, Cursor, Codex with the MCP server registered):
 
@@ -226,50 +220,42 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
 Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
 ```
 
-The agent uses the MCP tools `list_datasets`, `create_dataset`, `scan_documents`, `absorb_files`, and `save_to_dataset` to drive the conversation. None of those mutate anything outside Dify; the wizard is what writes memory/.env.
-
 ### Saving plans, investigations, or other artefacts manually
 
-The MCP tool `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name. That means if you save `plan-auth-rewrite.md` once and then again later (after polishing), the second call replaces the first document — no duplicates accumulate even when you iterate. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify metadata fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
+`save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode` that calls `save_to_dataset` with the plan body) are not yet shipped. Until they land, agents can call these tools directly mid-session.
+For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode`) are not yet shipped. Until they land, agents can call these tools directly mid-session.
 
 ## Self-improvement loop
 
-A dedicated dataset slot, `self_improvement`, captures lessons learned **only** when the user gives negative or corrective feedback. These are higher-priority than ordinary atoms: agents are expected to check them before related work.
+A dedicated `self_improvement` dataset captures lessons learned **only** from negative or corrective user feedback. Agents check it before related work via `recall_lessons`.
 
 ### Two MCP entry points
 
-- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Searches the `self_improvement` dataset filtered to `atom_type=self-improvement-lesson` plus the supplied context. Broadens via a fall-back ladder (drop `error_pattern` → `language` → `task_type`) and accumulates UNIQUE hits across rungs until at least `min(3, maxResults)` distinct hits or the ladder is exhausted. `project_module` and `tags` are scoping signals the caller chose deliberately and are NEVER dropped. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is provided AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` and `feedback-rule` atoms from `knowledge` matching the same `project_module` (max 2 supplementary records, appended after lessons, never displacing them).
-- **`save_lesson(title, body, metadata, tags?, evidence?)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key — different lessons with the same `error_pattern` will MERGE in compile rather than multiply. The doc name `lesson-<slug>-<ts>.md` matches the format compile recognises, so inline-saved lessons participate in the same dedup-merge pipeline. Available on the next turn.
+- **`recall_lessons(query, project_module?, language?, task_type?, error_pattern?, tags?, includeKnowledge?, scoreThreshold?, maxResults?)`** — call BEFORE non-trivial work. Filters `self_improvement` by `atom_type=self-improvement-lesson` plus context. Broadens via fall-back ladder (drops `error_pattern` → `language` → `task_type`) until `min(3, maxResults)` UNIQUE hits or the ladder is exhausted. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Defaults: `scoreThreshold=0.55`, `maxResults=5`. When `project_module` is set AND `includeKnowledge !== false` (default true), also pulls top `bug-root-cause` + `feedback-rule` from `knowledge` (max 2, appended after lessons, never displacing them).
+- **`save_lesson(title, body, metadata, tags?, evidence?)`** — call IMMEDIATELY when the user corrects you (before replying). Required `metadata.error_pattern` is the dedup key: same `error_pattern` MERGES rather than multiplies in compile. The doc name `lesson-<slug>-<ts>.md` matches the format compile recognises, so inline-saved lessons participate in the same dedup-merge pipeline. Available on the next turn.
 
 ### Two capture paths feed `self_improvement`
 
-1. **Inline (`save_lesson`)** — agent observes correction mid-session and persists immediately. Queryable on the very next turn.
-2. **Flush extraction** — `prompts/flush.md` recognises a `self-improvement-lesson` atom type with explicit triggers (direct correction, repeat correction, wrong-tool/wrong-step). Lessons missed mid-session are captured at PreCompact / PostCompact / SessionEnd boundaries. Compile then routes them to `self_improvement` and dedup-merges by `error_pattern`.
+1. **Inline (`save_lesson`)**: agent observes correction mid-session and persists immediately. Queryable on the very next turn.
+2. **Flush extraction**: `prompts/flush.md` recognises a `self-improvement-lesson` atom type with the same triggers; lessons missed mid-session are captured at hook boundaries. Compile then routes them to `self_improvement` and dedup-merges by `error_pattern`.
 
-### Lesson extraction criteria (what counts)
+### Lesson triggers
 
-Trigger conditions for the LLM extractor and the inline path:
-
-- Direct correction: "no", "stop doing X", "you should have done Y", reverting your work, "wrong".
-- Repeat correction: "I told you before", "again", "same mistake", "we've covered this".
-- Wrong-tool / wrong-step: the user pointed out you used the wrong file, command, format, or skipped a step.
-
-Explicit non-triggers (do NOT save):
-
-- Routine clarification or neutral redirection ("let's switch to X").
-- The user changing their mind about scope.
-- User self-blame ("oh wait, I gave you the wrong file").
-- Exploration or thinking out loud.
+| ✅ Save | ❌ Don't save |
+|---|---|
+| Direct correction ("no", "stop doing X", reverting your work, "wrong") | Routine clarification or neutral redirection ("let's switch to X") |
+| Repeat correction ("I told you before", "again", "same mistake") | User changing their mind about scope |
+| Wrong-tool / wrong-step / wrong-format | User self-blame ("oh wait, I gave you the wrong file") |
+| | Exploration or thinking out loud |
 
 ### Metadata schema
 
-Six per-document fields are installed on every bound dataset slot by `dify-setup.sh` (Dify only supports string/number/time, so tags is a comma-separated string queried with `contains`):
+Six per-document fields, installed by `dify-setup.sh` on every bound slot (Dify only supports string/number/time, so `tags` is comma-separated, queried with `contains`):
 
 | Field | Used by `recall_lessons` for | Notes |
 |---|---|---|
-| `atom_type` | filter by atom type | one of the seven types; `self-improvement-lesson` is the lesson key |
+| `atom_type` | filter by atom type | one of seven types; `self-improvement-lesson` is the lesson key |
 | `project_module` | filter by part-of-codebase | lowercase, hyphenated; `unknown` when unsure |
 | `language` | filter by programming language | empty for language-agnostic lessons |
 | `task_type` | filter by task category | enum: planning, implementation, debugging, refactor, review, deploy, docs, unknown |
@@ -278,130 +264,142 @@ Six per-document fields are installed on every bound dataset slot by `dify-setup
 
 Built-in Dify fields (`document_name`, `upload_date`, `last_update_date`) can be enabled by the wizard for recency-based filtering.
 
-### Retrieval contract (applies to all datasets, not just self-improvement)
+### Retrieval contract
 
-`search_memory` accepts:
-
-```
-search_memory({
-  query,
-  datasets?: ["self_improvement", "knowledge"],
-  filters?: { atom_type, project_module, language, task_type, error_pattern, tags },
-  scoreThreshold?: 0..1,
-  maxResults?: number
-})
-```
-
-Filters become a Dify `metadata_condition` (AND-combined; `tags` uses `contains`, everything else uses `is`) applied **before** the embedding rank. `scoreThreshold` becomes `retrieval_model.score_threshold` so low-similarity hits never reach the agent. **Do not load the whole store**: filtered + thresholded retrieval is the contract.
+`search_memory({ query, datasets?, filters?, scoreThreshold?, maxResults? })` applies `filters` as a Dify `metadata_condition` (AND-combined; `tags` uses `contains`, others use `is`) BEFORE the embedding rank, then drops anything below `scoreThreshold`. **Do not load the whole store**: filtered + thresholded retrieval is the contract.
 
 ## How memory is built
 
 ```mermaid
-flowchart LR
-  Hook["PreCompact / PostCompact / SessionEnd"] --> Flush["scripts/hooks/flush.mjs"]
-  Flush --> LLM1["LLM extract (typed atoms)"]
-  LLM1 --> DailyDataset["Dify dataset 'daily': daily-&lt;ts&gt;.md"]
-  Start["SessionStart (lazy, once/day)"] --> Compile["scripts/compile.mjs"]
-  Compile --> ReadDaily["Read enabled daily-*.md from 'daily'"]
-  ReadDaily --> LLM2["LLM dedup-merge vs 'knowledge'"]
-  LLM2 --> KnowledgeDataset["Dify dataset 'knowledge': knowledge-&lt;slug&gt;-&lt;ts&gt;.md"]
+flowchart TB
+  subgraph Capture["① Capture (per session)"]
+    direction TB
+    Hook["PreCompact / PostCompact / SessionEnd"] --> Flush["scripts/hooks/flush.mjs"]
+    Flush --> LLM1["LLM extract (typed atoms)"]
+  end
+
+  LLM1 --> DailyDataset[("Dify dataset 'daily'<br/>daily-&lt;ts&gt;.md")]
+
+  subgraph Promote["② Promote (lazy, once/UTC day)"]
+    direction TB
+    Start["SessionStart"] --> Compile["scripts/compile.mjs"]
+    Compile --> ReadDaily["Read enabled daily-*.md"]
+    ReadDaily --> LLM2["LLM dedup-merge vs 'knowledge'"]
+  end
+
+  DailyDataset --> ReadDaily
+  LLM2 --> KnowledgeDataset[("Dify dataset 'knowledge'<br/>knowledge-&lt;slug&gt;-&lt;ts&gt;.md")]
+  LLM2 --> SelfImprovement[("Dify dataset 'self_improvement'<br/>lesson-&lt;slug&gt;-&lt;ts&gt;.md")]
   Compile --> DisableDaily["Disable processed daily-*.md"]
-  Absorb["MCP absorb_files (any session)"] --> KnowledgeDataset
-  Save["MCP save_to_dataset / write_memory (any session)"] --> AnyDataset["Dify named slot: plans, investigations, ..."]
-  KnowledgeDataset --> Search["MCP search_memory"]
+
+  subgraph OnDemand["③ On-demand (any session)"]
+    direction TB
+    Absorb["MCP absorb_files"]
+    Save["MCP save_to_dataset / save_lesson / write_memory"]
+  end
+
+  Absorb --> KnowledgeDataset
+  Save --> AnyDataset[("Dify named slots<br/>plans, investigations, ...")]
+  Save --> SelfImprovement
+
+  DailyDataset --> Search(["MCP search_memory / recall_lessons"])
+  KnowledgeDataset --> Search
+  SelfImprovement --> Search
   AnyDataset --> Search
-  DailyDataset --> Search
 ```
 
-Two stages of automatic capture (flush + compile), plus on-demand `absorb_files`, `save_to_dataset`, and `save_lesson`. **Everything is stored in Dify**, organised by named dataset slots, retrieved via metadata-filtered queries.
+**Everything lives in Dify**, organised by named slots, retrieved via metadata-filtered queries.
 
-- **Named slots** declared by env lines: every `DIFY_DATASET_<NAME>_ID=` in `memory/.env` declares one slot. Defaults are `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add more by adding lines (`DIFY_DATASET_RUNBOOKS_ID=`, `DIFY_DATASET_DECISIONS_ID=`, ...). No second list to maintain.
+- **Named slots**: each `DIFY_DATASET_<NAME>_ID=` line in `memory/.env` declares one slot. Defaults: `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add lines to add slots (`DIFY_DATASET_RUNBOOKS_ID=`, ...). No second list to maintain.
 - **Per-atom-type routing**: compile sends `self-improvement-lesson` atoms to `self_improvement` and everything else to `knowledge`. Inline `save_lesson` hits `self_improvement` directly.
-- **No local memory files.** The only on-disk state is a tiny ops file `./memory/.compile-state.json` that records the last compile attempt date. Memory content lives only in Dify.
-- **Naming conventions inside Dify**:
-  - `daily-<YYYY-MM-DD-HHMMSSmmm>.md` — one per flush event, accumulates per session, dedup-merged out by compile.
-  - `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` — one per deduped fact; compile may write a new version with the same `<slug>` and a new `<ts>`, then disable the prior one.
-  - `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` — self-improvement lessons in the `self_improvement` slot.
-  - `<relative_path_with_underscores>.md` — absorbed user docs (`docs/auth/jwt.md` becomes `docs_auth_jwt.md`).
-  - `<your-name>.md` — anything you upsert via `save_to_dataset` (plans, investigations, decisions). The same name overwrites; iterate freely.
-- **Per-document metadata** (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) is set on every promoted/upserted doc so retrieval can filter Dify-side instead of dragging the whole store back. Schema is auto-installed by `dify-setup.sh`.
-- **Daily docs are kept after promotion** but disabled (hidden from `search_memory`, visible in the Dify UI for audit).
-- **Recursion guard**: when the compile run starts a session of its own, the `CLAUDE_INVOKED_BY=memory_compile` env var prevents another compile from kicking off.
-- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or a stopped MCP container all cause flush/compile/absorb to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
+- **Naming inside Dify**:
+  - `daily-<YYYY-MM-DD-HHMMSSmmm>.md`: one per flush event (dedup-merged out by compile).
+  - `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: one per deduped fact (compile may write a new version with the same `<slug>` and a new `<ts>`, then disable the prior).
+  - `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: self-improvement lessons in `self_improvement`.
+  - `<relative_path_with_underscores>.md`: absorbed user docs (`docs/auth/jwt.md` becomes `docs_auth_jwt.md`).
+  - `<your-name>.md`: anything you upsert via `save_to_dataset` (plans, investigations, decisions). Same name overwrites; iterate freely.
+- **Daily docs are kept after promotion** but disabled (audit trail in UI, hidden from `search_memory`).
+- **No local memory files.** Only on-disk state is `./memory/.compile-state.json` (last compile attempt date).
+- **Recursion guard**: `CLAUDE_INVOKED_BY=memory_compile` prevents compile from triggering its own compile.
+- **Failure modes are explicit**: missing LLM provider, missing Dify keys, or stopped MCP container all cause flush/compile/absorb to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
 
 ## What gets saved
 
 Two routes: **automatic distillation** (flush + compile) and **on-demand upserts** (absorb + save_to_dataset).
 
-### Automatic atoms (extracted from session transcripts)
+### Automatic atoms
 
-Seven atom types map to the categories that actually pay off in retrieval. Each atom carries the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`.
+Seven atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
 
 | Type | Use when | Routes to |
 |---|---|---|
 | `decision` | "We chose X over Y because Z." Architectural or product choice with rationale. | `knowledge` |
-| `bug-root-cause` | The misleading symptom, the actual cause, and the trap to avoid. (Not the diff — that's in git.) | `knowledge` |
+| `bug-root-cause` | The misleading symptom, the actual cause, and the trap to avoid. (Not the diff: that's in git.) | `knowledge` |
 | `feedback-rule` | A workflow rule the user gave you. Conventions, exit predicates, do/don't. | `knowledge` |
-| `project-lore` | Who's doing what, deadlines, integration quirks not in the code. Decays fast — atoms include dates. | `knowledge` |
+| `project-lore` | Who's doing what, deadlines, integration quirks not in the code. Decays fast; atoms include dates. | `knowledge` |
 | `reference` | A pointer to a dashboard, runbook, or external project, with the reason to consult it. | `knowledge` |
 | `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. | `knowledge` |
-| `self-improvement-lesson` | The user gave NEGATIVE OR CORRECTIVE feedback that reveals a behaviour the AI should change next time. | `self_improvement` |
+| `self-improvement-lesson` | NEGATIVE OR CORRECTIVE user feedback revealing a behaviour the AI should change next time. | `self_improvement` |
 
-The compile-stage prompt biases toward **update** over **create** when atom_type, project_module, and (for lessons) error_pattern match. Same fact does not get written twice; same lesson converges into one canonical document.
+### On-demand uploads
 
-### On-demand uploads (any artefact you want indexed)
+Both use upsert-by-exact-name (delete-then-create): **same name → updated content; different name → new document**.
 
 | MCP tool | When | Naming + identity |
 |---|---|---|
 | `absorb_files(files[], dataset?, dryRun?)` | Index existing project docs (`docs/**/*.md`, `ARCHITECTURE.md`, RFCs). | `relative/path/with/slashes.md` becomes `relative_path_with_slashes.md`. Re-running overwrites the same Dify document. |
-| `save_to_dataset(dataset, name, text)` | Save a plan, investigation, decision record, runbook. | The `name` IS the identity. Polishing the same `plan-auth-rewrite.md` later replaces the prior version, no duplicates. |
-
-Both use upsert-by-exact-name (delete-then-create), so the contract is: **same name → updated content; different name → new document**. This is the property the user asked for: "if the plan md filename is the same it should always be updated in RAG".
+| `save_to_dataset(dataset, name, text, metadata?)` | Save a plan, investigation, decision record, runbook. | The `name` IS the identity. Polishing the same `plan-auth-rewrite.md` later replaces the prior version. |
 
 ### MCP tools
 
 | Tool | Purpose |
 |---|---|
-| `search_memory` | Retrieve scored chunks across configured datasets. Accepts `filters` (metadata) and `scoreThreshold` for precise, context-efficient recall. |
+| `search_memory` | Retrieve scored chunks across configured datasets. Accepts `filters` (metadata) + `scoreThreshold` for precise, context-efficient recall. |
 | `recall_lessons` | "Look before you leap" entry point. Filters `self_improvement` by inferred task context with broadening fall-back; optionally pulls `bug-root-cause` + `feedback-rule` from `knowledge`. |
 | `get_memory_config` | Inspect bridge configuration without exposing secrets. |
-| `write_memory` | Create-or-supersede a single document (low-level). |
-| `update_memory` | Required-supersedes variant; used by compile. |
-| `save_to_dataset` | Upsert by exact name with optional `metadata` (the durable-artefact path). |
-| `save_lesson` | Sugar over `save_to_dataset` for the `self_improvement` slot; required metadata.error_pattern is the dedup key. |
-| `list_datasets` | Show Dify datasets + local slot bindings. |
-| `create_dataset` | Create a new Dify dataset; bind it via `dify-setup.sh`. |
-| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (multi-stack vendor/build/cache/IDE protection: `.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; any `ignore` patterns you pass are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
+| `write_memory` / `update_memory` | Create-or-supersede a single document (low-level; compile uses `update_memory`). |
+| `save_to_dataset` | Upsert by exact name with optional `metadata` (durable-artefact path). |
+| `save_lesson` | Sugar over `save_to_dataset` for `self_improvement`; required `metadata.error_pattern` is the dedup key. |
+| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. |
+| `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (`.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; user `ignore` patterns are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
 ## Updates
 
-The cloned `./memory/` keeps its own `.git`, so:
-
 ```bash
 cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
-./memory/scripts/up.sh    # recreate the bridge so it picks up env changes
+./memory/scripts/up.sh memory_mcp   # recreate the bridge so it picks up env changes
 ```
 
-Re-running bootstrap is idempotent. `memory/.env` is preserved across upgrades — only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge container reads `memory/.env` via Compose's `env_file:` directive, so any new `DIFY_DATASET_<NAME>_ID=` line you add only takes effect after a recreate; `up.sh` handles that. Existing `memory/.env` slots survive the upgrade.
+Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
 
-> **Note on locally edited config files:**
->
-> - **Mixed-content files (`.claude/settings.json`, `.agents/hooks.json`, `.agents/mcp.json`, `.mcp.json`):** bootstrap performs a deterministic structural merge via `scripts/merge-config.mjs` (pure Node, no `jq`). Your existing entries — your own MCP servers, your own hook commands, your `permissions`, your `model`, anything else at the top level — pass through verbatim. Only entries whose `command` carries the boilerplate's signature (`"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/...`) are stripped and re-installed on each re-run, so your customisations are safe across `git pull` upgrades. `.mcp.json` (project-scope Claude Code MCP config) is merged the same way — only the `<slug>-memory` server entry is owned by the boilerplate; any other servers you've added stay put. Re-runs are byte-stable when the rendered template hasn't changed.
-> - **Owned-only files (snippets under `.agents/clients/`, `.agents/mcp/<server>.mcp.json`, `.agents/README.md`):** these are 100% generated by the boilerplate and have no user content. Bootstrap REFUSES to overwrite if you have edited them — it prints a conflict list and exits non-zero. Either accept the boilerplate's version (delete the file then re-run bootstrap) or move your edits elsewhere.
-> - **Skill files (`.claude/skills/*.md`, `.agents/rules/*.md`):** always overwritten on re-run; treat them as canonical from the boilerplate.
+### Merge contract
 
-> **Upgrading from a pre-`pwd -P` checkout (one-time):** if you cloned into a path with a symlink in it (common on macOS with iCloud-synced `~/Documents`, or Linux dev VMs with bind-mounted project trees) AND ran the boilerplate before the install scripts standardised on `pwd -P`, the next `up.sh` after `git pull` will resolve `MEMORY_DATA_DIR` to the **physical** path instead of the symlink form. Docker treats that as a different bind source, so existing Dify storage volumes will appear empty. Your data is still on disk under the old (symlink-form) path. Run `./memory/scripts/migrate-persistent-data.sh` once after the pull to copy state into the resolved location, then `./memory/scripts/up.sh` to bring the stack back up. This only affects upgraders on symlinked checkouts; fresh installs are unaffected.
+| File class | Behaviour on re-run |
+|---|---|
+| **Mixed-content** (`.claude/settings.json`, `.agents/{hooks,mcp}.json`, `.mcp.json`) | Structurally merged via `scripts/merge-config.mjs` (pure Node, no `jq`). Your existing entries (your own MCP servers, your own hook commands, your `permissions`, your `model`, anything else at the top level) pass through verbatim. Only entries whose `command` carries the boilerplate's signature (`"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/...`) are stripped and re-installed; for `.mcp.json`, only the `<slug>-memory` server entry is owned by the boilerplate. Re-runs are byte-stable when nothing changes. |
+| **Owned-only** (`.agents/clients/*`, `.agents/mcp/<server>.mcp.json`, `.agents/README.md`) | 100% generated by the boilerplate. Bootstrap REFUSES to overwrite if you have edited them: prints a conflict list and exits non-zero. Either delete the file then re-run, or move your edits elsewhere. |
+| **Skill / rule files** (`.claude/skills/*.md`, `.agents/rules/*.md`) | Always overwritten on re-run; treat them as canonical from the boilerplate. |
+
+### What gets committed
+
+| Path | Tracked | Why |
+|---|---|---|
+| `/memory` | **No** | The cloned boilerplate has its own `.git`. |
+| `/.memory` | **No** | Host-mounted Dify runtime data. |
+| `/.agents`, `/.claude/settings.json`, `/.mcp.json` | **Yes** | Per-project agent config: vendor-neutral hooks/MCP + Claude Code hooks + project-scope MCP server registration. |
+| `memory/.env` | **No** | Contains your Dify API key. |
+| `memory/.compile-state.json`, `memory/.compile.lock` | **No** | One-line ops state / transient lockfile. Not memory. |
+
+> **Upgrading from a pre-`pwd -P` checkout (one-time):** if you cloned into a path with a symlink in it (common on macOS with iCloud-synced `~/Documents`, or Linux dev VMs with bind-mounted project trees) AND ran the boilerplate before scripts standardised on `pwd -P`, the next `up.sh` after `git pull` resolves `MEMORY_DATA_DIR` to the **physical** path. Docker treats that as a different bind source, so existing Dify storage volumes appear empty (your data is still on disk under the old, symlink-form path). Run `./memory/scripts/migrate-persistent-data.sh` once to copy state into the resolved location, then `./memory/scripts/up.sh`. Fresh installs are unaffected.
 
 ## Client config
 
-Generated client snippets live under `.agents/clients/` after bootstrap. Print them with:
+Generated client snippets live under `.agents/clients/` after bootstrap:
 
 ```bash
-./memory/scripts/mcp-config.sh all
-./memory/scripts/mcp-config.sh codex
-./memory/scripts/mcp-config.sh claude-desktop
-./memory/scripts/mcp-config.sh cursor
+./memory/scripts/mcp-config.sh all              # print every client snippet
+./memory/scripts/mcp-config.sh codex            # | claude-desktop | cursor
 ```
 
 For Codex/OpenAI:
@@ -410,16 +408,16 @@ For Codex/OpenAI:
 codex mcp add <project-slug>-memory -- docker exec -i <project-slug>-memory node src/index.js
 ```
 
-For Claude Desktop, Cursor, or generic MCP clients, merge `.agents/mcp.json` (or the matching snippet under `.agents/clients/`) into your client's MCP config. Do not paste API keys into client configs; they live only in `memory/.env`.
+For Claude Desktop, Cursor, or generic MCP clients, merge `.agents/mcp.json` (or the matching `.agents/clients/<client>` snippet) into your client's MCP config. Do not paste API keys into client configs; they live only in `memory/.env`.
 
-When `--install-hooks` is passed (default on), `.claude/settings.json` is rendered with the four lifecycle events wired to `./memory/scripts/hooks/`. Other clients can adapt `.agents/hooks.json` to their own hook format; see [STACK.md](STACK.md) for the event-to-script table.
+When `--install-hooks` is on (default), `.claude/settings.json` is rendered with the four lifecycle events wired to `./memory/scripts/hooks/`. Other clients can adapt `.agents/hooks.json` to their own hook format; see [STACK.md](STACK.md) for the event-to-script table.
 
 ### Skills + rules
 
-`bootstrap.sh` renders every file under `templates/skills/*.md` into BOTH:
+`bootstrap.sh` renders every `templates/skills/*.md` into BOTH:
 
-- `.claude/skills/<name>.md` (only when `--install-hooks`) — Claude Code's project skills directory; auto-loaded.
-- `.agents/rules/<name>.md` (always) — vendor-neutral. Cursor / Codex / generic clients can import from here.
+- `.claude/skills/<name>.md` (only when `--install-hooks`): Claude Code's project skills directory; auto-loaded.
+- `.agents/rules/<name>.md` (always): vendor-neutral. Cursor / Codex / generic clients can import from here.
 
 Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract).
 
@@ -428,67 +426,46 @@ Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lesson
 | Event | Script | Effect |
 |---|---|---|
 | `SessionStart` | `scripts/hooks/session-start.mjs` | Emits an `additionalContext` reminder; lazily spawns compile in the background once per UTC day. |
-| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms and writes ONE new `daily-<ts>.md` document to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
-| `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms and writes one `daily-<ts>.md` document. Min-turns check is bypassed for compact_summary input. |
+| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
+| `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
 
-The hook timeout is 130s for the flush hooks (PreCompact/PostCompact/SessionEnd) and 15s for SessionStart. Flush calls an LLM that defaults to a 120s per-call timeout, so the hook needs at least that plus headroom; SessionStart only emits a reminder and spawns compile detached, so it returns quickly.
-
-## What gets committed
-
-| Path | Tracked | Why |
-|---|---|---|
-| `/memory` | **No** (gitignored) | The cloned boilerplate has its own `.git`. |
-| `/.memory` | **No** (gitignored) | Host-mounted Dify runtime data. |
-| `/.agents`, `/.claude/settings.json`, `/.mcp.json` | **Yes** (your call) | Per-project agent config: `.agents/` is vendor-neutral, `.claude/settings.json` wires Claude Code hooks, `.mcp.json` registers the memory MCP server with Claude Code at project scope. |
-| `memory/.env` | **No** (gitignored inside the boilerplate) | Contains your Dify API key. |
-| `memory/.compile-state.json` | **No** | One-line ops state (last compile date). Not memory. |
-| `memory/.compile.lock` | **No** | Transient lockfile preventing concurrent compile runs. |
+Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
 
 ## Verification
 
-Run after `bootstrap.sh` and again after `dify-setup.sh`. Each block lists its prereqs explicitly so you can stop at the latest one your environment can satisfy.
+Each tier lists its prereqs; stop at the latest one your environment can satisfy.
 
 ```bash
-# ---- Tier 1: Static checks. Requires: bootstrap.sh only. No Docker, no LLM. ----
+# Tier 1 — Static. Requires: bootstrap.sh only. No Docker, no LLM.
 bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
 node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
 node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
 
-# ---- Tier 2: Hermetic unit tests. Requires: node 20+. ----
+# Tier 2 — Hermetic unit tests. Requires: node 20+.
 ( cd ./memory && npm test )
-# (`npm test` invokes the package.json script `node --test test/*.test.mjs`
-# from inside ./memory/, so the glob is expanded against ./memory/test/.
-# Running `node --test test/*.test.mjs` from the parent directory would
-# fail because the glob expands BEFORE the cd in `( cd ./memory && ... )`,
-# and some tests use paths relative to CWD.)
+# (`npm test` invokes `node --test test/*.test.mjs` from inside ./memory/,
+# so the glob is expanded against ./memory/test/. Running it from the parent
+# would fail because the glob expands BEFORE the cd.)
 
-# ---- Tier 3: Stack health. Requires: up.sh has been run. ----
+# Tier 3 — Stack health. Requires: up.sh has been run.
 ./memory/scripts/ps.sh
 ./memory/scripts/ui-url.sh
 
-# ---- Tier 4: End-to-end MCP smoke. Requires: up.sh + dify-setup.sh + ----
-# ---- DIFY_KNOWLEDGE_API_KEY in memory/.env + at least one dataset bound. ----
-# Read-only by design: exercises initialize, get_memory_config, plain
-# search_memory, filtered search_memory (atom_type + scoreThreshold), and
-# a recall_lessons round-trip with a deliberately-no-match query. A
-# regression in the typed-pipeline tools surfaces here instead of in
-# real-user incidents. Fails with a "Run dify-setup.sh" hint if any of
-# the prereqs above is missing.
+# Tier 4 — End-to-end MCP smoke. Requires: up.sh + dify-setup.sh + DIFY_KNOWLEDGE_API_KEY + ≥1 dataset bound.
+# Read-only by design: initialize, get_memory_config, plain + filtered search_memory,
+# recall_lessons round-trip with a deliberately-no-match query. Fails with a
+# "Run dify-setup.sh" hint if any prereq is missing.
 ./memory/scripts/mcp-smoke.sh
 
-# ---- Tier 5: Entry-point smoke. Requires: bootstrap only. ----
-# Confirms the flush + compile script entry points start, parse stdin/state,
-# and exit cleanly. Without the bridge container + dataset bindings + an LLM
-# provider configured, both scripts SKIP gracefully (stderr message, exit 0).
-# That's the property we want to verify here — they never block the user's
-# session. To exercise the FULL flush -> compile pipeline end-to-end, all
-# three (bridge + Dify slots + LLM provider) must be configured first.
+# Tier 5 — Entry-point smoke. Requires: bootstrap only.
+# Without bridge + slots + LLM provider, both scripts SKIP gracefully (stderr, exit 0).
+# That's the property we verify here: hooks never block the user's session.
 echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"Decision: Dify is the canonical store for project memory."}' \
   | ./memory/scripts/hooks/post-compact.sh
 node ./memory/scripts/compile.mjs --dry-run
 
-# ---- Tier 6: Direct CLI checks. Requires: bridge container running. ----
+# Tier 6 — Direct CLI checks. Requires: bridge container running.
 # Verify the metadata schema is installed on the self_improvement slot.
 docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js list-metadata-fields --datasetId self_improvement
@@ -496,8 +473,8 @@ docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -
 # language, task_type, error_pattern.
 
 # Filtered search smoke against the self_improvement slot.
-# (RETRIEVES only; pair with a save_lesson MCP call from your agent for
-# a true save -> recall round-trip.)
+# (RETRIEVES only; pair with a save_lesson MCP call from your agent for a
+# true save -> recall round-trip.)
 docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js search --datasetId self_improvement \
   --query "smoke" --filters '{"atom_type":"self-improvement-lesson"}'
@@ -525,9 +502,8 @@ memory/
 │   │                           # metadata-filtered dedup-merge)
 │   ├── merge-config.mjs        # CLI used by bootstrap.sh to structurally
 │   │                           # merge our hooks/MCP entries into the
-│   │                           # user's existing .claude/settings.json
-│   │                           # and .agents/{hooks,mcp}.json without
-│   │                           # losing user content
+│   │                           # user's existing config without losing
+│   │                           # user content
 │   ├── lib/{env,llm,dify-write,redact,slug,datasets,lock,merge-config}.mjs
 │   └── hooks/
 │       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
@@ -537,13 +513,12 @@ memory/
 │       └── flush.mjs                 # shared extractor (incl. self-
 │                                     # improvement-lesson type + metadata)
 ├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
-├── mcp-server/
-│   └── src/{index,dify,memory-cli,glob,slug}.js
+├── mcp-server/src/{index,dify,memory-cli,glob,slug}.js
 ├── templates/
-│   ├── agents/                 # rendered to <project>/.agents/
-│   ├── claude/settings.json    # rendered to <project>/.claude/
-│   ├── skills/self-improvement.md  # rendered to .claude/skills/ AND .agents/rules/
-│   └── gitignore.append        # appended to <project>/.gitignore
+│   ├── agents/                       # rendered to <project>/.agents/
+│   ├── claude/settings.json          # rendered to <project>/.claude/
+│   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
+│   └── gitignore.append              # appended to <project>/.gitignore
 └── vendor/dify/                # cloned at first dify-bootstrap
 
 # Memory is stored entirely in Dify, organised by named slot, named:
