@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue } from "./lib/env.mjs";
+import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue } from "./lib/env.mjs";
+import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
   listDocuments,
@@ -273,6 +274,19 @@ async function applyMetadataToWritten(atom, writeResult, targetDataset) {
 }
 
 async function main() {
+  // Acquire an exclusive compile lock. Two SessionStarts can spawn
+  // detached compiles concurrently; without this, both would load
+  // .compile-state.json, mutate it independently, and the last writer
+  // wins. The metadata_retry counter would regress and an atom could be
+  // promoted twice (once by each compile).
+  const lockStaleMs = envInt("MEMORY_COMPILE_LOCK_STALE_MS", 600_000);
+  installLockReleaseHandlers(COMPILE_LOCK_PATH);
+  const lock = acquireLock(COMPILE_LOCK_PATH, { staleMs: lockStaleMs, label: "compile.mjs" });
+  if (!lock.ok) {
+    console.error(`compile.mjs: skipping (${lock.reason})`);
+    process.exit(0);
+  }
+
   const dailyDataset = envValue("DIFY_FLUSH_DATASET", "daily");
   let dailies;
   try {

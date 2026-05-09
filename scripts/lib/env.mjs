@@ -6,6 +6,7 @@ export const MEMORY_DIR = path.resolve(here, "../..");
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "..");
 export const ENV_PATH = path.join(MEMORY_DIR, ".env");
 export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
+export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
 export function readEnvFile(file = ENV_PATH) {
