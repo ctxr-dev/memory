@@ -323,6 +323,23 @@ if [ "$install_hooks" -eq 1 ]; then
     "$TEMPLATES_DIR/claude/settings.json" \
     "$WORKSPACE_DIR/.claude/settings.json" \
     "hooks"
+
+  # Also register the memory MCP server in Claude Code's project-scope
+  # MCP config at <workspace>/.mcp.json. Without this step the bridge
+  # container is up and the tools work, but Claude Code's `/mcp`
+  # command never sees the `<slug>-memory` server because Claude Code
+  # reads MCP configs from `.mcp.json` (project) or `~/.claude.json`
+  # (user-global), NOT from `.agents/mcp.json` (vendor-neutral). The
+  # vendor-neutral file is rendered too (above) for non-Claude
+  # clients (Cursor, Codex/OpenAI, etc).
+  #
+  # Same merge contract as `.agents/mcp.json` — preserves any other
+  # MCP servers the user already has at project scope, only owns the
+  # `<slug>-memory` key. Idempotent on re-run.
+  do_merge_install \
+    "$TEMPLATES_DIR/agents/mcp.json" \
+    "$WORKSPACE_DIR/.mcp.json" \
+    "mcp"
 fi
 
 # ---------- skills + rules ----------
@@ -446,10 +463,14 @@ Next steps:
                                                   self_improvement), install per-doc
                                                   metadata schema, optionally absorb
                                                   existing docs.
-  6) Restart your MCP client (Claude Code, Cursor, Codex, Claude Desktop) so
-     it picks up the new memory MCP server registered in .claude/settings.json
-     (and/or .agents/clients/* for non-Claude clients). The server only becomes
-     callable from inside an agent session AFTER this restart.
+  6) Restart your MCP client so it picks up the new memory MCP server.
+     Where it's registered:
+       - Claude Code: project-scope ./.mcp.json (auto-written by bootstrap)
+       - Cursor / Codex / Claude Desktop: copy the relevant snippet from
+         ./.agents/clients/ into the client's own MCP config, OR run
+         `./memory/scripts/mcp-config.sh all` to print them again.
+     The server only becomes callable from inside an agent session
+     AFTER this client restart.
   7) ./memory/scripts/mcp-smoke.sh               # validate
 
 The boilerplate ships with its own .git so you can update it later:
