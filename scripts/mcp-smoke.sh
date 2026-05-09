@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib.sh"
 
@@ -25,11 +25,22 @@ if ! docker inspect -f '{{.State.Running}}' "$container_name" >/dev/null 2>&1; t
   exit 1
 fi
 
+# IDs 1-3: existing baseline (initialize, get_memory_config, search_memory).
+# IDs 4-5 (NEW in round-10): exercise the round-7 typed-pipeline tools so a
+# regression in recall_lessons / metadata-filtered search surfaces here
+# instead of in real-user incidents. Both are READ-ONLY (no save_lesson —
+# that would dirty the user's dataset). The ladder for recall_lessons is
+# probed with a deliberately-no-match query so success means "tool works
+# and returns an empty/low-hit response without erroring", which is the
+# regression we want to catch (round-7 tool shape, ladder traversal,
+# topK propagation).
 docker exec -i "$container_name" node src/index.js <<'JSON' | tee "$output_file"
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
 {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_memory_config","arguments":{}}}
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"memory smoke validation","maxResults":1}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"memory smoke filtered","maxResults":1,"filters":{"atom_type":"self-improvement-lesson"},"scoreThreshold":0.99}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"recall_lessons","arguments":{"query":"smoke probe with very specific phrase unlikely to match anything","project_module":"smoke","scoreThreshold":0.99,"maxResults":1,"includeKnowledge":false}}}
 JSON
 
 node - "$output_file" <<'NODE'
@@ -122,6 +133,28 @@ if (Array.isArray(search.errors) && search.errors.length > 0) {
   fail(`Dify retrieval errors: ${JSON.stringify(search.errors)}`);
 }
 
-const summary = `MCP smoke OK${warnings > 0 ? ` (with ${warnings} warning${warnings === 1 ? "" : "s"})` : ""}: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'`;
+// Filtered search (round-7 metadata_filtering_conditions path). Empty
+// result is fine — what matters is the tool didn't throw on the filter
+// shape and didn't return Dify-side errors.
+const filteredSearch = toolText(4);
+if (Array.isArray(filteredSearch.errors) && filteredSearch.errors.length > 0) {
+  fail(`Filtered search errors: ${JSON.stringify(filteredSearch.errors)}`);
+}
+
+// recall_lessons (round-7 ladder + topK + dropOrder + final-cap
+// semantics). High threshold + nonsense query forces empty result; we
+// just need the tool to round-trip without throwing.
+const recall = toolText(5);
+if (recall.lessonDataset !== "self_improvement") {
+  fail(`recall_lessons returned unexpected lessonDataset='${recall.lessonDataset}' (expected 'self_improvement')`);
+}
+if (typeof recall.totalRecords !== "number") {
+  fail(`recall_lessons response missing totalRecords field`);
+}
+if (!Array.isArray(recall.records)) {
+  fail(`recall_lessons response missing records array`);
+}
+
+const summary = `MCP smoke OK${warnings > 0 ? ` (with ${warnings} warning${warnings === 1 ? "" : "s"})` : ""}: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'; baseline + filtered search + recall_lessons round-trip clean`;
 console.error(summary);
 NODE

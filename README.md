@@ -198,7 +198,7 @@ The agent uses the MCP tools `list_datasets`, `create_dataset`, `scan_documents`
 
 The MCP tool `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name. That means if you save `plan-auth-rewrite.md` once and then again later (after polishing), the second call replaces the first document — no duplicates accumulate even when you iterate. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify metadata fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: see [STACK.md](STACK.md) — the integration points are `PostToolUse` matchers that observe `ExitPlanMode` and similar lifecycle events. Wiring those is outside this commit's scope; the MCP tools are ready, the hook recipes are not yet shipped.
+For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode` that calls `save_to_dataset` with the plan body) are not yet shipped. Until they land, agents can call these tools directly mid-session.
 
 ## Self-improvement loop
 

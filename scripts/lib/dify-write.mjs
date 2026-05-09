@@ -57,10 +57,6 @@ async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIME
   });
 }
 
-export function searchMemory({ query, datasetId, limit } = {}) {
-  return execCli("search", { query, datasetId, limit });
-}
-
 export function writeMemory({ name, text, datasetId, supersedes, supersedesAction } = {}) {
   return execCli(
     "write",
@@ -85,25 +81,11 @@ export function readDocument({ documentId, datasetId } = {}) {
   return execCli("read", { documentId, datasetId });
 }
 
-export function saveMemory({ name, text, datasetId, metadata } = {}) {
-  const flags = { name, datasetId };
-  if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
-  return execCli("save", flags, { stdin: text });
-}
-
 export function searchMemoryFiltered({ query, datasetId, limit, filters, scoreThreshold } = {}) {
   const flags = { query, datasetId, limit };
   if (filters && typeof filters === "object") flags.filters = JSON.stringify(filters);
   if (scoreThreshold != null) flags.scoreThreshold = String(scoreThreshold);
   return execCli("search", flags);
-}
-
-export function listMetadataFields({ datasetId } = {}) {
-  return execCli("list-metadata-fields", { datasetId });
-}
-
-export function createMetadataField({ datasetId, name, type } = {}) {
-  return execCli("create-metadata-field", { datasetId, name, type });
 }
 
 export function setBuiltInMetadata({ datasetId, enabled } = {}) {
@@ -118,27 +100,4 @@ export function updateDocMetadata({ datasetId, documentId, metadata } = {}) {
 
 export function listDatasets() {
   return execCli("list-datasets", {});
-}
-
-export function createDifyDataset({ name, description } = {}) {
-  return execCli("create-dataset", { name, description });
-}
-
-export function findByName({ name, datasetId } = {}) {
-  return execCli("find-by-name", { name, datasetId });
-}
-
-export function scanWorkspace({ include, ignore, root } = {}) {
-  const flags = {};
-  if (include) flags.include = Array.isArray(include) ? include.join(",") : include;
-  if (ignore) flags.ignore = Array.isArray(ignore) ? ignore.join(",") : ignore;
-  if (root) flags.root = root;
-  return execCli("scan", flags);
-}
-
-export function absorbFiles({ files, datasetId, dryRun } = {}) {
-  const flags = { datasetId };
-  if (files) flags.files = Array.isArray(files) ? files.join(",") : files;
-  if (dryRun) flags.dryRun = "true";
-  return execCli("absorb", flags);
 }

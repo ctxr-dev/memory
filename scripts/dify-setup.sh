@@ -5,7 +5,7 @@ set -euo pipefail
 # investigations, ...) into memory/.env and optionally absorb existing
 # project documentation into a dataset. Re-runnable.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if [ "${1-}" = "-h" ] || [ "${1-}" = "--help" ]; then
   cat <<EOF

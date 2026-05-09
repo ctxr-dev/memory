@@ -135,7 +135,7 @@ server.registerTool(
     description:
       "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot.",
     inputSchema: {
-      query: z.string().trim().min(1).max(250),
+      query: z.string().trim().min(1).max(1000),
       datasets: z.array(z.string().trim().min(1)).optional(),
       datasetIds: z.array(z.string().trim().min(1)).optional(),
       filters: FilterSchema.optional(),
@@ -486,7 +486,7 @@ server.registerTool(
     description:
       "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons).",
     inputSchema: {
-      query: z.string().trim().min(1).max(250),
+      query: z.string().trim().min(1).max(1000),
       project_module: z.string().trim().min(1).optional(),
       language: z.string().trim().min(1).optional(),
       task_type: z.string().trim().min(1).optional(),

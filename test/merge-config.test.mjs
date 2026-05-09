@@ -454,6 +454,49 @@ test("merge-config CLI: malformed target file aborts non-zero with clear message
   assert.match(r.stderr, /Failed to parse JSON/);
 });
 
+// ---------- shipped-template marker lock ----------
+//
+// A future contributor editing templates/{claude/settings,agents/hooks}.json
+// to use a different env-var spelling (e.g., `${CLAUDE_PROJECT_DIR}` or
+// `$HOME/memory/scripts/hooks/`) would silently break the
+// HOOK_OWNERSHIP_SIGNATURE marker — bootstrap re-runs would then DUPLICATE
+// our hook entries on every run instead of replacing them, with no test
+// failure to catch the drift. This test loads the actual shipped templates
+// and asserts every event entry is recognised by isOurHookEntry. If a
+// template edit ever breaks the marker, this test fails loudly.
+
+test("shipped templates: every hook entry in templates/{claude/settings,agents/hooks}.json matches isOurHookEntry", () => {
+  const templates = [
+    path.resolve("templates/claude/settings.json"),
+    path.resolve("templates/agents/hooks.json"),
+  ];
+  let totalChecked = 0;
+  for (const t of templates) {
+    assert.ok(fs.existsSync(t), `template missing: ${t}`);
+    const j = JSON.parse(fs.readFileSync(t, "utf8"));
+    assert.ok(j.hooks && typeof j.hooks === "object", `${t}: no hooks block`);
+    for (const event of Object.keys(j.hooks)) {
+      assert.ok(Array.isArray(j.hooks[event]), `${t}: hooks.${event} is not an array`);
+      for (const entry of j.hooks[event]) {
+        assert.equal(
+          isOurHookEntry(entry),
+          true,
+          `${t}: hooks.${event} entry is NOT recognised by isOurHookEntry — ` +
+          `the marker (HOOK_OWNERSHIP_SIGNATURE in scripts/lib/merge-config.mjs) ` +
+          `must appear in every command we ship, otherwise bootstrap re-runs ` +
+          `will duplicate hook entries instead of replacing them. Entry: ${JSON.stringify(entry)}`,
+        );
+        totalChecked += 1;
+      }
+    }
+  }
+  // Sanity: both templates ship 4 events × 1 entry each = 8 commands.
+  // If this drops, someone removed events from templates without updating
+  // the test; if it grows, someone added events and should also update
+  // bootstrap.sh's merge_strategy_for if a new file appears.
+  assert.ok(totalChecked >= 8, `expected at least 8 entries across templates; got ${totalChecked}`);
+});
+
 test("merge-config CLI: --name=value form works (Bash quoting friendly)", (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-cli-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
