@@ -149,3 +149,107 @@ test("redact: multiple secrets in one string", () => {
   assert.ok(out.includes("[REDACTED]"));
   assert.ok(!out.includes("hunter2"));
 });
+
+// Slack tokens — broadened in round-7 to xox[a-z]- so newer xoxe-/xoxc-
+// also redact; lock the legacy prefixes too.
+test("redact: Slack xoxb/xoxa/xoxp/xoxr/xoxs/xoxe/xoxc all caught", () => {
+  for (const prefix of ["xoxb", "xoxa", "xoxp", "xoxr", "xoxs", "xoxe", "xoxc"]) {
+    const sample = `${prefix}-1234567890-1234567890-AbCdEfGhIjKlMnOpQrStUvWx`;
+    const out = redact(sample);
+    assert.ok(out.includes("xox-[REDACTED]"), `${prefix} not redacted`);
+    assert.ok(!out.includes(sample), `${prefix} body leaked`);
+  }
+});
+
+test("redact: short Slack-prefix string is NOT redacted (false-positive guard)", () => {
+  // 10-char body minimum
+  assert.equal(redact("xoxb-short"), "xoxb-short");
+});
+
+// npm tokens
+test("redact: standalone npm_ token (not preceded by 'token')", () => {
+  const sample = "npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+  assert.equal(sample.length - 4, 36, "test fixture must have 36-char body");
+  const out = redact(sample);
+  assert.ok(out.includes("npm_[REDACTED]"));
+  assert.ok(!out.includes(sample));
+});
+
+test("redact: short npm_ prefix is NOT redacted", () => {
+  assert.equal(redact("npm_short"), "npm_short");
+});
+
+// Discord webhooks
+test("redact: discord webhook URL token segment", () => {
+  const sample = "https://discord.com/api/webhooks/1234567890/SeCrEt-WebHookToken_AbCdEfGhIjKlMnOpQrStUvWxYz";
+  const out = redact(sample);
+  assert.ok(out.includes("[REDACTED]"));
+  assert.ok(!out.includes("SeCrEt-WebHookToken"));
+});
+
+test("redact: discordapp.com legacy host also caught", () => {
+  const sample = "https://discordapp.com/api/webhooks/9876543210/AnotherSecretToken";
+  const out = redact(sample);
+  assert.ok(out.includes("[REDACTED]"));
+  assert.ok(!out.includes("AnotherSecretToken"));
+});
+
+// PEM private-key blocks (SSH, RSA, EC, OpenSSH, GCloud SA JSON)
+test("redact: PEM RSA private key block is fully redacted", () => {
+  const sample = `Some prose.
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAxx111yyy222zzz333aaa444bbb555ccc666ddd
+deadbeefcafebabe1234567890abcdef
+-----END RSA PRIVATE KEY-----
+More prose.`;
+  const out = redact(sample);
+  assert.ok(out.includes("[REDACTED-PRIVATE-KEY]"));
+  assert.ok(!out.includes("MIIEowIBA"));
+  assert.ok(!out.includes("deadbeef"));
+  // Surrounding prose preserved
+  assert.ok(out.startsWith("Some prose."));
+  assert.ok(out.endsWith("More prose."));
+});
+
+test("redact: OPENSSH private key block also caught", () => {
+  const sample = `-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+-----END OPENSSH PRIVATE KEY-----`;
+  const out = redact(sample);
+  assert.ok(out.includes("[REDACTED-PRIVATE-KEY]"));
+  assert.ok(!out.includes("b3BlbnNzaC"));
+});
+
+test("redact: GCloud service-account JSON private_key field is redacted", () => {
+  // Real SA JSONs embed the PEM inside a JSON string with literal \n.
+  // The PEM rule matches the BEGIN/END headers regardless of surrounding
+  // JSON quoting, so the key body is wiped while the JSON shell remains
+  // (the generic key/value rule also catches the surrounding "private_key":
+  // claim).
+  const sample = `{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDfake
+-----END PRIVATE KEY-----"}`;
+  const out = redact(sample);
+  assert.ok(out.includes("[REDACTED-PRIVATE-KEY]"));
+  assert.ok(!out.includes("MIIEvQIBA"));
+  assert.ok(!out.includes("AoIBAQDfake"));
+});
+
+test("redact: prose mentioning 'private key' (no PEM block) is untouched", () => {
+  const text = "Discuss the private key rotation plan in the runbook.";
+  assert.equal(redact(text), text);
+});
+
+test("redact: idempotent across the new patterns", () => {
+  const samples = [
+    "xoxe-1234567890-AbCdEfGhIj",
+    "npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+    "https://discord.com/api/webhooks/1/SeCrEt_AbCdEfGhIjKlMn",
+    "-----BEGIN PRIVATE KEY-----\nABCDEF\n-----END PRIVATE KEY-----",
+  ];
+  for (const s of samples) {
+    const once = redact(s);
+    const twice = redact(once);
+    assert.equal(twice, once, `not idempotent: ${s}`);
+  }
+});

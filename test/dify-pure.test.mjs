@@ -11,6 +11,8 @@ import {
   buildMetadataCondition,
   resolveDatasetId,
   requireDifyWriteConfig,
+  sanitizeHeaderValue,
+  getConfig,
 } from "../mcp-server/src/dify.js";
 
 // ---------- buildDatasetMap ----------
@@ -245,4 +247,25 @@ test("requireDifyWriteConfig: accepts UUID-shaped explicit id even when not in s
   };
   const uuid = "abcd1234-5678-90ef-abcd-1234567890ef";
   assert.equal(requireDifyWriteConfig(config, uuid), uuid);
+});
+
+// ---------- sanitizeHeaderValue + getConfig CRLF strip ----------
+
+test("sanitizeHeaderValue: strips CR/LF/whitespace from header-bound values", () => {
+  assert.equal(sanitizeHeaderValue("dataset-abc\r\n"), "dataset-abc");
+  assert.equal(sanitizeHeaderValue("  bearer-key  "), "bearer-key");
+  assert.equal(sanitizeHeaderValue("inline\rinjection"), "inlineinjection");
+  assert.equal(sanitizeHeaderValue("inline\ninjection"), "inlineinjection");
+  assert.equal(sanitizeHeaderValue(""), "");
+  assert.equal(sanitizeHeaderValue(null), "");
+  assert.equal(sanitizeHeaderValue(undefined), "");
+});
+
+test("getConfig: apiKey + apiUrl arrive sanitised even when env contains CRLF", () => {
+  const cfg = getConfig({
+    DIFY_KNOWLEDGE_API_KEY: "dataset-secret-pasted-with-newline\r\n",
+    DIFY_API_URL: "http://api:5001/v1\r\n",
+  });
+  assert.equal(cfg.apiKey, "dataset-secret-pasted-with-newline");
+  assert.equal(cfg.apiUrl, "http://api:5001/v1");
 });

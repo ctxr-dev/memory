@@ -10,6 +10,14 @@ export function intFromEnv(env, name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+// Strip CR/LF (and trailing whitespace) from a value that will be
+// interpolated into an HTTP header or URL. Defensive: prevents CRLF
+// injection when a user pastes a key with stray newline into memory/.env.
+export function sanitizeHeaderValue(value) {
+  if (value == null) return "";
+  return String(value).replace(/[\r\n]+/g, "").trim();
+}
+
 export function maskSecret(value) {
   if (!value) {
     return "";
@@ -137,8 +145,13 @@ export function getConfig(env = process.env) {
   const searchScope = splitCsv(env.DIFY_DATASET_IDS);
 
   return {
-    apiUrl: env.DIFY_API_URL || "http://api:5001/v1",
-    apiKey: env.DIFY_KNOWLEDGE_API_KEY || "",
+    // Strip any stray CR/LF from header-bound values. dify-setup.sh writes
+    // user-pasted keys verbatim and a key copied from a wrapped Dify UI line
+    // can carry trailing whitespace; without sanitisation the Bearer header
+    // would be CRLF-injected. Operator-controlled, so non-exploitable in the
+    // current trust model — but defensive sanitisation costs nothing.
+    apiUrl: sanitizeHeaderValue(env.DIFY_API_URL || "http://api:5001/v1"),
+    apiKey: sanitizeHeaderValue(env.DIFY_KNOWLEDGE_API_KEY || ""),
     datasetMap,
     datasetIds: searchScope.length > 0 ? searchScope : allDatasetIds,
     flushDatasetName: (env.DIFY_FLUSH_DATASET || "daily").toLowerCase(),

@@ -191,7 +191,9 @@ function parseCodexJsonl(raw) {
 }
 
 async function callAnthropicApi({ systemPrompt, userPrompt, maxTokens, timeoutMs }) {
-  const apiKey = envValue("ANTHROPIC_API_KEY");
+  // Defensive sanitisation: a key copied from a wrapped UI line may carry
+  // trailing CR/LF that would CRLF-inject the x-api-key header. Strip it.
+  const apiKey = envValue("ANTHROPIC_API_KEY").replace(/[\r\n]+/g, "").trim();
   const model = envValue("ANTHROPIC_MODEL", "claude-sonnet-4-6");
   if (!apiKey) throw new LLMProviderUnavailable("ANTHROPIC_API_KEY not set");
 
@@ -224,7 +226,9 @@ async function callAnthropicApi({ systemPrompt, userPrompt, maxTokens, timeoutMs
 }
 
 async function callOpenAiApi({ systemPrompt, userPrompt, maxTokens, timeoutMs }) {
-  const apiKey = envValue("OPENAI_API_KEY");
+  // Defensive sanitisation: strip stray CR/LF before interpolating into
+  // the Bearer header (mirror of the Anthropic helper).
+  const apiKey = envValue("OPENAI_API_KEY").replace(/[\r\n]+/g, "").trim();
   const model = envValue("OPENAI_MODEL", "gpt-4o-mini");
   if (!apiKey) throw new LLMProviderUnavailable("OPENAI_API_KEY not set");
 

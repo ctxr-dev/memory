@@ -367,7 +367,25 @@ server.registerTool(
     try {
       const config = getConfig();
       const result = await upsertDocumentByName(config, { datasetId: dataset, name, text, metadata });
-      return jsonToolResponse({ ok: true, ...result });
+      // Honest partial-state reporting: the document write succeeded if we
+      // got here without throwing, but the metadata write may have failed
+      // independently (upsertDocumentByName surfaces that as
+      // `metadataError`). A caller scanning only `ok` would otherwise miss
+      // a metadata failure that leaves the doc un-filterable in future
+      // recall calls. `documentOk` is the create result; `metadataOk` is
+      // the metadata-write result; `ok` is the AND so the agent can branch
+      // on a single boolean and still recover via the detail fields.
+      const documentOk = !!(result?.created);
+      const metadataAttempted = metadata && Object.keys(metadata).length > 0;
+      const metadataOk = metadataAttempted
+        ? !result?.metadataError
+        : true;
+      return jsonToolResponse({
+        ok: documentOk && metadataOk,
+        documentOk,
+        metadataOk,
+        ...result,
+      });
     } catch (error) {
       return errorToolResponse(error);
     }
@@ -441,7 +459,20 @@ server.registerTool(
         text,
         metadata: fullMetadata,
       });
-      return jsonToolResponse({ ok: true, datasetSlot, ...result });
+      // Same partial-state honesty as save_to_dataset: a lesson with the
+      // metadata write failed is invisible to recall_lessons (which filters
+      // by atom_type=self-improvement-lesson + project_module). Surface
+      // metadataOk so the agent doesn't claim "lesson saved" when it
+      // actually saved an unfilterable orphan.
+      const documentOk = !!(result?.created);
+      const metadataOk = !result?.metadataError;
+      return jsonToolResponse({
+        ok: documentOk && metadataOk,
+        documentOk,
+        metadataOk,
+        datasetSlot,
+        ...result,
+      });
     } catch (error) {
       return errorToolResponse(error);
     }
@@ -453,7 +484,7 @@ server.registerTool(
   {
     title: "Recall relevant self-improvement lessons before related work",
     description:
-      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than 3 hits by dropping `error_pattern`, then `language`, then `task_type`. Optionally also pulls `bug-root-cause` + `feedback-rule` atoms from the `knowledge` dataset matching `project_module`. Returns at most `maxResults` (default 5) compact records sorted by score.",
+      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons).",
     inputSchema: {
       query: z.string().trim().min(1).max(250),
       project_module: z.string().trim().min(1).optional(),
