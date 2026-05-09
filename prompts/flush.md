@@ -10,10 +10,16 @@ Produce a small set of typed atoms that will be useful to a different agent in a
 {
   "atoms": [
     {
-      "type": "decision" | "bug-root-cause" | "feedback-rule" | "project-lore" | "reference" | "pattern-gotcha",
+      "type": "decision" | "bug-root-cause" | "feedback-rule" | "project-lore" | "reference" | "pattern-gotcha" | "self-improvement-lesson",
       "title": "imperative summary, ≤ 80 chars",
       "body": "≤ 500 chars. Lead with the rule/fact. Include 'Why:' and 'How to apply:' lines when applicable.",
       "tags": ["lowercase-hyphenated", "scope", "or-area"],
+      "metadata": {
+        "project_module": "auth | billing | infra | frontend | ... (lowercase, hyphen-free)",
+        "language": "swift | python | typescript | bash | ... (empty when language-agnostic)",
+        "task_type": "planning | implementation | debugging | refactor | review | deploy | docs | unknown",
+        "error_pattern": "short kebab-case slug (only for self-improvement-lesson and bug-root-cause)"
+      },
       "evidence": "optional: 1-line excerpt or reference from the transcript that justifies this atom"
     }
   ]
@@ -25,11 +31,25 @@ If nothing in the transcript is durable, return exactly: `{"atoms": []}`.
 # Type definitions
 
 - **decision**: an architectural or product choice with rationale. "Use X over Y because Z."
-- **bug-root-cause**: a debugging conclusion. NOT the diff (the diff lives in git). The misleading symptom, the actual cause, and the trap to avoid.
+- **bug-root-cause**: a debugging conclusion. NOT the diff (the diff lives in git). The misleading symptom, the actual cause, and the trap to avoid. Populate `metadata.error_pattern` with a short kebab-case slug like `missing-await-on-async`, `bsd-sed-no-arg`, `stale-cache-after-migrate`.
 - **feedback-rule**: a workflow rule the user gave you about HOW to do work on this project. Conventions, do/don't, exit predicates.
 - **project-lore**: who is doing what, deadlines, blockers, integration quirks not in the code. Decays fast — include dates.
 - **reference**: a pointer to an external resource (dashboard, runbook, Linear/Jira project, doc URL) and what it is for.
 - **pattern-gotcha**: a reusable code-level lesson. API quirk, framework footgun, library behavior. Reusable across sessions and codebases.
+- **self-improvement-lesson**: extract ONLY when the user gave NEGATIVE OR CORRECTIVE feedback that reveals a behaviour the AI should change next time. Triggers include:
+  - Direct correction: "no", "stop doing X", "you should have done Y", reverting your work, "wrong".
+  - Repeat correction: "I told you before", "again", "same mistake", "we've covered this".
+  - Wrong-tool / wrong-step: the user pointed out you used the wrong file, command, format, or skipped a step.
+  - DO NOT extract a self-improvement-lesson for routine clarification, neutral redirection ("let's switch to X instead"), the user changing their mind, or user mistakes attributed to themselves.
+  - For these atoms `metadata.project_module`, `metadata.task_type`, AND `metadata.error_pattern` are REQUIRED; the atom is dropped if they are absent.
+
+# Metadata guidance
+
+- `project_module` is a stable identifier of the part of the codebase the lesson belongs to (e.g. `auth`, `billing`, `frontend`, `infra`, `cli`). Use lowercase, hyphenated. Use `unknown` if you cannot infer it.
+- `language` is the programming language of the affected code, lowercase (`swift`, `python`, `typescript`, `bash`, `sql`). Use `""` for language-agnostic lessons.
+- `task_type` constrains to one of: `planning`, `implementation`, `debugging`, `refactor`, `review`, `deploy`, `docs`, `unknown`.
+- `error_pattern` is a short kebab-case identifier for the failure mode. Required for `self-improvement-lesson`. Optional for `bug-root-cause`. Empty for the rest.
+- `tags` should still carry 1-N looser keywords for fulltext fallback (e.g. `["pr-loop", "code-review"]`).
 
 # Hard rules — what NOT to extract
 
@@ -47,6 +67,7 @@ Each atom must:
 2. Lead with the fact, not the narrative ("X over Y because Z", not "we discussed and decided X").
 3. Be ≤ 80 chars title, ≤ 500 chars body.
 4. Have at least one tag.
+5. For `self-improvement-lesson`: have `metadata.project_module`, `metadata.task_type`, AND `metadata.error_pattern` set.
 
 If you are unsure whether an atom meets the bar, omit it.
 

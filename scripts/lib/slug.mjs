@@ -27,8 +27,14 @@ export function knowledgeDocName(slugOrTitle, date = new Date()) {
   return `knowledge-${slug}-${timestampUtc(date)}.md`;
 }
 
+export function lessonDocName(slugOrTitle, date = new Date()) {
+  const slug = slugify(slugOrTitle);
+  return `lesson-${slug}-${timestampUtc(date)}.md`;
+}
+
 const DAILY_RE = /^daily-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
 const KNOWLEDGE_RE = /^knowledge-(.+)-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
+const LESSON_RE = /^lesson-(.+)-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
 
 export function parseDailyDocName(name) {
   const m = String(name || "").match(DAILY_RE);
@@ -39,6 +45,13 @@ export function parseDailyDocName(name) {
 
 export function parseKnowledgeDocName(name) {
   const m = String(name || "").match(KNOWLEDGE_RE);
+  if (!m) return null;
+  const [, slug, y, mo, d, hms, ms] = m;
+  return { slug, date: `${y}-${mo}-${d}`, time: hms, ms };
+}
+
+export function parseLessonDocName(name) {
+  const m = String(name || "").match(LESSON_RE);
   if (!m) return null;
   const [, slug, y, mo, d, hms, ms] = m;
   return { slug, date: `${y}-${mo}-${d}`, time: hms, ms };

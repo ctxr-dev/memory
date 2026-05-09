@@ -3,6 +3,7 @@ import path from "node:path";
 import { PROMPTS_DIR, envInt, envValue } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
+import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "../lib/llm.mjs";
 import { writeMemory, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
 
@@ -116,14 +117,16 @@ function loadPrompt() {
   return fs.readFileSync(file, "utf8");
 }
 
-const ATOM_TYPES = new Set([
-  "decision",
-  "bug-root-cause",
-  "feedback-rule",
-  "project-lore",
-  "reference",
-  "pattern-gotcha",
-]);
+function normaliseMetadata(raw) {
+  const md = (raw && typeof raw === "object") ? raw : {};
+  const taskType = String(md.task_type || "").toLowerCase().trim();
+  return {
+    project_module: String(md.project_module || "").toLowerCase().trim(),
+    language: String(md.language || "").toLowerCase().trim(),
+    task_type: TASK_TYPES.has(taskType) ? taskType : "",
+    error_pattern: String(md.error_pattern || "").toLowerCase().trim(),
+  };
+}
 
 function validateAtoms(parsed) {
   if (!parsed || !Array.isArray(parsed.atoms)) {
@@ -140,11 +143,24 @@ function validateAtoms(parsed) {
       ? atom.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
       : [];
     if (tags.length === 0) continue;
+    const metadata = normaliseMetadata(atom.metadata);
+    if (type === "self-improvement-lesson") {
+      // Lessons MUST have project_module, task_type, and error_pattern so
+      // recall_lessons can filter them precisely. Drop malformed lessons
+      // rather than flooding the store with un-filterable noise.
+      if (!metadata.project_module || !metadata.task_type || !metadata.error_pattern) {
+        console.error(
+          `flush.mjs: dropped self-improvement-lesson '${title.slice(0, 40)}' (missing required metadata)`,
+        );
+        continue;
+      }
+    }
     cleaned.push({
       type,
       title: title.slice(0, 80),
       body: body.slice(0, 500),
       tags,
+      metadata,
       evidence: atom.evidence ? String(atom.evidence).slice(0, 240).trim() : undefined,
     });
   }
@@ -172,6 +188,7 @@ function renderDailyDocument({ atoms, source }) {
       `- type: ${atom.type}`,
       `- title: ${atom.title}`,
       `- tags: [${atom.tags.join(", ")}]`,
+      `- metadata: ${JSON.stringify(atom.metadata)}`,
       `- body: |`,
       ...atom.body.split(/\r?\n/).map((l) => `    ${l}`),
     ];
