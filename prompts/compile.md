@@ -3,8 +3,8 @@ You decide how to merge a NEW project-memory atom into the existing knowledge st
 # Inputs
 
 You receive:
-- ONE new atom: `{ type, title, body, tags, evidence? }`
-- Up to 5 existing knowledge entries from the project memory, each with `documentId`, `documentName`, `score`, and `content`.
+- ONE new atom: `{ type, title, body, tags, metadata, evidence? }` where `metadata` carries `project_module`, `language`, `task_type`, and (for self-improvement-lesson and bug-root-cause) `error_pattern`.
+- Up to 5 existing entries from the same dataset, ALREADY filtered to the same `atom_type` and (when present) the same `project_module`, `language`, and `error_pattern`. Candidates carry `documentId`, `documentName`, `score`, `content`.
 
 # Output schema (STRICT — pick exactly ONE action)
 
@@ -32,6 +32,7 @@ The new atom adds no information beyond the existing entries.
 - Bias toward **update** when the new atom's title and tags overlap with an existing entry's title and content.
 - Bias toward **create** only when the new atom is a clearly distinct fact (different scope, different rule, different gotcha).
 - Bias toward **skip** when the new atom is a near-verbatim restatement.
+- For `self-improvement-lesson`: if the new atom and an existing candidate share the same `error_pattern`, STRONGLY prefer **update**. Lessons should converge into one canonical document per error pattern, not multiply. The candidate set has already been pre-filtered by error_pattern when one was provided, so the same-error_pattern signal is implicit when candidates exist.
 
 # Hard rules
 

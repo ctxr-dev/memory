@@ -5,12 +5,20 @@ import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./li
 import {
   listDocuments,
   readDocument,
-  searchMemory,
+  searchMemoryFiltered,
   writeMemory,
   disableDocument,
+  updateDocMetadata,
   DifyBridgeUnavailable,
 } from "./lib/dify-write.mjs";
-import { knowledgeDocName, parseDailyDocName, parseKnowledgeDocName } from "./lib/slug.mjs";
+import {
+  knowledgeDocName,
+  lessonDocName,
+  parseDailyDocName,
+  parseKnowledgeDocName,
+  parseLessonDocName,
+} from "./lib/slug.mjs";
+import { ATOM_TYPE_TO_DATASET, metadataForDify } from "./lib/datasets.mjs";
 
 const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -47,6 +55,7 @@ function parseAtomsFromMarkdown(text) {
     if (!block.startsWith("### Atom")) continue;
     const lines = block.split(/\r?\n/);
     let type, title, tags = [], body = "", evidence;
+    let metadata = {};
     let inBody = false;
     for (const line of lines) {
       if (inBody) {
@@ -71,6 +80,9 @@ function parseAtomsFromMarkdown(text) {
           tags = inner ? inner.split(",").map((t) => t.trim()).filter(Boolean) : [];
           break;
         }
+        case "metadata":
+          try { metadata = JSON.parse(rest.trim()) || {}; } catch { metadata = {}; }
+          break;
         case "body":
           if (rest.trim() === "|") inBody = true;
           else body = rest.trim();
@@ -81,7 +93,7 @@ function parseAtomsFromMarkdown(text) {
         default: break;
       }
     }
-    if (type && title && body) atoms.push({ type, title, body, tags, evidence });
+    if (type && title && body) atoms.push({ type, title, body, tags, metadata, evidence });
   }
   return atoms;
 }
@@ -90,28 +102,63 @@ function loadPrompt() {
   return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8");
 }
 
-async function knowledgeCandidates(atom) {
-  const query = `${atom.title}${atom.tags.length ? " " + atom.tags.join(" ") : ""}`;
-  const result = await searchMemory({ query, limit: Math.max(SEARCH_LIMIT * 3, 15) });
-  const records = Array.isArray(result?.records) ? result.records : [];
-  const seen = new Set();
-  const knowledge = [];
-  for (const rec of records) {
-    if (!rec?.documentName || !parseKnowledgeDocName(rec.documentName)) continue;
-    if (seen.has(rec.documentId)) continue;
-    seen.add(rec.documentId);
-    knowledge.push(rec);
-    if (knowledge.length >= SEARCH_LIMIT) break;
-  }
-  return knowledge;
+function targetDatasetForAtom(atom) {
+  const fallback = envValue("DIFY_COMPILE_DATASET", "knowledge");
+  return ATOM_TYPE_TO_DATASET[atom.type] || fallback;
 }
 
-function buildKnowledgeDocText(atom, mergedTextOverride) {
+function parserForAtom(atom) {
+  return atom.type === "self-improvement-lesson" ? parseLessonDocName : parseKnowledgeDocName;
+}
+
+function nameBuilderForAtom(atom) {
+  return atom.type === "self-improvement-lesson" ? lessonDocName : knowledgeDocName;
+}
+
+// Build the metadata-condition filter for compile-time candidate retrieval.
+// Tighter filters give the LLM cleaner candidates and bias toward update over
+// create.
+function compileFilters(atom) {
+  const filters = { atom_type: atom.type };
+  if (atom.metadata?.project_module) filters.project_module = atom.metadata.project_module;
+  if (atom.metadata?.language) filters.language = atom.metadata.language;
+  if (atom.metadata?.error_pattern) filters.error_pattern = atom.metadata.error_pattern;
+  return filters;
+}
+
+async function dedupCandidates(atom, targetDataset) {
+  const query = `${atom.title}${atom.tags.length ? " " + atom.tags.join(" ") : ""}`;
+  const result = await searchMemoryFiltered({
+    query,
+    datasetId: targetDataset,
+    limit: Math.max(SEARCH_LIMIT, 5),
+    filters: compileFilters(atom),
+  });
+  const records = Array.isArray(result?.records) ? result.records : [];
+  const parser = parserForAtom(atom);
+  const seen = new Set();
+  const out = [];
+  for (const rec of records) {
+    if (!rec?.documentName || !parser(rec.documentName)) continue;
+    if (seen.has(rec.documentId)) continue;
+    seen.add(rec.documentId);
+    out.push(rec);
+    if (out.length >= SEARCH_LIMIT) break;
+  }
+  return out;
+}
+
+function buildPromotedDocText(atom, mergedTextOverride) {
+  const md = atom.metadata || {};
   const lines = [
     `# ${atom.title}`,
     "",
     `- type: ${atom.type}`,
     `- tags: [${atom.tags.join(", ")}]`,
+    `- project_module: ${md.project_module || ""}`,
+    `- language: ${md.language || ""}`,
+    `- task_type: ${md.task_type || ""}`,
+    `- error_pattern: ${md.error_pattern || ""}`,
     `- updated_at_utc: ${new Date().toISOString()}`,
     "",
     mergedTextOverride && mergedTextOverride.trim() ? mergedTextOverride.trim() : atom.body,
@@ -127,7 +174,7 @@ async function decideAction(atom, candidates, systemPrompt) {
     "NEW ATOM:",
     JSON.stringify(atom, null, 2),
     "",
-    "EXISTING KNOWLEDGE CANDIDATES:",
+    `EXISTING CANDIDATES (already filtered by atom_type=${atom.type} and matching metadata):`,
     candidates.length === 0
       ? "[]"
       : JSON.stringify(
@@ -144,38 +191,54 @@ async function decideAction(atom, candidates, systemPrompt) {
   return callLLMWithRetry({ systemPrompt, userPrompt, maxTokens: 800 });
 }
 
-async function executeAction(atom, decision, candidates) {
-  const knowledgeDataset = envValue("DIFY_COMPILE_DATASET", "knowledge");
+async function executeAction(atom, decision, candidates, targetDataset) {
   if (decision.action === "skip") {
     return { ok: true, action: "skip", reason: decision.reason };
   }
+  const buildName = nameBuilderForAtom(atom);
   if (decision.action === "create") {
-    const text = buildKnowledgeDocText(atom);
-    const name = knowledgeDocName(atom.title);
-    if (DRY_RUN) return { ok: true, dryRun: true, action: "create", name };
-    return writeMemory({ name, text, datasetId: knowledgeDataset });
+    const text = buildPromotedDocText(atom);
+    const name = buildName(atom.title);
+    if (DRY_RUN) return { ok: true, dryRun: true, action: "create", name, datasetId: targetDataset };
+    return writeMemory({ name, text, datasetId: targetDataset });
   }
   if (decision.action === "update") {
     if (!decision.supersedes) throw new Error("update action missing supersedes");
     const merged = String(decision.merged_text || "").trim();
     if (!merged) throw new Error("update action missing merged_text");
     const candidate = candidates.find((c) => c.documentId === decision.supersedes);
-    const parsed = candidate ? parseKnowledgeDocName(candidate.documentName) : null;
+    const parser = parserForAtom(atom);
+    const parsed = candidate ? parser(candidate.documentName) : null;
     const slugSource = parsed?.slug ? parsed.slug : (decision.merged_name || atom.title);
-    const text = buildKnowledgeDocText({ ...atom, title: decision.merged_name || atom.title }, merged);
-    const name = knowledgeDocName(slugSource);
+    const text = buildPromotedDocText({ ...atom, title: decision.merged_name || atom.title }, merged);
+    const name = buildName(slugSource);
     if (DRY_RUN) {
-      return { ok: true, dryRun: true, action: "update", name, supersedes: decision.supersedes };
+      return { ok: true, dryRun: true, action: "update", name, supersedes: decision.supersedes, datasetId: targetDataset };
     }
     return writeMemory({
       name,
       text,
-      datasetId: knowledgeDataset,
+      datasetId: targetDataset,
       supersedes: decision.supersedes,
       supersedesAction: "disable",
     });
   }
   throw new Error(`unknown decision action: ${decision.action}`);
+}
+
+// After writeMemory creates the new document, set the per-document Dify
+// metadata so subsequent retrieve calls can filter on it. Failure is recorded
+// but does not abort the compile run.
+async function applyMetadataToWritten(atom, writeResult, targetDataset) {
+  if (!writeResult || writeResult.dryRun) return null;
+  const docId = writeResult?.created?.document?.id || writeResult?.created?.id;
+  if (!docId) return { ok: false, reason: "writeMemory response missing created.document.id" };
+  const md = metadataForDify(atom);
+  try {
+    return await updateDocMetadata({ datasetId: targetDataset, documentId: docId, metadata: md });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function main() {
@@ -238,21 +301,31 @@ async function main() {
 
     let allOk = true;
     for (const atom of atoms) {
+      const targetDataset = targetDatasetForAtom(atom);
       try {
-        const candidates = await knowledgeCandidates(atom);
+        const candidates = await dedupCandidates(atom, targetDataset);
         const decision = await decideAction(atom, candidates, systemPrompt);
         if (!decision || typeof decision !== "object" || !decision.action) {
           throw new LLMOutputInvalid("compile decision missing 'action'", JSON.stringify(decision));
         }
-        const result = await executeAction(atom, decision, candidates);
+        const result = await executeAction(atom, decision, candidates, targetDataset);
         counts[decision.action] = (counts[decision.action] || 0) + 1;
+
+        let metadataResult;
+        if (decision.action === "create" || decision.action === "update") {
+          metadataResult = await applyMetadataToWritten(atom, result, targetDataset);
+        }
+
         appendCompileLog({
           event: "atom",
           source: daily.name,
+          target: targetDataset,
           atomTitle: atom.title,
           action: decision.action,
           supersedes: decision.supersedes,
           dryRun: DRY_RUN,
+          metadataApplied: metadataResult?.ok === true ? true : (metadataResult ? false : undefined),
+          metadataError: metadataResult?.error || metadataResult?.reason,
         });
         if (!DRY_RUN && result?.ok === false) throw new Error(JSON.stringify(result));
       } catch (err) {
@@ -261,6 +334,7 @@ async function main() {
         appendCompileLog({
           event: "atom-error",
           source: daily.name,
+          target: targetDataset,
           atomTitle: atom.title,
           error: err instanceof Error ? err.message : String(err),
         });
