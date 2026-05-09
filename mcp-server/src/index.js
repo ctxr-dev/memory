@@ -10,15 +10,12 @@ import {
   createDocumentByText,
   deleteDocument,
   disableDocument,
-  fetchJsonWithTimeout,
-  findDocumentByExactName,
   getConfig,
   listAllDatasets,
   maskSecret,
   requireDifyWriteConfig,
   resolveDatasetId,
   retrieveChunks,
-  updateDocumentMetadata,
   upsertDocumentByName,
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
@@ -377,7 +374,7 @@ server.registerTool(
   {
     title: "Save a self-improvement lesson",
     description:
-      "Persist a self-improvement lesson into the `self_improvement` Dify dataset (or the slot named in DIFY_DATASET_SELF_IMPROVEMENT_ID). Use this MID-SESSION the moment the user corrects you, so the next turn can already retrieve it via recall_lessons. The lesson document is named `lesson-<slug>-<ts>.md` (slug derived from `title`); re-saving with the same title overwrites in place. `metadata.project_module`, `metadata.task_type`, and `metadata.error_pattern` are required so the lesson is filterable.",
+      "Persist a self-improvement lesson into the `self_improvement` slot bound via DIFY_DATASET_SELF_IMPROVEMENT_ID. Hard-fails if that slot is not configured (no fallback — a lesson in any other slot is invisible to recall_lessons). Use MID-SESSION the moment the user corrects you so the next turn can retrieve it. Doc name `lesson-<slug>-<ts>.md` (slug from `title`); same title overwrites in place. `metadata.project_module`, `metadata.task_type`, and `metadata.error_pattern` are required.",
     inputSchema: {
       title: z.string().trim().min(1).max(180),
       body: z.string().trim().min(1).max(10_000),
@@ -517,7 +514,8 @@ server.registerTool(
       const seen = new Set();
       const lessonHits = [];
       const rungAttribution = [];
-      for (const filters of ladder) {
+      for (let rungIdx = 0; rungIdx < ladder.length; rungIdx += 1) {
+        const filters = ladder[rungIdx];
         const condition = buildMetadataCondition(filters);
         const records = await retrieveChunks(config, {
           datasetId: lessonDatasetId,
@@ -534,17 +532,22 @@ server.registerTool(
           if (seen.has(dedupKey)) continue;
           seen.add(dedupKey);
           compact.kind = "lesson";
+          compact.rungIndex = rungIdx;   // strict (lower) wins ordering
           lessonHits.push(compact);
           added += 1;
         }
         if (added > 0) rungAttribution.push({ filters, added });
         if (lessonHits.length >= limit) break;
       }
-      // Sort lesson hits by score WITHIN the strict-first ordering: hits
-      // from earlier rungs come first, then sorted by score within each rung.
-      // Implementation: stable sort by score, but rungs are already added
-      // in priority order so we keep insertion order via a tag.
-      lessonHits.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+      // Stable sort: by rungIndex ASC (strict rung first), then by score
+      // DESC within each rung. This actually preserves the strict-first
+      // ordering the comment promises — the previous global score sort
+      // would silently displace strict hits with high-scoring broad hits.
+      lessonHits.sort((a, b) => {
+        const r = (a.rungIndex ?? 0) - (b.rungIndex ?? 0);
+        if (r !== 0) return r;
+        return (b.score ?? -1) - (a.score ?? -1);
+      });
 
       const supplementary = [];
       if (includeKnowledge !== false && project_module) {

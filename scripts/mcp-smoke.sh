@@ -107,10 +107,13 @@ if (!flushBound && !config.legacyWriteDatasetId) {
 if (!compileBound && !config.legacyWriteDatasetId) {
   fail(`Compile slot '${compileSlot}' has no configured id. Run ./memory/scripts/dify-setup.sh.`);
 }
+let warnings = 0;
 if (!flushBound && config.legacyWriteDatasetId) {
+  warnings += 1;
   console.error(`MCP smoke WARNING: flush slot '${flushSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./memory/scripts/dify-setup.sh to bind the slot.`);
 }
 if (!compileBound && config.legacyWriteDatasetId) {
+  warnings += 1;
   console.error(`MCP smoke WARNING: compile slot '${compileSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./memory/scripts/dify-setup.sh to bind the slot.`);
 }
 
@@ -119,7 +122,6 @@ if (Array.isArray(search.errors) && search.errors.length > 0) {
   fail(`Dify retrieval errors: ${JSON.stringify(search.errors)}`);
 }
 
-console.error(
-  `MCP smoke OK: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'`,
-);
+const summary = `MCP smoke OK${warnings > 0 ? ` (with ${warnings} warning${warnings === 1 ? "" : "s"})` : ""}: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'`;
+console.error(summary);
 NODE

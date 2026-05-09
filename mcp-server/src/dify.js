@@ -242,9 +242,18 @@ export async function createDataset(config, {
 }) {
   if (!name) throw new Error("createDataset requires a name.");
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets`;
+  // Well-formed RetrievalModel: search_method REQUIRED. reranking_mode +
+  // weights provided so later /retrieve calls that fall back to this
+  // dataset default don't trip "KeyError: reranking_mode" on Dify versions
+  // that strictly validate the persisted model.
   const defaultRetrievalModel = {
     search_method: "hybrid_search",
     reranking_enable: false,
+    reranking_mode: "weighted_score",
+    weights: {
+      vector_setting: { vector_weight: 0.7 },
+      keyword_setting: { keyword_weight: 0.3 },
+    },
     top_k: 8,
     score_threshold_enabled: false,
     score_threshold: 0,
@@ -257,10 +266,18 @@ export async function createDataset(config, {
   };
   if (description) payload.description = description;
   // Pass-through embedding model when the tenant default isn't usable.
+  // Refuse to silently drop a half-set pair: surface the misconfig so the
+  // user fixes it instead of getting a misleading "No Embedding Model"
+  // error from Dify.
   const embedFromEnv = process.env.DIFY_EMBEDDING_MODEL || "";
   const embedProviderFromEnv = process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "";
   const finalEmbed = embeddingModel || embedFromEnv;
   const finalEmbedProvider = embeddingModelProvider || embedProviderFromEnv;
+  if (Boolean(finalEmbed) !== Boolean(finalEmbedProvider)) {
+    throw new Error(
+      "createDataset: set BOTH DIFY_EMBEDDING_MODEL and DIFY_EMBEDDING_MODEL_PROVIDER (or pass both as args), or neither.",
+    );
+  }
   if (finalEmbed && finalEmbedProvider) {
     payload.embedding_model = finalEmbed;
     payload.embedding_model_provider = finalEmbedProvider;
@@ -370,7 +387,15 @@ export async function updateDocumentMetadata(config, { datasetId, documentId, me
     metadataList.push({ id: f.id, name, value: value == null ? "" : String(value) });
   }
   if (metadataList.length === 0) {
-    return { ok: false, skippedFields, message: "no fields matched dataset metadata schema" };
+    // Treat as a CONFIG WARNING, not a failure: the document was written,
+    // there are simply no matching metadata fields on the dataset (user
+    // skipped dify-setup.sh schema install). Caller can read the warning
+    // but should NOT count this against the daily-doc retry cap.
+    return {
+      ok: true,
+      warning: "no fields matched dataset metadata schema; run ./memory/scripts/dify-setup.sh to install per-document fields",
+      skippedFields,
+    };
   }
 
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
@@ -502,13 +527,23 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 
   let rm = explicitRm;
   if ((wantsThreshold || wantsMetadata) && !rm) {
-    // Need to attach filter/threshold but caller supplied none. Build a
-    // minimal rm: copy the dataset's own search method via a lightweight
-    // GET would be ideal but adds an extra round-trip per call. Instead
-    // we send only the filter/threshold fields and let Dify merge with
-    // the dataset's configured defaults (per RetrievalModel Pydantic
-    // partial-update semantics in dataset_retrieval.py).
-    rm = {};
+    // Need to attach filter/threshold but caller supplied none. Dify's
+    // RetrievalModel Pydantic schema (knowledge_entities.py) requires
+    // `search_method`, so we cannot send a partial. Use hybrid_search as
+    // the safe default — Dify will accept it on high_quality datasets
+    // (the boilerplate's create-time default). Economy datasets that
+    // never set hybrid retrieval will reject this; in that case the
+    // caller should supply an explicit retrievalModel.
+    rm = {
+      search_method: "hybrid_search",
+      reranking_enable: false,
+      reranking_mode: "weighted_score",
+      weights: {
+        vector_setting: { vector_weight: 0.7 },
+        keyword_setting: { keyword_weight: 0.3 },
+      },
+      top_k: 8,
+    };
   }
 
   if (rm) {

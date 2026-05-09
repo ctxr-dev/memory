@@ -295,11 +295,13 @@ restart_bridge || { echo "FATAL: cannot proceed without a healthy bridge." >&2; 
 SCHEMA_FIELDS=(atom_type tags project_module language task_type error_pattern)
 
 install_metadata_schema() {
-  local slot="$1"
+  local slot="$1" dataset_id="$2"
   local fields_json
-  fields_json="$(cli list-metadata-fields --datasetId "$slot" 2>/dev/null || true)"
+  # Pass the resolved UUID; the bridge's resolveDatasetId would also accept
+  # the slot name, but the UUID makes failures unambiguous in logs.
+  fields_json="$(cli list-metadata-fields --datasetId "$dataset_id" 2>/dev/null || true)"
   if ! printf '%s' "$fields_json" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' >/dev/null 2>&1; then
-    echo "    WARNING: could not list metadata fields for '$slot' (skipping schema install)." >&2
+    echo "    WARNING: could not list metadata fields for '$slot' ($dataset_id); skipping schema install." >&2
     return 0
   fi
   for field in "${SCHEMA_FIELDS[@]}"; do
@@ -312,7 +314,7 @@ install_metadata_schema() {
       echo "    field '$field' already present"
     else
       echo "    creating field '$field' (string)"
-      cli create-metadata-field --datasetId "$slot" --name "$field" --type string >/dev/null \
+      cli create-metadata-field --datasetId "$dataset_id" --name "$field" --type string >/dev/null \
         || echo "    WARNING: failed to create field '$field' on '$slot'" >&2
     fi
   done
@@ -324,9 +326,12 @@ for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
   slot="$(echo "$slot" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
   env_key="$(slot_to_env_key "$slot")"
   current_id="$(read_env_value "$env_key" "$ENV_FILE" 2>/dev/null || true)"
-  [ -n "$current_id" ] || continue
-  echo "  slot: $slot"
-  install_metadata_schema "$slot"
+  if [ -z "$current_id" ]; then
+    echo "  slot: $slot — unbound, skipping schema install"
+    continue
+  fi
+  echo "  slot: $slot ($current_id)"
+  install_metadata_schema "$slot" "$current_id"
 done
 
 # Offer to enable Dify's built-in metadata fields (document_name,
@@ -337,7 +342,7 @@ if [ "$NON_INTERACTIVE" -eq 1 ] || confirm "Enable Dify built-in metadata fields
     env_key="$(slot_to_env_key "$slot")"
     current_id="$(read_env_value "$env_key" "$ENV_FILE" 2>/dev/null || true)"
     [ -n "$current_id" ] || continue
-    cli set-built-in-metadata --datasetId "$slot" --enabled true >/dev/null \
+    cli set-built-in-metadata --datasetId "$current_id" --enabled true >/dev/null \
       || echo "  WARNING: failed to enable built-in metadata on '$slot'" >&2
   done
 fi
@@ -354,10 +359,13 @@ else
       default_target="knowledge"
     else
       default_target=""
-      for try_slot in "${declared_slots_arr[@]}"; do
-        try_id="$(read_env_value "$(slot_to_env_key "$try_slot")" "$ENV_FILE" 2>/dev/null || true)"
-        if [ -n "$try_id" ]; then default_target="$try_slot"; break; fi
-      done
+      # Bash 3.2 + set -u: guard empty-array iteration.
+      if [ "${#declared_slots_arr[@]}" -gt 0 ]; then
+        for try_slot in "${declared_slots_arr[@]}"; do
+          try_id="$(read_env_value "$(slot_to_env_key "$try_slot")" "$ENV_FILE" 2>/dev/null || true)"
+          if [ -n "$try_id" ]; then default_target="$try_slot"; break; fi
+        done
+      fi
       [ -n "$default_target" ] || { echo "No bound slot to absorb into. Bind a slot first." >&2; default_target="knowledge"; }
     fi
     target_slot="$(prompt 'Target slot for absorbed docs' "$default_target")"

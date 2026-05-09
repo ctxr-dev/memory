@@ -244,8 +244,10 @@ async function executeAction(atom, decision, candidates, targetDataset) {
 }
 
 // After writeMemory creates the new document, set the per-document Dify
-// metadata so subsequent retrieve calls can filter on it. Failure is recorded
-// but does not abort the compile run.
+// metadata so subsequent retrieve calls can filter on it. Failure is
+// recorded but does not abort the compile run — EXCEPT bridge-unavailable
+// errors are re-thrown so the outer per-atom catch can fire `process.exit(0)`
+// instead of grinding through more dailies against a dead bridge.
 async function applyMetadataToWritten(atom, writeResult, targetDataset) {
   if (!writeResult || writeResult.dryRun) return null;
   const docId = writeResult?.created?.document?.id || writeResult?.created?.id;
@@ -254,6 +256,7 @@ async function applyMetadataToWritten(atom, writeResult, targetDataset) {
   try {
     return await updateDocMetadata({ datasetId: targetDataset, documentId: docId, metadata: md });
   } catch (err) {
+    if (err instanceof DifyBridgeUnavailable) throw err;
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -338,9 +341,11 @@ async function main() {
 
         // Metadata-write failure is non-fatal for the doc itself but the
         // doc is now un-filterable. Mark the daily kept-enabled so a later
-        // compile retries the metadata write (idempotent because the new
-        // daily-doc atom hasn't been replaced).
+        // compile retries the metadata write. A `warning` (e.g. "no
+        // fields matched") still counts as ok=true so it does NOT trip the
+        // retry cap (config issue, not transient).
         const metadataFailed = metadataResult && metadataResult.ok !== true;
+        const metadataWarning = metadataResult && metadataResult.ok === true && metadataResult.warning;
 
         appendCompileLog({
           event: "atom",
@@ -350,7 +355,8 @@ async function main() {
           action: decision.action,
           supersedes: decision.supersedes,
           dryRun: DRY_RUN,
-          metadataApplied: metadataResult?.ok === true ? true : (metadataResult ? false : undefined),
+          metadataApplied: metadataResult?.ok === true && !metadataResult?.warning ? true : (metadataResult ? false : undefined),
+          metadataWarning: metadataWarning || undefined,
           metadataError: metadataResult?.error || metadataResult?.reason,
         });
         if (!DRY_RUN && result?.ok === false) throw new Error(JSON.stringify(result));
@@ -414,6 +420,15 @@ async function main() {
           attempts,
         });
       }
+    }
+
+    // Persist state per-daily so a crash mid-loop doesn't lose retry
+    // counters. Without this, a process.exit(0) on bridge/LLM unavailable
+    // (lines above) would never let the retry cap kick in.
+    try {
+      writeState(state);
+    } catch (err) {
+      console.error(`compile.mjs: state write failed (continuing): ${err instanceof Error ? err.message : err}`);
     }
   }
 

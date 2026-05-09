@@ -450,7 +450,7 @@ memory/
 │                                     # improvement-lesson type + metadata)
 ├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
 ├── mcp-server/
-│   └── src/{index,dify,memory-cli,glob}.js
+│   └── src/{index,dify,memory-cli,glob,slug}.js
 ├── templates/
 │   ├── agents/                 # rendered to <project>/.agents/
 │   ├── claude/settings.json    # rendered to <project>/.claude/
