@@ -136,7 +136,7 @@ Steps:
    bash -n ./memory/bootstrap.sh ./memory/scripts/*.sh ./memory/scripts/hooks/*.sh
    node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./memory/scripts/hooks/session-start.mjs
    node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
-   ( cd ./memory && node --test test/*.test.mjs )
+   ( cd ./memory && npm test )
 
    Then print the requested client snippets from `./memory/.agents/clients/` (now that bootstrap has rendered them):
    ./memory/scripts/mcp-config.sh all
@@ -182,7 +182,15 @@ The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboa
 ./memory/scripts/mcp-smoke.sh    # validate
 ```
 
-Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` (e.g. `DIFY_DATASET_RUNBOOKS_ID=`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot. After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines: `./memory/scripts/up.sh` (rebuilds + recreates) or `docker compose -p $COMPOSE_PROJECT_NAME up -d --no-build memory_mcp` for env-only refresh.
+Want to add another slot later? Add a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` (e.g. `DIFY_DATASET_RUNBOOKS_ID=`), then re-run `./memory/scripts/dify-setup.sh` — it will only ask about the new slot. After upgrading the boilerplate via `git pull`, recreate the bridge so it picks up new env lines:
+
+```bash
+./memory/scripts/up.sh memory_mcp   # rebuilds + recreates only the bridge service.
+                                    # Bridge image is small (npm ci + COPY src);
+                                    # rebuild is typically under 10 seconds.
+```
+
+(Note: a raw `docker compose ... up -d memory_mcp` from the workspace root would fail because Docker Compose can't find `docker-compose.yaml` there. The `./memory/scripts/` wrappers add the correct `-f compose.mcp.yaml` and `-f vendor/dify/docker/docker-compose.yaml` flags via `scripts/lib.sh`.)
 
 ### 🤖 AI-driven flow
 
@@ -196,8 +204,8 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
    (b) Sign in, configure an embedding model under Settings → Model Provider (REQUIRED before any high_quality dataset can be created)
    (c) Knowledge → Service API → create a Knowledge API key
    (d) Paste the key into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>
-   (e) Restart ONLY the bridge so the new env is picked up (faster than a full up.sh):
-       docker compose -p $(grep '^COMPOSE_PROJECT_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r') up -d --no-build memory_mcp
+   (e) Recreate the bridge so the new env is picked up:
+       ./memory/scripts/up.sh memory_mcp
    THEN re-run me. Do not attempt to proceed without the key — `dify-setup.sh --non-interactive` will exit FATAL.
 
 2. Call `list_datasets` to see what already exists in Dify.
@@ -443,7 +451,12 @@ node --check ./memory/scripts/compile.mjs ./memory/scripts/hooks/flush.mjs ./mem
 node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
 
 # ---- Tier 2: Hermetic unit tests. Requires: node 20+. ----
-( cd ./memory && node --test test/*.test.mjs )   # or: ( cd ./memory && npm test )
+( cd ./memory && npm test )
+# (`npm test` invokes the package.json script `node --test test/*.test.mjs`
+# from inside ./memory/, so the glob is expanded against ./memory/test/.
+# Running `node --test test/*.test.mjs` from the parent directory would
+# fail because the glob expands BEFORE the cd in `( cd ./memory && ... )`,
+# and some tests use paths relative to CWD.)
 
 # ---- Tier 3: Stack health. Requires: up.sh has been run. ----
 ./memory/scripts/ps.sh
@@ -459,9 +472,13 @@ node --check ./memory/scripts/lib/*.mjs ./memory/mcp-server/src/*.js
 # the prereqs above is missing.
 ./memory/scripts/mcp-smoke.sh
 
-# ---- Tier 5: Pipeline dry-run. Requires: configured LLM provider ----
-# ---- (claude/codex CLI on PATH, or ANTHROPIC_API_KEY/OPENAI_API_KEY). ----
-# Optional. Exercises flush + compile without writing to Dify (compile uses --dry-run).
+# ---- Tier 5: Entry-point smoke. Requires: bootstrap only. ----
+# Confirms the flush + compile script entry points start, parse stdin/state,
+# and exit cleanly. Without the bridge container + dataset bindings + an LLM
+# provider configured, both scripts SKIP gracefully (stderr message, exit 0).
+# That's the property we want to verify here — they never block the user's
+# session. To exercise the FULL flush -> compile pipeline end-to-end, all
+# three (bridge + Dify slots + LLM provider) must be configured first.
 echo '{"session_id":"smoke","hook_event_name":"PostCompact","compact_summary":"Decision: Dify is the canonical store for project memory."}' \
   | ./memory/scripts/hooks/post-compact.sh
 node ./memory/scripts/compile.mjs --dry-run
