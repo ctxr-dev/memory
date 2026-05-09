@@ -176,7 +176,8 @@ Set it first, then re-run:
   1) Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>')).
   2) Knowledge -> Service API -> create a Knowledge API key.
   3) Edit memory/.env: DIFY_KNOWLEDGE_API_KEY=<the-key>
-  4) Restart the bridge: docker compose -p "\$COMPOSE_PROJECT_NAME" up -d --no-build memory_mcp
+  4) Recreate the bridge so the new key is loaded:
+     ./memory/scripts/up.sh memory_mcp
   5) ./memory/scripts/dify-setup.sh --non-interactive --auto-create
 EOF
     exit 1
@@ -191,11 +192,108 @@ EOF
   restart_bridge || { echo "FATAL: cannot proceed without a healthy bridge." >&2; exit 1; }
 fi
 
+# ---------- preflight: stale-bridge-env detection ----------
+# The bridge container's env_file is read AT START TIME. If the user added
+# DIFY_KNOWLEDGE_API_KEY to memory/.env AFTER the first up.sh, the running
+# bridge has an empty key in its env even though the host .env has it set.
+# Without this check, the wizard prints "api key set: yes" (host view) and
+# then every cli call fails with a confusing 401 from Dify.
+echo "Checking the bridge container's view of the API key..."
+bridge_config_json="$(cli get-config 2>/dev/null || true)"
+bridge_api_key_ok="$(printf '%s' "$bridge_config_json" | node -e '
+  try {
+    const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    process.stdout.write(o && o.apiKeyConfigured === true ? "yes" : "no");
+  } catch { process.stdout.write("no"); }
+' 2>/dev/null)"
+if [ "$bridge_api_key_ok" != "yes" ]; then
+  echo "  bridge sees an EMPTY API key (its env is stale)."
+  echo "  Recreating the bridge to pick up the current memory/.env..."
+  restart_bridge || { echo "FATAL: bridge restart failed; cannot continue." >&2; exit 1; }
+  bridge_config_json="$(cli get-config 2>/dev/null || true)"
+  bridge_api_key_ok="$(printf '%s' "$bridge_config_json" | node -e '
+    try {
+      const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      process.stdout.write(o && o.apiKeyConfigured === true ? "yes" : "no");
+    } catch { process.stdout.write("no"); }
+  ' 2>/dev/null)"
+  if [ "$bridge_api_key_ok" != "yes" ]; then
+    cat <<EOF >&2
+FATAL: bridge still does not see DIFY_KNOWLEDGE_API_KEY after restart.
+Check that memory/.env actually contains a non-empty value:
+  grep '^DIFY_KNOWLEDGE_API_KEY=' ./memory/.env
+EOF
+    exit 1
+  fi
+fi
+echo "  bridge OK."
+
+# ---------- preflight: tenant embedding model ----------
+# Dify requires a tenant-default text-embedding model BEFORE any
+# high_quality dataset can be created (or even retrieved against). Without
+# it, every cli create-dataset fails with "Default model not found for
+# text-embedding" and the wizard would loop through 5 confusing pydantic
+# errors. Fail fast with the exact UI walkthrough instead.
+echo "Checking tenant embedding model configuration..."
+embed_json="$(cli list-embedding-models 2>/dev/null || true)"
+embed_count="$(printf '%s' "$embed_json" | node -e '
+  try {
+    const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    process.stdout.write(String(o && typeof o.count === "number" ? o.count : 0));
+  } catch { process.stdout.write("0"); }
+' 2>/dev/null)"
+if [ "$embed_count" = "0" ] || [ -z "$embed_count" ]; then
+  cat <<EOF >&2
+FATAL: no embedding model is configured in your Dify tenant.
+
+Dify requires a default text-embedding model before any high_quality
+dataset can be created. Open the Dify UI:
+
+  $("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>')
+
+Then:
+  1. Settings (top-right gear) -> Model Provider.
+  2. Find OpenAI (recommended for cloud) or Ollama (for local).
+     - OpenAI: install the plugin if not already, paste your API key.
+     - Ollama: install the plugin, point at your local Ollama instance.
+  3. System Model Settings -> set the chosen embedding model as the
+     default Embedding Model. Recommended:
+       OpenAI:  text-embedding-3-small  (best cost/quality, 1536 dim)
+       Ollama:  bge-m3                  (strongest local choice)
+  4. Then ALSO add the same values to memory/.env so the bridge can
+     send them with every retrieval call (Dify 1.14+ requires the
+     embedding fields inline in retrieval_model.weights.vector_setting):
+       DIFY_EMBEDDING_MODEL=text-embedding-3-small
+       DIFY_EMBEDDING_MODEL_PROVIDER=langgenius/openai/openai
+     (or the Ollama URI: langgenius/ollama/ollama)
+  5. Recreate the bridge: ./memory/scripts/up.sh memory_mcp
+  6. Re-run this script.
+EOF
+  exit 1
+fi
+echo "  tenant has $embed_count embedding model provider(s) configured."
+
 # ---------- discover existing datasets ----------
 echo "Listing existing Dify datasets..."
 list_json="$(cli list-datasets 2>/dev/null || true)"
+# A successful HTTP call from the bridge can still wrap a Dify-side
+# error in valid JSON (e.g. {"code":"unauthorized","message":"..."}).
+# Check both for parse failure AND for an error envelope.
 if ! printf '%s' "$list_json" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' >/dev/null 2>&1; then
-  echo "Could not list datasets via the bridge. Check DIFY_KNOWLEDGE_API_KEY." >&2
+  echo "FATAL: bridge returned non-JSON for list-datasets. Likely the bridge container is down." >&2
+  echo "  Try: ./memory/scripts/up.sh memory_mcp" >&2
+  exit 1
+fi
+list_err="$(printf '%s' "$list_json" | node -e '
+  const o = JSON.parse(require("fs").readFileSync(0,"utf8"));
+  if (o && (o.code || o.error)) {
+    process.stdout.write((o.code || "error") + ": " + (o.message || JSON.stringify(o)));
+  }
+' 2>/dev/null)"
+if [ -n "$list_err" ]; then
+  echo "FATAL: Dify rejected list-datasets: $list_err" >&2
+  echo "  Most common cause: DIFY_KNOWLEDGE_API_KEY is wrong or revoked." >&2
+  echo "  Check memory/.env, then ./memory/scripts/up.sh memory_mcp to refresh the bridge." >&2
   exit 1
 fi
 
@@ -243,7 +341,13 @@ echo "Slots to handle: $declared_slots"
 echo
 
 # ---------- bind each slot ----------
+# `failed_slots` collects (slot:reason) tuples. After the loop we print
+# the summary AND exit non-zero if anything failed, so a scripted/CI
+# user can detect partial-failure (previously the script swallowed
+# per-slot errors via stderr and exited 0, making `--non-interactive`
+# unfit for automation).
 write_slots=""
+failed_slots=()
 for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
   slot="$(echo "$slot" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
   [ -n "$slot" ] || continue
@@ -260,20 +364,31 @@ for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
 
   if [ -z "$current_id" ]; then
     if [ "$NON_INTERACTIVE" -eq 1 ] || confirm "  Auto-create a Dify dataset named '$slot'?" y; then
-      created_json="$(cli create-dataset --name "$slot" --description "Auto-created by dify-setup.sh for the '$slot' memory slot")"
-      new_id="$(printf '%s' "$created_json" | node -e 'const o=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((o.id||o.dataset?.id||""))')"
+      created_json="$(cli create-dataset --name "$slot" --description "Auto-created by dify-setup.sh for the '$slot' memory slot" 2>&1 || true)"
+      new_id="$(printf '%s' "$created_json" | node -e '
+        try {
+          const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
+          process.stdout.write((o.id || (o.dataset && o.dataset.id) || ""));
+        } catch { process.stdout.write(""); }
+      ' 2>/dev/null)"
       if [ -n "$new_id" ]; then
         echo "  created dataset id: $new_id"
         set_env_var "$env_key" "$new_id"
         write_slots="$write_slots $slot"
       else
-        echo "  WARNING: could not parse new dataset id from: $created_json" >&2
+        # Surface the actual Dify error so the user knows what went wrong
+        # (previously the body was logged then silently dropped).
+        echo "  ERROR: could not create dataset '$slot'." >&2
+        echo "  Response: $created_json" >&2
+        failed_slots+=("$slot:create_failed")
       fi
     elif [ "$NON_INTERACTIVE" -ne 1 ] && confirm "  Use an existing dataset id?" n; then
       existing_id="$(prompt '  Existing dataset id' '')"
       if [ -n "$existing_id" ]; then
         set_env_var "$env_key" "$existing_id"
         write_slots="$write_slots $slot"
+      else
+        failed_slots+=("$slot:no_id_provided")
       fi
     else
       echo "  skipped"
@@ -415,3 +530,15 @@ for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
 done
 echo
 echo "memory/.env updated. Re-run any time to add slots or re-absorb."
+
+# Per-slot create failures collected during the bind loop. Exit non-zero
+# so a CI/scripted user can detect partial-failure (previously the script
+# logged errors then exited 0).
+if [ "${#failed_slots[@]}" -gt 0 ]; then
+  echo >&2
+  echo "FATAL: ${#failed_slots[@]} slot(s) failed:" >&2
+  for entry in "${failed_slots[@]}"; do
+    echo "  - $entry" >&2
+  done
+  exit 1
+fi

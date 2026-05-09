@@ -297,6 +297,18 @@ export async function createDataset(config, {
   if (finalEmbed && finalEmbedProvider) {
     payload.embedding_model = finalEmbed;
     payload.embedding_model_provider = finalEmbedProvider;
+    // Dify 1.14+ requires embedding_provider_name + embedding_model_name
+    // INSIDE retrieval_model.weights.vector_setting when search_method is
+    // hybrid_search. Without them, Dify's pydantic validator throws:
+    //   "retrieval_model.weights.vector_setting.embedding_provider_name
+    //    Field required"
+    // Older Dify versions accepted weights.vector_setting with only
+    // vector_weight; injecting the names is forward-compatible.
+    const rm = payload.retrieval_model;
+    if (rm && rm.weights && rm.weights.vector_setting) {
+      rm.weights.vector_setting.embedding_provider_name = finalEmbedProvider;
+      rm.weights.vector_setting.embedding_model_name = finalEmbed;
+    }
   }
   return fetchJsonWithTimeout(
     endpoint,
@@ -557,17 +569,37 @@ function defaultRetrievalModelFor(indexingTechnique) {
       search_method: "keyword_search",
       reranking_enable: false,
       top_k: 8,
+      // Dify 1.14+ requires score_threshold_enabled in HitTestingPayload
+      // even for economy / keyword_search.
+      score_threshold_enabled: false,
+      score_threshold: 0,
     };
+  }
+  // Dify 1.14+ requires embedding_provider_name + embedding_model_name
+  // INSIDE weights.vector_setting when search_method is hybrid_search.
+  // Pull from DIFY_EMBEDDING_MODEL{,_PROVIDER} env if set; otherwise omit
+  // the vector_setting fields and let Dify reject early with a
+  // human-readable "no embedding model" error rather than the cryptic
+  // pydantic 'Field required'.
+  const embed = process.env.DIFY_EMBEDDING_MODEL || "";
+  const embedProvider = process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "";
+  const vectorSetting = { vector_weight: 0.7 };
+  if (embed && embedProvider) {
+    vectorSetting.embedding_provider_name = embedProvider;
+    vectorSetting.embedding_model_name = embed;
   }
   return {
     search_method: "hybrid_search",
     reranking_enable: false,
     reranking_mode: "weighted_score",
     weights: {
-      vector_setting: { vector_weight: 0.7 },
+      vector_setting: vectorSetting,
       keyword_setting: { keyword_weight: 0.3 },
     },
     top_k: 8,
+    // Dify 1.14+ requires score_threshold_enabled even when threshold is 0.
+    score_threshold_enabled: false,
+    score_threshold: 0,
   };
 }
 

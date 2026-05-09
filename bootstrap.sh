@@ -361,17 +361,31 @@ if ! grep -qxF "$marker" "$gitignore"; then
 fi
 
 # ---------- memory/.env (only if missing) ----------
+# Substitute placeholders inline using `render` (the same sed-pipeline
+# that processes templates/agents/*). Pre-round-14 this used `cp` then
+# `printf >> .env`, which left the literal __PLACEHOLDER__ lines AT THE
+# TOP of the file with the real values appended at the BOTTOM. lib.sh's
+# read_env_value uses `tail -n 1` so the real value won and the file
+# worked, but the duplication was confusing and brittle: anyone editing
+# the top of .env to e.g. fix a typo would silently re-introduce the
+# placeholder. Inline substitution gives a clean .env with each key
+# appearing exactly once.
 env_file="$MEMORY_DIR/.env"
 if [ ! -f "$env_file" ]; then
-  cp "$MEMORY_DIR/.env.example" "$env_file"
-  {
-    printf '\n'
-    printf '# Auto-injected by bootstrap.sh\n'
-    printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
-    printf 'MCP_CONTAINER_NAME=%s\n' "$memory_server_name"
-    printf 'COMPOSE_PROJECT_NAME=%s\n' "$compose_project_name"
-    printf 'MCP_IMAGE_NAME=%s\n' "$mcp_image_name"
-  } >> "$env_file"
+  render "$MEMORY_DIR/.env.example" > "$env_file"
+  # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
+  # the example has it set to a default value).
+  if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+    # Replace the existing default with the user's chosen provider.
+    # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
+    sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+    rm -f "$env_file.bak"
+  else
+    {
+      printf '\n# Auto-injected by bootstrap.sh\n'
+      printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
+    } >> "$env_file"
+  fi
   env_action="created"
 else
   env_action="left untouched"
@@ -412,16 +426,31 @@ Bootstrap complete.
 
 Next steps:
   1) ./memory/scripts/up.sh                     # start the Dify stack
+                                                  (FIRST RUN: ~30-60s on a warm
+                                                   Docker image cache, up to 5
+                                                   minutes on a cold pull.)
   2) ./memory/scripts/ui-url.sh                 # open the printed URL
-  3) In Dify UI: create the admin account, configure an embedding model,
-     then Knowledge -> Service API -> create a Knowledge API key.
-  4) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
+  3) In Dify UI: create the admin account.
+     Then Settings -> Model Provider:
+       - select OpenAI (recommended) or Ollama (for local zero-cost embeddings)
+       - install the plugin if it isn't already, paste your API key
+       - System Model Settings: set as the DEFAULT Embedding Model
+         (text-embedding-3-small for OpenAI, bge-m3 for Ollama)
+     Then Knowledge -> Service API -> create a Knowledge API key, paste it
+     into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>.
+  4) Recreate the bridge so it picks up the new API key:
+       ./memory/scripts/up.sh memory_mcp
+  5) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
                                                   the five dataset slots (daily,
                                                   knowledge, plans, investigations,
                                                   self_improvement), install per-doc
                                                   metadata schema, optionally absorb
                                                   existing docs.
-  5) ./memory/scripts/mcp-smoke.sh               # validate
+  6) Restart your MCP client (Claude Code, Cursor, Codex, Claude Desktop) so
+     it picks up the new memory MCP server registered in .claude/settings.json
+     (and/or .agents/clients/* for non-Claude clients). The server only becomes
+     callable from inside an agent session AFTER this restart.
+  7) ./memory/scripts/mcp-smoke.sh               # validate
 
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug

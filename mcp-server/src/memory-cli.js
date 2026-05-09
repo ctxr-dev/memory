@@ -191,6 +191,56 @@ async function listMetadataFieldsCmd(config, { datasetId }) {
   return listDatasetMetadataFields(config, { datasetId });
 }
 
+// Returns a compact view of the bridge container's effective config so
+// host-side wizards (dify-setup.sh) can detect stale-bridge-env: the host
+// .env may have the API key but the running container loaded its env at
+// start time and won't see edits until a restart. apiKeyConfigured = true
+// means the BRIDGE sees a non-empty key — which is what matters for
+// every Dify call. Never echoes the key itself; only a 4-char preview.
+async function getConfigCmd(config) {
+  const apiKey = config.apiKey || "";
+  const preview = apiKey.length >= 8
+    ? `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`
+    : (apiKey ? "***" : "");
+  return {
+    apiUrl: config.apiUrl,
+    apiKeyConfigured: Boolean(apiKey),
+    apiKeyPreview: preview,
+    datasetIds: config.datasetIds,
+    flushDataset: config.flushDatasetName,
+    compileDataset: config.compileDatasetName,
+    absorbDefaultDataset: config.absorbDefaultDatasetName,
+    embeddingModel: process.env.DIFY_EMBEDDING_MODEL || "",
+    embeddingModelProvider: process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "",
+  };
+}
+
+// Pre-flight for dify-setup.sh: does the Dify tenant have ANY embedding
+// model usable for `high_quality` + `hybrid_search`? If `data` is empty,
+// every dataset create with that retrieval mode fails with the cryptic
+// "Default model not found for text-embedding". The wizard should hard-
+// fail before even trying, with a clear UI walkthrough.
+async function listEmbeddingModelsCmd(config) {
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/workspaces/current/models/model-types/text-embedding`;
+  const body = await fetchJsonWithTimeout(
+    endpoint,
+    { method: "GET", headers: { Authorization: `Bearer ${config.apiKey}` } },
+    config.timeoutMs,
+  );
+  const list = Array.isArray(body?.data) ? body.data : [];
+  return {
+    endpoint,
+    count: list.length,
+    providers: list.map((p) => ({
+      provider: p?.provider,
+      label: p?.label?.en_US || p?.label?.zh_Hans || p?.provider,
+      status: p?.status,
+      modelCount: Array.isArray(p?.models) ? p.models.length : 0,
+      modelNames: Array.isArray(p?.models) ? p.models.map((m) => m?.model).filter(Boolean) : [],
+    })),
+  };
+}
+
 async function createMetadataFieldCmd(config, { datasetId, name, type }) {
   if (!name) throw new Error("--name <field-name> is required");
   return createDatasetMetadataField(config, {
@@ -340,6 +390,8 @@ try {
     case "delete": result = await deleteCmd(config, args); break;
     case "list-datasets": result = await listDatasetsCmd(config); break;
     case "create-dataset": result = await createDatasetCmd(config, args); break;
+    case "get-config": result = await getConfigCmd(config); break;
+    case "list-embedding-models": result = await listEmbeddingModelsCmd(config); break;
     case "find-by-name": result = await findByNameCmd(config, args); break;
     case "scan": result = await scanCmd(config, args); break;
     case "absorb": result = await absorbCmd(config, args); break;
