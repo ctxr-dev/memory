@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 export const MEMORY_DIR = path.resolve(here, "../..");
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "..");
 export const ENV_PATH = path.join(MEMORY_DIR, ".env");
