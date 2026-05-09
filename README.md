@@ -51,7 +51,9 @@ Result: most sessions contribute 0–3 small atoms, dedup-merged across history,
 
 ## Install
 
-The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates.
+The boilerplate is consumed as `./memory/` inside your project, with its own git history retained for `git pull` updates. Two flows: install it yourself, or have an agent drive it.
+
+### Manual install
 
 ```bash
 # from inside the project root
@@ -75,6 +77,53 @@ After Dify is up, finish wiring with the **onboarding wizard** (manual or AI-dri
 ```
 
 That is the entire install. The wizard handles the API key, the four default dataset slots (`daily`, `knowledge`, `plans`, `investigations`), and an optional first-pass absorb of your existing project documentation.
+
+### AI-driven install
+
+Paste this prompt into your agent (Claude Code, Cursor, Codex) running inside the target project root:
+
+```text
+Install the local Dify MCP memory boilerplate into this project. Target the current working directory unless I explicitly give you another path.
+
+Steps:
+
+1. Confirm the boilerplate Git URL with me first if you cannot infer it. Default: https://github.com/ctxr-dev/memory-boilerplate.git
+
+2. Ask me for the project slug. Lowercase ASCII a-z, 0-9, hyphen (e.g. billing-api, docs-site). If I give you a name, propose a sanitised slug derived from the project folder name and confirm. The slug becomes the per-project Docker container, image, and Compose project name, so multiple projects can run their own memory stacks without collisions.
+
+3. Ask me which LLM provider to use for the flush + compile pipeline:
+   - claude (recommended; spawns `claude -p`, no API key needed)
+   - codex (spawns `codex exec --json`, no API key needed)
+   - anthropic (REST with ANTHROPIC_API_KEY in memory/.env)
+   - openai (REST with OPENAI_API_KEY in memory/.env)
+   Detect which CLIs are on PATH before asking. If only one is available, default to it and ask me to confirm.
+
+4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
+
+5. Ask which MCP clients to register: Claude Desktop, Cursor, Codex/OpenAI, generic. Print the matching snippet from .agents/clients/ for each I confirm. For Codex/OpenAI, run: codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
+
+6. Verify host prerequisites or tell me exactly what is missing: docker compose 2.24.4+, node 20+, git, curl, bash, openssl/shasum.
+
+7. Run the install:
+   git clone <boilerplate-git-url> ./memory
+   ./memory/bootstrap.sh --slug <slug> --llm-provider <provider> [--no-hooks if I declined]
+
+8. Run the syntax/config validation listed in the boilerplate README's "Verification" section after install.
+
+9. Start the stack:
+   ./memory/scripts/up.sh
+   ./memory/scripts/ui-url.sh
+
+10. Tell me the exact next steps after install:
+    a) Open the printed Dify UI URL.
+    b) Create the admin account, configure an embedding model.
+    c) Open Knowledge -> Service API, create a Knowledge API key.
+    d) Run `./memory/scripts/dify-setup.sh` to wire datasets and (optionally) absorb my existing docs.
+
+Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
+```
+
+The agent runs the install host-side; the onboarding wizard ([Onboarding](#onboarding)) finishes the Dify-side wiring after the stack is up.
 
 ## Onboarding
 
