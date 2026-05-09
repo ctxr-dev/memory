@@ -210,8 +210,10 @@ async function getConfigCmd(config) {
     flushDataset: config.flushDatasetName,
     compileDataset: config.compileDatasetName,
     absorbDefaultDataset: config.absorbDefaultDatasetName,
-    embeddingModel: process.env.DIFY_EMBEDDING_MODEL || "",
-    embeddingModelProvider: process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "",
+    // Embedding model + provider are auto-discovered from the Dify
+    // tenant on first use (mcp-server/src/dify.js::getDefaultEmbeddingModel).
+    // Not echoed here because it would imply a config path that doesn't
+    // exist; use `list-embedding-models` to see what the tenant has.
   };
 }
 

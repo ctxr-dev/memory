@@ -262,11 +262,12 @@ Then:
        Ollama:  bge-m3                  (strongest local choice)
   4. Re-run this script.
 
-The bridge AUTO-DISCOVERS the model name + provider URI from the Dify
-tenant on first use; you do NOT need to add DIFY_EMBEDDING_MODEL or
-DIFY_EMBEDDING_MODEL_PROVIDER to memory/.env. Those env vars are an
-optional override for users who have multiple providers configured and
-want to pin a specific one.
+The bridge auto-discovers the model + provider from the Dify tenant on
+first use. The Dify UI is the single source of truth — you do NOT need
+to add anything to memory/.env. If you have multiple embedding
+providers configured in the tenant, set the one you want as the System
+Default in the Dify UI (Settings -> Model Provider -> System Model
+Settings); the bridge picks it up automatically.
 EOF
   exit 1
 fi

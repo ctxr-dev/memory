@@ -238,8 +238,9 @@ export async function listAllDatasets(config, { keyword } = {}) {
 //    "No Embedding Model available". The dify-setup.sh wizard documents
 //    this prerequisite.
 //  * embedding_model + embedding_model_provider can be passed explicitly
-//    (read from DIFY_EMBEDDING_MODEL / DIFY_EMBEDDING_MODEL_PROVIDER) so
-//    dataset creation succeeds before the tenant default is set.
+//    by an in-process caller (advanced API surface). When neither
+//    explicit args nor a tenant default exists, the create call returns
+//    a 400 with the "No Embedding Model available" message above.
 //  * retrieval_model defaults to hybrid_search; reranking_enable is FALSE
 //    by default to avoid invoking a missing reranker on Dify <= 1.0;
 //    callers can flip it via DIFY_DEFAULT_RERANKING_ENABLE=true once a
@@ -281,20 +282,19 @@ export async function createDataset(config, {
     retrieval_model: { ...defaultRetrievalModel, ...(retrievalModel || {}) },
   };
   if (description) payload.description = description;
-  // Resolve embedding (model + provider) using a 3-step precedence:
-  //   1. Explicit args from the caller (createDatasetCmd doesn't pass
-  //      these today, but the API surface allows it).
-  //   2. DIFY_EMBEDDING_MODEL{,_PROVIDER} env vars (advanced override
-  //      for users with multiple providers configured in the tenant).
-  //   3. Auto-discovered from the Dify tenant (the system default
-  //      embedding model the user already configured in the UI).
-  // The user should NOT have to set env vars just to mirror a UI choice.
-  // Auto-discovery makes the env vars OPTIONAL.
-  let finalEmbed = embeddingModel || process.env.DIFY_EMBEDDING_MODEL || "";
-  let finalEmbedProvider = embeddingModelProvider || process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "";
+  // Resolve embedding (model + provider) using a 2-step precedence:
+  //   1. Explicit args from the caller (advanced API surface; no
+  //      shipped tool currently passes these).
+  //   2. Auto-discovered from the Dify tenant (the System Default
+  //      Embedding Model configured in the UI).
+  // The Dify UI is the SINGLE source of truth. We deliberately do not
+  // honour DIFY_EMBEDDING_MODEL{,_PROVIDER} env vars — exposing them
+  // would create two sources of truth that drift.
+  let finalEmbed = embeddingModel || "";
+  let finalEmbedProvider = embeddingModelProvider || "";
   if (Boolean(finalEmbed) !== Boolean(finalEmbedProvider)) {
     throw new Error(
-      "createDataset: set BOTH DIFY_EMBEDDING_MODEL and DIFY_EMBEDDING_MODEL_PROVIDER (or pass both as args), or neither.",
+      "createDataset: explicit args must set BOTH embeddingModel and embeddingModelProvider, or neither.",
     );
   }
   if (!finalEmbed && !finalEmbedProvider) {
@@ -577,30 +577,28 @@ let _embeddingDefaultCache = null;     // null = not yet resolved
 let _embeddingDefaultPromise = null;   // in-flight promise dedup
 
 // Resolve the embedding model name + provider URI to use for any
-// hybrid_search call. Precedence:
-//   1. Explicit DIFY_EMBEDDING_MODEL + DIFY_EMBEDDING_MODEL_PROVIDER env
-//      vars (advanced override; lets the user pin a specific model when
-//      multiple are configured in the tenant).
-//   2. Auto-discovered from the Dify tenant via
-//      `/v1/workspaces/current/models/model-types/text-embedding`.
-//      Picks the first ACTIVE provider's first model. Logs to stderr
-//      when multiple providers are present so the user knows we made
-//      a choice for them.
-//   3. null when nothing is configured. Caller must handle (typically
-//      by omitting the embedding fields and letting Dify fall back to
-//      the tenant default — or by failing if Dify rejects the request).
+// hybrid_search call by querying the Dify tenant directly:
+//   `/v1/workspaces/current/models/model-types/text-embedding`.
+// Picks the alphabetical-first active provider's first model.
 //
-// The user should NOT have to set DIFY_EMBEDDING_MODEL just because
-// they configured a default in the Dify UI. That's the whole point of
-// auto-discovery: configure once, in one place (the UI).
+// The Dify UI's System Model Settings is the SINGLE source of truth.
+// We deliberately do NOT honour DIFY_EMBEDDING_MODEL{,_PROVIDER} env
+// vars: exposing them as "advanced overrides" creates two sources of
+// truth that drift, and the very existence of the override config in
+// `.env.example` invites users to ask "do I need to set this?" — the
+// same redundant-config friction that this auto-discovery was meant
+// to eliminate. If a user has multiple embedding providers configured
+// and wants to pin a specific one for memory, they configure it as
+// the System Default in the Dify UI; everything that consumes
+// embeddings (memory + any other Dify app in the tenant) uses the
+// same value.
+//
+// Returns:
+//   { provider, model, source: "tenant" }       — tenant default in use
+//   { provider: "", model: "", source: "tenant_empty" } — no model in tenant
+//   { provider: "", model: "", source: "probe_failed", error } — transient
 export async function getDefaultEmbeddingModel(config) {
   if (_embeddingDefaultCache !== null) return _embeddingDefaultCache;
-  const envModel = process.env.DIFY_EMBEDDING_MODEL || "";
-  const envProvider = process.env.DIFY_EMBEDDING_MODEL_PROVIDER || "";
-  if (envModel && envProvider) {
-    _embeddingDefaultCache = { provider: envProvider, model: envModel, source: "env" };
-    return _embeddingDefaultCache;
-  }
   if (_embeddingDefaultPromise) return _embeddingDefaultPromise;
   _embeddingDefaultPromise = (async () => {
     try {
@@ -631,7 +629,7 @@ export async function getDefaultEmbeddingModel(config) {
       const chosenModel = chosen.models[0];
       if (active.length > 1) {
         process.stderr.write(
-          `dify.js: multiple embedding providers configured (${active.map((p) => p.provider).join(", ")}); using '${chosen.provider}' / '${chosenModel?.model}' (alphabetical-first). Set DIFY_EMBEDDING_MODEL_PROVIDER + DIFY_EMBEDDING_MODEL in memory/.env to pin a specific one.\n`,
+          `dify.js: multiple embedding providers configured in the Dify tenant (${active.map((p) => p.provider).join(", ")}); using '${chosen.provider}' / '${chosenModel?.model}' (alphabetical-first). To pin a specific one, set it as the System Default Embedding Model in the Dify UI (Settings → Model Provider → System Model Settings).\n`,
         );
       }
       _embeddingDefaultCache = {
@@ -676,12 +674,9 @@ async function defaultRetrievalModelFor(indexingTechnique, config) {
   }
   // Dify 1.14+ requires embedding_provider_name + embedding_model_name
   // INSIDE weights.vector_setting when search_method is hybrid_search.
-  // Resolve via getDefaultEmbeddingModel: env vars override, otherwise
-  // auto-discover from the tenant. The user should NOT have to set
-  // DIFY_EMBEDDING_MODEL in memory/.env just because they configured a
-  // default model in the Dify UI — that's stupid and redundant. The
-  // tenant probe answers "which model should I use?" exactly the way
-  // the Dify UI does.
+  // Resolve via getDefaultEmbeddingModel — the Dify UI's System Default
+  // Embedding Model is the single source of truth. No env-var overrides
+  // (see getDefaultEmbeddingModel header for the full rationale).
   const vectorSetting = { vector_weight: 0.7 };
   if (config) {
     const resolved = await getDefaultEmbeddingModel(config);
