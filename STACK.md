@@ -293,15 +293,17 @@ For Claude Desktop, Cursor, or a generic MCP client, merge this server into the 
 
 Keep the command exactly the same. Do not paste `DIFY_KNOWLEDGE_API_KEY` into any MCP client config.
 
-The bridge exposes nine MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
+The bridge exposes eleven MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
 
 | Tool | Purpose |
 |---|---|
-| `search_memory` | Retrieve scored chunks across configured datasets. |
+| `search_memory` | Retrieve scored chunks; supports `filters` + `scoreThreshold` for Dify-side metadata filtering. |
+| `recall_lessons` | "Look before you leap" recall of self-improvement lessons by task context, with broadening fall-back. |
 | `get_memory_config` | Inspect bridge configuration (no secrets). |
 | `write_memory` | Create-or-supersede a single document (low-level). |
 | `update_memory` | Required-supersedes variant; used by compile. |
-| `save_to_dataset` | Upsert by exact name into a named slot. |
+| `save_to_dataset` | Upsert by exact name into a named slot, optional `metadata` map. |
+| `save_lesson` | Inline self-improvement-lesson capture; required `metadata.error_pattern` is the dedup key. |
 | `list_datasets` | Show Dify datasets + local slot bindings. |
 | `create_dataset` | Create a new Dify dataset. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
