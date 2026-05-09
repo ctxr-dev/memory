@@ -12,13 +12,17 @@ if [ "${1-}" = "-h" ] || [ "${1-}" = "--help" ]; then
 Usage:
   ./memory/scripts/dify-setup.sh [--non-interactive --auto-create]
 
-Without flags: walks through API key check, dataset binding for
-'daily', 'knowledge', 'plans', 'investigations' (offers auto-create,
-pick existing, skip), then offers an absorb-on-existing-docs pass.
+Slot model: every DIFY_DATASET_<NAME>_ID line in memory/.env declares
+one slot. Defaults are daily, knowledge, plans, investigations,
+self_improvement; add more by adding lines.
+
+Without flags: walks through API key check, dataset binding for each
+slot (offers auto-create, pick existing, skip), and offers an
+absorb-on-existing-docs pass.
 
 With --non-interactive: requires --auto-create. Auto-creates any
-missing dataset slot listed in DIFY_DATASETS (or the four defaults)
-and writes IDs to memory/.env. No absorb pass.
+unbound slot present in memory/.env (or the five defaults if absent),
+writes IDs back, and exits without absorb.
 EOF
   exit 0
 fi
@@ -33,7 +37,30 @@ ENV_FILE="$MEMORY_ENV"
 CONTAINER_NAME="$(read_env_value MCP_CONTAINER_NAME "$ENV_FILE" 2>/dev/null || true)"
 [ -n "$CONTAINER_NAME" ] || { echo "MCP_CONTAINER_NAME not in memory/.env." >&2; exit 1; }
 
-DEFAULT_DATASETS=("daily" "knowledge" "plans" "investigations")
+DEFAULT_DATASETS=("daily" "knowledge" "plans" "investigations" "self_improvement")
+
+# Remove a key entirely from $ENV_FILE.
+unset_env_var() {
+  local key="$1" tmp
+  if grep -qE "^${key}=" "$ENV_FILE"; then
+    tmp="$(mktemp)"
+    awk -v key="$key" -F= '$1 != key { print }' "$ENV_FILE" > "$tmp"
+    mv "$tmp" "$ENV_FILE"
+  fi
+}
+
+# Discover slot names from memory/.env: every DIFY_DATASET_<NAME>_ID line
+# declares one slot. Returns lowercase slot names, one per line.
+discover_slots_from_env() {
+  awk -F= '
+    /^DIFY_DATASET_.+_ID=/ {
+      key = $1
+      sub(/^DIFY_DATASET_/, "", key)
+      sub(/_ID$/, "", key)
+      print tolower(key)
+    }
+  ' "$ENV_FILE"
+}
 
 NON_INTERACTIVE=0
 AUTO_CREATE=0
@@ -171,10 +198,41 @@ if ! printf '%s' "$list_json" | node -e 'JSON.parse(require("fs").readFileSync(0
   exit 1
 fi
 
-declared_slots="$(read_env_value DIFY_DATASETS "$ENV_FILE" 2>/dev/null || true)"
-[ -n "$declared_slots" ] || declared_slots="$(IFS=,; printf '%s' "${DEFAULT_DATASETS[*]}")"
+# Migrate from the old DIFY_DATASETS list var, if present, by seeding
+# DIFY_DATASET_<NAME>_ID lines for each name and removing the legacy var.
+legacy_list="$(read_env_value DIFY_DATASETS "$ENV_FILE" 2>/dev/null || true)"
+if [ -n "$legacy_list" ]; then
+  echo "Migrating legacy DIFY_DATASETS=$legacy_list -> per-slot env lines."
+  for migrated in $(echo "$legacy_list" | tr ',' '\n' | awk 'NF'); do
+    migrated="$(echo "$migrated" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    [ -n "$migrated" ] || continue
+    migrated_key="$(slot_to_env_key "$migrated")"
+    grep -qE "^${migrated_key}=" "$ENV_FILE" || set_env_var "$migrated_key" ""
+  done
+  unset_env_var DIFY_DATASETS
+fi
 
-echo "Configured slot list: $declared_slots"
+# Slot list = whatever DIFY_DATASET_*_ID lines are in memory/.env, plus any
+# default slot that isn't already declared. Preserves declaration order then
+# appends defaults at the end.
+declared_slots_arr=()
+while IFS= read -r s; do
+  [ -n "$s" ] || continue
+  declared_slots_arr+=("$s")
+done < <(discover_slots_from_env)
+for d in "${DEFAULT_DATASETS[@]}"; do
+  found=0
+  for existing in "${declared_slots_arr[@]:-}"; do
+    [ "$existing" = "$d" ] && { found=1; break; }
+  done
+  if [ "$found" -eq 0 ]; then
+    declared_slots_arr+=("$d")
+    set_env_var "$(slot_to_env_key "$d")" ""
+  fi
+done
+declared_slots="$(IFS=,; printf '%s' "${declared_slots_arr[*]}")"
+
+echo "Slots to handle: $declared_slots"
 echo
 
 # ---------- bind each slot ----------

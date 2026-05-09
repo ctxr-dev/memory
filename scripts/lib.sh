@@ -53,6 +53,7 @@ load_memory_env() {
   fi
 
   export MEMORY_DIR
+  export MEMORY_ENV
   export WORKSPACE_DIR
   export DIFY_DOCKER_DIR
   export MEMORY_DATA_DIR="${configured_memory_data_dir:-$WORKSPACE_DIR/.memory}"

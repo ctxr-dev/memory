@@ -110,15 +110,16 @@ function envEnvKey(name) {
   return `DIFY_DATASET_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
 }
 
+// Slot is declared by presence of any DIFY_DATASET_<NAME>_ID env line.
+// Empty value means "I have not bound this slot yet" — listed but unbound.
 export function buildDatasetMap(env = process.env) {
   const map = new Map();
-  const declared = splitCsv(env.DIFY_DATASETS);
-
-  for (const name of declared) {
-    const slug = String(name).toLowerCase().trim();
-    if (!slug) continue;
-    const id = (env[envEnvKey(slug)] || "").trim();
-    map.set(slug, { name: slug, id });
+  for (const key of Object.keys(env)) {
+    const m = key.match(/^DIFY_DATASET_(.+)_ID$/);
+    if (!m) continue;
+    const slot = m[1].toLowerCase();
+    if (map.has(slot)) continue;
+    map.set(slot, { name: slot, id: String(env[key] || "").trim() });
   }
 
   // Back-compat: legacy single-write dataset becomes the unnamed default.
