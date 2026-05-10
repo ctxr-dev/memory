@@ -1,8 +1,17 @@
 {
   "name": "memory-boilerplate",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ctxr-dev/memory"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.mjs"
   }
 }

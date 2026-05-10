@@ -122,9 +122,15 @@ if [ "$CLEANUP" -eq 1 ]; then
   # `delete` returns success but the doc actually persists (or where
   # the delete primitive shape changes silently). Also covers the
   # delete_document MCP tool's underlying primitive end-to-end.
+  #
+  # Retry loop: Dify's delete propagation can be momentarily async on a
+  # heavily loaded indexer. 3 attempts × 500ms backoff covers the
+  # observed race window without making the smoke flaky on slow CI.
   echo "plan-capture-smoke: re-verifying delete ..."
-  post_json="$(docker exec -i "$container_name" node src/memory-cli.js find-by-name --datasetId plans --name "$expected_name" || true)"
-  post_doc="$(printf '%s' "$post_json" | node -e '
+  post_doc=""
+  for attempt in 1 2 3; do
+    post_json="$(docker exec -i "$container_name" node src/memory-cli.js find-by-name --datasetId plans --name "$expected_name" || true)"
+    post_doc="$(printf '%s' "$post_json" | node -e '
 const fs = require("node:fs");
 const raw = fs.readFileSync(0, "utf8");
 try {
@@ -132,15 +138,23 @@ try {
   if (j?.document?.id) process.stdout.write(j.document.id);
 } catch {}
 ' || true)"
+    [ -z "$post_doc" ] && break
+    [ "$attempt" -lt 3 ] && sleep 0.5
+  done
   if [ -n "$post_doc" ]; then
-    echo "plan-capture-smoke FAIL: delete returned success but find-by-name still returns doc id ${post_doc}." >&2
+    echo "plan-capture-smoke FAIL: delete returned success but find-by-name still returns doc id ${post_doc} after 3 retries." >&2
+    echo "  Manual check: open the Dify UI and look in the plans dataset for ${expected_name}." >&2
     exit 1
   fi
   echo "plan-capture-smoke: cleanup complete (verified absent)."
 else
   echo "plan-capture-smoke: --keep set; smoke doc ${expected_name} (id ${doc_id}) left in place."
-  if command -v "$SCRIPT_DIR/ui-url.sh" >/dev/null 2>&1; then
-    ui_url="$("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || true)"
+  # ui-url.sh emits either "Dify UI: <url>" on success or a "not
+  # published yet" warning. Parse only the success line so we don't
+  # paste the warning text into our own "View at ..." message.
+  if [ -x "$SCRIPT_DIR/ui-url.sh" ]; then
+    ui_line="$("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || true)"
+    ui_url="$(printf '%s\n' "$ui_line" | sed -n 's/^Dify UI: \(http[^ ]*\)$/\1/p' | head -n 1)"
     if [ -n "$ui_url" ]; then
       echo "  View at ${ui_url} → Knowledge → plans dataset."
     fi

@@ -476,11 +476,14 @@ Next steps:
   4) Recreate the bridge so it picks up the new API key:
        ./memory/scripts/up.sh memory_mcp
   5) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
-                                                  the five dataset slots (daily,
-                                                  knowledge, plans, investigations,
-                                                  self_improvement), install per-doc
-                                                  metadata schema, optionally absorb
-                                                  existing docs.
+                                                  the configured dataset slots
+                                                  (defaults: daily, knowledge,
+                                                  plans, investigations,
+                                                  self_improvement; add more by
+                                                  appending DIFY_DATASET_<NAME>_ID=
+                                                  to memory/.env), install per-doc
+                                                  metadata schema, optionally
+                                                  absorb existing docs.
   6) Restart your MCP client so it picks up the new memory MCP server.
      Where it's registered:
        - Claude Code: project-scope ./.mcp.json (auto-written by bootstrap)
@@ -491,12 +494,13 @@ Next steps:
      AFTER this client restart.
   7) ./memory/scripts/mcp-smoke.sh               # validate
 
-Plan-mode integration (Claude Code):
+Plan-mode integration (Claude Code only — other clients can ignore):
   When you exit plan mode and approve a plan, the PostToolUse hook
   upserts plan-<slug>.md into the 'plans' dataset slot automatically
   (no LLM, multiple bridge round-trips, typically ~1-2s). Same plan
-  title overwrites in place. See templates/skills/plan-capture.md for
-  the agent contract.
+  title overwrites in place. Set MEMORY_HOOK_EXITPLANMODE_DISABLE=true
+  in memory/.env to opt out. See templates/skills/plan-capture.md
+  for the agent contract.
 
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug

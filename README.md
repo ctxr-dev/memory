@@ -218,6 +218,8 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
 
 7. Sanity round-trip (proves the metadata schema you installed in step 4 actually works): call `save_lesson` with a deliberately-tagged smoke lesson (title "Onboarding smoke", error_pattern "smoke-test", project_module "smoke", task_type "unknown"), then immediately call `recall_lessons(query="smoke", project_module="smoke")`. The lesson must round-trip. If it does NOT, the metadata schema install probably failed; tell me to re-run `./memory/scripts/dify-setup.sh`.
 
+8. Tell me about the cleanup tools available. Three MCP tools handle retracting auto-captured / absorbed docs: `delete_document` (permanent, accepts any slot — use sparingly on lessons / compile-managed slots), `disable_document` (soft, hides from search but keeps audit trail), `enable_document` (reverses a disable). Mention these so I know how to clean up if a plan title changes (the auto-capture writes a new doc under the new slug; the old slug stays unless I explicitly remove it).
+
 Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
 ```
 

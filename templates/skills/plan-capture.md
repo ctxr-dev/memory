@@ -1,6 +1,6 @@
 ---
 name: plan-capture
-description: How plans flow into the project's `plans` dataset slot. Auto-capture happens on ExitPlanMode approval; agents may also save mid-iteration manually with save_to_dataset.
+description: How plans flow into the project's `plans` dataset slot. Auto-capture happens on ExitPlanMode approval (Claude Code interactive mode only); agents may also save mid-iteration manually with save_to_dataset, and clean up stale plans via the delete_document / disable_document MCP tools.
 ---
 
 # Plan capture
@@ -13,7 +13,9 @@ For the broader "save to memory / RAG vs local file" decision, see the routing t
 
 ## Auto-capture on ExitPlanMode approval
 
-The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper) keyed on the `ExitPlanMode` matcher. When you exit plan mode and the user approves the plan (`tool_response.approved === true`), the hook:
+> **Claude Code interactive mode only.** Headless invocations (`claude -p`) and other MCP clients (Cursor, Codex, Claude Desktop) do not fire `PostToolUse` hooks today. In those contexts, save plans manually via `save_to_dataset` (see "When to save manually" below).
+
+The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper) keyed on the `ExitPlanMode` matcher. When you exit plan mode and the user approves the plan (`tool_response.approved === true` — the explicit "Approve" click in Claude Code, distinct from "Reject" or letting the prompt time out), the hook:
 
 1. Reads `tool_input.plan` (the plan markdown).
 2. Extracts the title from the first H1 (or the first non-empty line, capped at 80 chars).

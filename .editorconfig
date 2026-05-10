@@ -1,0 +1,26 @@
+# EditorConfig is awesome: https://EditorConfig.org
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+[*.{md,mdx}]
+trim_trailing_whitespace = false  # markdown line breaks rely on trailing spaces
+
+[*.{js,mjs,cjs,jsx,ts,tsx}]
+indent_style = space
+indent_size = 2
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.{sh,bash}]
+indent_style = space
+indent_size = 2
+
+[Makefile]
+indent_style = tab

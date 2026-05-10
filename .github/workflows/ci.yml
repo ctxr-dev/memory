@@ -11,10 +11,12 @@
 # explicitly out of CI scope and is meant for opt-in install-verification
 # locally.
 #
-# No `npm install` step: the root package.json has zero deps; tests use
-# only the built-in `node:test` runner. The `mcp-server/` workspace has
-# its own deps but the test suite imports only the pure modules from
-# there (no `@modelcontextprotocol/sdk` / `zod` needed at test time).
+# Root has zero dependencies but ships a `package-lock.json` so `npm ci`
+# is reproducible (and any future dev-dep addition lands without a
+# silent CI break). The `mcp-server/` workspace has its own deps but the
+# test suite imports only the pure modules from there (no
+# `@modelcontextprotocol/sdk` / `zod` needed at test time), so we don't
+# install bridge deps in CI either.
 
 name: CI
 
@@ -38,6 +40,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          cache: "npm"
+      - name: Install (reproducible)
+        run: npm ci
       - name: Run tests
         run: npm test
       - name: Static checks (bash + node syntax)

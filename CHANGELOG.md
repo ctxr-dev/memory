@@ -35,14 +35,19 @@ All notable user-visible changes to this boilerplate. Dates use UTC.
 
 ### Migration
 
-- **Re-run `./memory/scripts/dify-setup.sh` after `git pull`.** The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save until the wizard runs.
-- The new env knobs in `.env.example` are NOT auto-merged into your existing `memory/.env` (re-runs preserve user edits). Copy them manually if you want to tune.
-- **Recreate the bridge container** to pick up env changes after editing `memory/.env`: `./memory/scripts/up.sh memory_mcp`. The bridge reads `memory/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until the container restarts.
-- MCP-client restart needed for hook-file changes (`.claude/settings.json`, `.agents/hooks.json`) to take effect. Already-running Claude Code / Cursor / Codex sessions won't fire the new hook until restart.
+**Required steps in order, after `git pull`:**
+
+1. **Re-run `./memory/scripts/dify-setup.sh`** to retro-install the per-doc metadata schema on existing dataset slots. The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save.
+2. **Recreate the bridge container** to pick up env + image changes: `./memory/scripts/up.sh memory_mcp`. The bridge reads `memory/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until restart.
+3. **Restart your MCP client** (Claude Code / Cursor / Codex) so it picks up the new `.claude/settings.json` / `.agents/hooks.json` hook entries. Already-running sessions won't fire the new hook until restart.
+
+**Optional:** copy the new `MEMORY_HOOK_EXITPLANMODE_DISABLE` and `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES` knobs from `.env.example` into your existing `memory/.env` if you want to tune (re-runs preserve user edits, so they aren't auto-merged). If you set them, redo step 2 to refresh bridge env.
+
+**Behavior change to be aware of:** `upsertDocumentByName` now reduces same-name documents to one per upsert (closes a concurrent-write race window). If you had transient duplicates from a prior bug, this commit silently merges them on the next upsert. Verify in the Dify UI before relying on the upsert path for non-plan content.
 
 ### Tests
 
-- Tests went from 156 (pre-feature) → 230 (after round-24) → 228 (after round-25, net of two over-locking `extractTitle` tests trimmed during round-25 maintainability cleanup). New test files: `test/exit-plan-mode.test.mjs`, `test/exit-plan-mode-cli.test.mjs`, `test/dify-write.test.mjs`, `test/env.test.mjs`. Existing files extended: `test/datasets.test.mjs` (schema parity), `test/redact.test.mjs` (new patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
+- Test suite grew from 156 to 228 tests (4 new test files; existing files extended). New: `test/exit-plan-mode.test.mjs` (planDocSpec contract), `test/exit-plan-mode-cli.test.mjs` (CLI driver always-exit-0 invariants), `test/dify-write.test.mjs` (saveDocument flag-builder), `test/env.test.mjs` (slotEnvKey + envValue precedence). Extended: `test/datasets.test.mjs` (schema parity bridge↔host), `test/redact.test.mjs` (DB / Azure / npm / Anthropic patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
 - New integration smoke `scripts/plan-capture-smoke.sh` exercises the create + metadata + dedupe-delete write path end-to-end against a running bridge. Skips with a clear message when the bridge or `plans` slot is not configured. Designed for opt-in use during install verification (write-path coverage gap that `mcp-smoke.sh` intentionally skips).
 
 ---

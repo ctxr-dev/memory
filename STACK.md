@@ -312,7 +312,8 @@ The bridge exposes fourteen MCP tools (full descriptions in [README MCP tools ta
 | `list_datasets` | Show Dify datasets + local slot bindings. |
 | `create_dataset` | Create a new Dify dataset; auto-installs the per-document metadata schema. |
 | `delete_document` | Permanent delete of a doc by id. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc. |
-| `disable_document` / `enable_document` | Soft delete + un-delete: hide from search but keep in Dify UI for audit; reversible. Use when you want to retract a captured plan or lesson without losing the historical record. |
+| `disable_document` | Soft delete: hide from search but keep in Dify UI for audit. Use to retract a captured plan or lesson without losing the historical record. |
+| `enable_document` | Reverse a `disable_document`: bring a previously hidden doc back into search results. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
