@@ -17,6 +17,14 @@ All notable user-visible changes to this boilerplate. Dates use UTC.
 - **`saveDocument` helper** in `scripts/lib/dify-write.mjs` wraps the bridge's existing `save` subcommand (upsert-by-name + metadata in one CLI call). `buildSaveFlags` exported for unit testing.
 - **`slotEnvKey()` helper** in `scripts/lib/env.mjs` — single source of truth for computing `DIFY_DATASET_<NAME>_ID` env-var names from a slot string. Used by both `flush.mjs` and `exit-plan-mode.mjs`.
 - **`mcp-server/src/schema.js`** — exports `PER_DOC_METADATA_FIELDS` so the parity test in `test/datasets.test.mjs` can lock host-side `METADATA_SCHEMA` against the bridge-side list via direct imports (no regex source parsing).
+- **`enable_document` MCP tool** plus underlying `enableDocument` in `mcp-server/src/dify.js`. Symmetric counterpart to `disable_document`: brings a soft-deleted doc back into search results without dropping into the Dify UI. Closes the disable/enable asymmetry from the previous round.
+- **`scripts/plan-capture-smoke.sh`** — write-path integration smoke (companion to the read-only `mcp-smoke.sh`). Writes a synthetic plan, verifies it landed via `find-by-name`, deletes it, and re-verifies absence with a 3× retry loop to absorb Dify's occasionally-async delete propagation. Designed for opt-in install verification.
+- **`SECURITY.md`**: private disclosure path (GitHub Security Advisories preferred, email fallback), in-scope / out-of-scope items, hardening notes that point at `redact.mjs` and the untrusted-content fence as the authoritative sources.
+- **`CONTRIBUTING.md`**: dev setup, commit conventions, branch naming, audit-driven review workflow, style notes (no mocks at integration boundaries, no em dashes in runtime output, pure helpers preferred, cross-runtime parity locks).
+- **`.nvmrc` (`20`)** + **`engines.node >= 20`** in `package.json`: Node baseline locked, contributors on Node 18 get a clear error instead of a confusing test-runtime crash.
+- **`.editorconfig`**: LF + UTF-8 + 2-space indent for js/json/yml/sh; preserve trailing whitespace in markdown for line-break syntax.
+- **`.github/dependabot.yml`**: weekly npm updates for `mcp-server/`, monthly github-actions updates. Closes the silent-aging risk on `@modelcontextprotocol/sdk` + `zod`.
+- **`.github/workflows/ci.yml`**: minimal matrix CI on macOS + ubuntu × Node 20 + 22, running `npm ci` (with cache) + `npm test` + macOS-only static checks (bash 3.2 portability floor). Static checks cover `bash -n`, `node --check` for scripts/lib + scripts/hooks + mcp-server/src + test files.
 
 ### Changed
 

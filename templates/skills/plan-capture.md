@@ -13,9 +13,9 @@ For the broader "save to memory / RAG vs local file" decision, see the routing t
 
 ## Auto-capture on ExitPlanMode approval
 
-> **Claude Code interactive mode only.** Headless invocations (`claude -p`) and other MCP clients (Cursor, Codex, Claude Desktop) do not fire `PostToolUse` hooks today. In those contexts, save plans manually via `save_to_dataset` (see "When to save manually" below).
+> **Claude Code interactive mode only (observed).** As of the boilerplate's current testing, headless invocations (`claude -p`) and other MCP clients (Cursor, Codex, Claude Desktop) do not appear to fire `PostToolUse` hooks. This may change upstream; if you see the hook firing in a non-Claude-Code context, file an issue and we will update this skill. In contexts where the hook does not fire, save plans manually via `save_to_dataset` (see "When to save manually" below).
 
-The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper) keyed on the `ExitPlanMode` matcher. When you exit plan mode and the user approves the plan (`tool_response.approved === true` — the explicit "Approve" click in Claude Code, distinct from "Reject" or letting the prompt time out), the hook:
+The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper) keyed on the `ExitPlanMode` matcher. When you exit plan mode and the user approves the plan (`tool_response.approved === true`: the explicit "Approve" click in Claude Code, distinct from "Reject" or letting the prompt time out), the hook:
 
 1. Reads `tool_input.plan` (the plan markdown).
 2. Extracts the title from the first H1 (or the first non-empty line, capped at 80 chars).
@@ -44,7 +44,7 @@ If the plan TITLE changes between iterations, the next approval writes a NEW Dif
 - **Use the `disable_document` MCP tool** (soft, reversible). Hides the stale doc from `search_memory` / `recall_lessons` but keeps the audit trail in the Dify UI. Re-enable from the Dify UI if you change your mind.
 - **Tolerate it.** Old plans are ranked below the latest by recency (`upload_date`) and metadata, and `search_memory` with a tight `scoreThreshold` will surface the right one.
 
-To intentionally supersede a prior version with new content (without renaming), write a NEW `save_to_dataset` call with the OLD slug and the new body — same name overwrites in place.
+To intentionally supersede a prior version with new content (without renaming), write a NEW `save_to_dataset` call with the OLD slug and the new body. Same name overwrites in place.
 
 ## Hard rules
 

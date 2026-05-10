@@ -494,7 +494,7 @@ Next steps:
      AFTER this client restart.
   7) ./memory/scripts/mcp-smoke.sh               # validate
 
-Plan-mode integration (Claude Code only — other clients can ignore):
+Plan-mode integration (Claude Code only; other clients can ignore):
   When you exit plan mode and approve a plan, the PostToolUse hook
   upserts plan-<slug>.md into the 'plans' dataset slot automatically
   (no LLM, multiple bridge round-trips, typically ~1-2s). Same plan

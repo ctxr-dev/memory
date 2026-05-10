@@ -33,6 +33,12 @@
   <a href="#client-config">Clients</a>
   |
   <a href="STACK.md">Stack docs</a>
+  |
+  <a href="CONTRIBUTING.md">Contributing</a>
+  |
+  <a href="SECURITY.md">Security</a>
+  |
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
@@ -258,7 +264,7 @@ Six per-document fields, installed by `dify-setup.sh` on every bound slot (Dify 
 
 | Field | Used by `recall_lessons` for | Notes |
 |---|---|---|
-| `atom_type` | filter by atom type | one of seven types; `self-improvement-lesson` is the lesson key |
+| `atom_type` | filter by atom type | one of eight types (seven extracted by flush+compile, plus `plan` set by the ExitPlanMode hook); `self-improvement-lesson` is the lesson key |
 | `project_module` | filter by part-of-codebase | lowercase, hyphenated; `unknown` when unsure |
 | `language` | filter by programming language | empty for language-agnostic lessons |
 | `task_type` | filter by task category | enum: planning, implementation, debugging, refactor, review, deploy, docs, unknown |
@@ -392,10 +398,15 @@ Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; 
 
 > **Upgrading to plan-capture (PostToolUse/ExitPlanMode hook):**
 >
+> Required steps in order:
+>
 > 1. **Re-run `./memory/scripts/dify-setup.sh`** after `git pull`. The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Pre-existing slots created by an OLDER `create_dataset` MCP tool (which did NOT auto-install the schema before this commit) get the six per-document fields retro-installed in seconds. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save until the wizard runs.
-> 2. **Optional new env knobs in `.env.example`** (`MEMORY_HOOK_EXITPLANMODE_DISABLE`, `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`) are not added to your existing `memory/.env` automatically (re-runs preserve user edits). Copy them from `.env.example` if you want to tune.
-> 3. **Behavior change in `upsertDocumentByName`**: same-name documents in any slot are now reduced to one on every upsert. If you relied on transient duplicates surviving (e.g. for hand-managed plans named identically), this commit silently merges them. Verify in the Dify UI before relying on the upsert path for non-plan content.
-> 4. **MCP-client restart**: hook-file changes (`.claude/settings.json`, `.agents/hooks.json`) take effect on the NEXT session start of your client. Already-running Claude Code/Cursor/Codex sessions won't fire the new hook until restart.
+> 2. **Recreate the bridge container** to pick up env + image changes: `./memory/scripts/up.sh memory_mcp`. The bridge reads `memory/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until restart.
+> 3. **Restart your MCP client** (Claude Code / Cursor / Codex) so it picks up the new `.claude/settings.json` / `.agents/hooks.json` hook entries. Already-running sessions won't fire the new hook until restart.
+>
+> Optional: copy the new `MEMORY_HOOK_EXITPLANMODE_DISABLE` and `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES` knobs from `.env.example` into your existing `memory/.env` if you want to tune (re-runs preserve user edits, so they aren't auto-merged). If you set them, redo step 2 to refresh bridge env.
+>
+> **Behavior change to be aware of:** `upsertDocumentByName` now reduces same-name documents to one per upsert (closes a concurrent-write race window). If you had transient duplicates from a prior bug, this commit silently merges them on the next upsert. Verify in the Dify UI before relying on the upsert path for non-plan content.
 
 ### Merge contract
 

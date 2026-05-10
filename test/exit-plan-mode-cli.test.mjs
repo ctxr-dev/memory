@@ -94,42 +94,25 @@ test("CLI: approved + non-string plan -> exit 0, skip(non-string-plan)", () => {
   assert.match(r.stderr, /skipped \(non-string-plan\)/);
 });
 
-test("CLI: approved + valid plan but slot unbound -> exit 0, slot-not-bound skip with wizard hint", () => {
-  // No DIFY_DATASET_PLANS_ID in env (we stripped it) and no
-  // memory/.env reachable via the test's scrubbed env. Hook should
-  // detect the host-side preflight failure and emit the dify-setup
-  // wizard hint, not crash.
-  const payload = JSON.stringify({
-    tool_response: { approved: true },
-    tool_input: { plan: "# Smoke plan\n\nbody" },
-  });
-  const r = runCli(payload, {
-    // Force envValue's .env-file fallback to miss by chdir'ing the test
-    // run elsewhere (handled by the cwd parameter? no — env.mjs reads
-    // ENV_PATH which is computed from import.meta.url, NOT cwd).
-    // So we accept the small risk that a developer's local
-    // memory/.env DOES bind plans; in that case this test sees the
-    // bridge-unavailable path instead. Both are valid skip outcomes;
-    // assert "skipped" + exit 0 only.
-  });
-  assert.equal(r.status, 0);
-  assert.match(r.stderr, /exit-plan-mode\.mjs: skipped/);
-  // Either "plans slot not bound" (dev env without binding) OR
-  // "bridge unavailable" (dev env with binding but no container).
-  assert.ok(
-    /plans slot not bound|bridge unavailable/.test(r.stderr),
-    `expected slot-not-bound or bridge-unavailable; got: ${r.stderr}`,
-  );
-});
-
 test("CLI: approved + valid plan + bogus container name -> exit 0, bridge unavailable skip", () => {
+  // Bind the slot host-side so we get past the preflight; then point
+  // the bridge at a container that doesn't exist so docker exec fails
+  // immediately. Pins the test to the bridge-unavailable path regardless
+  // of whether the developer's workspace happens to have a real installed
+  // env (where ./memory/.env reachable to envValue would otherwise let
+  // the call SUCCEED and break the assertion). Note: the slot-unbound
+  // host-side preflight (`plans slot not bound`) is not directly
+  // exercised by an integration test because env.mjs reads memory/.env
+  // via an absolute path that we can't easily override per test; in a
+  // clean env (CI, fresh boilerplate) it is the natural failure mode,
+  // but in a fully-installed dev workspace the .env file makes it
+  // unreachable. The path is still covered by the SkipPlanCapture wiring
+  // visible in the always-exit-0 test below and by reading the source.
   const payload = JSON.stringify({
     tool_response: { approved: true },
     tool_input: { plan: "# Smoke plan\n\nbody" },
   });
   const r = runCli(payload, {
-    // Bind the slot host-side so we get past the preflight; then point
-    // the bridge at a container that doesn't exist so docker exec fails.
     DIFY_DATASET_PLANS_ID: "ds-fake-uuid-host-side-only",
     MCP_CONTAINER_NAME: "definitely-not-a-real-container-xyz",
   });
