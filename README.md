@@ -118,7 +118,7 @@ Steps:
    - openai (REST with OPENAI_API_KEY in memory/.env)
    Detect which CLIs are on PATH before asking. If only one is available, default to it and ask me to confirm.
 
-4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
+4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd, and PostToolUse (matcher ExitPlanMode, for auto-capturing approved plans into the `plans` slot) to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
 
 5. Ask which MCP clients I want registered: Claude Desktop, Cursor, Codex/OpenAI, generic. Note the choices for step 8; the actual snippets only exist after bootstrap.sh runs.
 

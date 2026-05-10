@@ -466,7 +466,7 @@ Claude Code hook details:
 - `PreCompact` is the context-pressure safety net. It fires before Claude Code compacts a full context window, including automatic compaction.
 - `SessionEnd` and `PreCompact` payloads include `transcript_path`; `PostCompact` includes `compact_summary`. Flush handles both shapes.
 - `SessionStart` returns `additionalContext` only to remind the agent that memory exists. It does NOT inject stored memory blobs (that is the agent's job via `search_memory`).
-- Hook timeouts: 130s for the flush hooks (PreCompact / PostCompact / SessionEnd) and 15s for SessionStart. The LLM extraction call dominates wall-clock time on the flush path; 130s gives the default 120s LLM timeout headroom for spawn + parse.
+- Hook timeouts: 130s for the flush hooks (PreCompact / PostCompact / SessionEnd), 30s for PostToolUse/ExitPlanMode (no LLM, just two bridge calls), and 15s for SessionStart. The LLM extraction call dominates wall-clock time on the flush path; 130s gives the default 120s LLM timeout headroom for spawn + parse.
 
 This boilerplate follows the same lifecycle shape as [`coleam00/claude-memory-compiler`](https://github.com/coleam00/claude-memory-compiler) (capture at SessionEnd / PreCompact, summary at PostCompact, re-orient at SessionStart) and adds:
 

@@ -491,6 +491,12 @@ Next steps:
      AFTER this client restart.
   7) ./memory/scripts/mcp-smoke.sh               # validate
 
+Plan-mode integration (Claude Code):
+  When you exit plan mode and approve a plan, the PostToolUse hook
+  upserts plan-<slug>.md into the 'plans' dataset slot automatically
+  (no LLM call, two bridge calls, ~1s). Same plan title overwrites in
+  place. See templates/skills/plan-capture.md for the agent contract.
+
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug
 

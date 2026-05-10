@@ -65,12 +65,22 @@ export function writeMemory({ name, text, datasetId, supersedes, supersedesActio
   );
 }
 
-export function saveDocument({ name, text, datasetId, metadata } = {}) {
+// Exported for unit tests. Builds the --flag map that saveDocument hands
+// to execCli. The empty-metadata short-circuit (typeof check + key count)
+// is the single source of truth for "should we send a --metadata flag?".
+// Refactor with care: the bridge `save` subcommand parses --metadata as
+// JSON and skips application when absent, so an erroneous "{}" or
+// "undefined" string would silently downgrade the call.
+export function buildSaveFlags({ name, datasetId, metadata }) {
   const flags = { name, datasetId };
   if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
     flags.metadata = JSON.stringify(metadata);
   }
-  return execCli("save", flags, { stdin: text });
+  return flags;
+}
+
+export function saveDocument({ name, text, datasetId, metadata } = {}) {
+  return execCli("save", buildSaveFlags({ name, datasetId, metadata }), { stdin: text });
 }
 
 export function disableDocument({ documentId, datasetId } = {}) {

@@ -133,3 +133,123 @@ test("planDocSpec: title with punctuation slugified to kebab-case", () => {
   });
   assert.equal(spec.name, "plan-hello-world-v2.md");
 });
+
+// ---- extractTitle edge cases ----
+
+test("extractTitle: multiple H1s — first wins", () => {
+  assert.equal(extractTitle("# First\n\nbody\n\n# Second"), "First");
+});
+
+test("extractTitle: H1 after preamble lines is still picked up (regex is /m)", () => {
+  assert.equal(extractTitle("preamble line\n\n# Real Title\n\nbody"), "Real Title");
+});
+
+test("extractTitle: CRLF line endings (Windows clipboard)", () => {
+  assert.equal(extractTitle("# CRLF Title\r\n\r\nbody"), "CRLF Title");
+});
+
+test("extractTitle: H2 only (no H1) falls through to first non-empty line verbatim", () => {
+  // The regex requires ONE leading hash; "## Foo" doesn't match. Falls
+  // through to first-line "## Foo" — slugify will strip the hashes, so
+  // the eventual doc name is plan-foo.md. Lock current behaviour.
+  assert.equal(extractTitle("## Foo\n\nbody"), "## Foo");
+});
+
+test("extractTitle: H1 with markdown emphasis is captured verbatim (slugify drops the asterisks)", () => {
+  // Documenting the literal capture; slug correctness is asserted in the
+  // planDocSpec test below.
+  assert.equal(extractTitle("# **Bold** title"), "**Bold** title");
+});
+
+test("planDocSpec: H1 with emphasis -> slug strips emphasis", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: "# **Bold** title\n\nbody" },
+  });
+  assert.equal(spec.name, "plan-bold-title.md");
+});
+
+// ---- planDocSpec input-shape edge cases ----
+
+test("planDocSpec: non-string plan (object) -> skip(non-string-plan), no string coercion garbage", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: { not: "a string" } },
+  });
+  assert.equal(spec.skip, "non-string-plan");
+});
+
+test("planDocSpec: non-string plan (number) -> skip(non-string-plan)", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: 42 },
+  });
+  assert.equal(spec.skip, "non-string-plan");
+});
+
+test("planDocSpec: non-string plan (boolean) -> skip(non-string-plan)", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: true },
+  });
+  assert.equal(spec.skip, "non-string-plan");
+});
+
+test("planDocSpec: tool_response.approved === 1 (truthy but not strict-true) -> skip(not-approved)", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: 1 },
+    tool_input: { plan: "# Whatever" },
+  });
+  assert.equal(spec.skip, "not-approved");
+});
+
+test("planDocSpec: tool_response.approved === 'true' (string) -> skip(not-approved)", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: "true" },
+    tool_input: { plan: "# Whatever" },
+  });
+  assert.equal(spec.skip, "not-approved");
+});
+
+test("planDocSpec: hookInput is null -> skip(not-approved) without throwing", () => {
+  const spec = planDocSpec(null);
+  assert.equal(spec.skip, "not-approved");
+});
+
+test("planDocSpec: hookInput is undefined -> skip(not-approved) without throwing", () => {
+  const spec = planDocSpec(undefined);
+  assert.equal(spec.skip, "not-approved");
+});
+
+// ---- redaction parity with flush.mjs ----
+
+test("planDocSpec: secrets in plan body are redacted before persistence", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: "# Auth plan\n\nUse the key sk-aBcDeFgHiJkLmNoPqRsTuV12 to call the API." },
+  });
+  assert.equal(spec.name, "plan-auth-plan.md");
+  assert.match(spec.text, /\[REDACTED|REDACTED\]/, "redact() must rewrite the secret");
+  assert.doesNotMatch(spec.text, /sk-aBcDeFgHiJkLmNoPqRsTuV12/, "raw secret must not survive");
+});
+
+test("planDocSpec: redact is idempotent (clean plan passes through unchanged)", () => {
+  const clean = "# Clean plan\n\n1. Step one.\n2. Step two.";
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: clean },
+  });
+  assert.equal(spec.text, clean);
+});
+
+// ---- regression lock: metadata stays minimal ----
+
+test("planDocSpec: metadata has exactly atom_type + task_type, no other keys", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: "# Lock plan\n\nbody" },
+  });
+  assert.equal(Object.keys(spec.metadata).length, 2);
+  assert.equal(spec.metadata.atom_type, "plan");
+  assert.equal(spec.metadata.task_type, "planning");
+});
