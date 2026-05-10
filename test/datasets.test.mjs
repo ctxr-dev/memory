@@ -5,9 +5,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import {
   ATOM_TYPES,
   ATOM_TYPE_TO_DATASET,
+  METADATA_SCHEMA,
   metadataForDify,
   routeAtomToDataset,
 } from "../scripts/lib/datasets.mjs";
@@ -125,4 +130,26 @@ test("metadataForDify: handles missing/garbage atom gracefully", () => {
   assert.deepEqual(metadataForDify(undefined), { atom_type: "" });
   assert.deepEqual(metadataForDify({}), { atom_type: "" });
   assert.deepEqual(metadataForDify({ type: "  reference  " }), { atom_type: "reference" });
+});
+
+test("METADATA_SCHEMA matches mcp-server/src/index.js PER_DOC_METADATA_FIELDS verbatim", () => {
+  // The schema list is duplicated across runtimes (boilerplate scripts
+  // import scripts/lib/datasets.mjs; the bridge module mcp-server/src/
+  // is a separate Node module without import access to scripts/lib/).
+  // The two sources MUST stay in lock-step or create_dataset will
+  // install a different schema than dify-setup.sh does.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const indexJs = fs.readFileSync(path.resolve(here, "../mcp-server/src/index.js"), "utf8");
+  const match = indexJs.match(/const PER_DOC_METADATA_FIELDS\s*=\s*\[([\s\S]*?)\];/);
+  assert.ok(match, "could not locate PER_DOC_METADATA_FIELDS in mcp-server/src/index.js");
+  const bridgeFields = match[1]
+    .split(",")
+    .map((s) => s.trim().replace(/^["']|["'](?:,)?$/g, ""))
+    .filter(Boolean);
+  const hostFields = METADATA_SCHEMA.map((f) => f.name);
+  assert.deepEqual(
+    bridgeFields,
+    hostFields,
+    `drift between scripts/lib/datasets.mjs:METADATA_SCHEMA and mcp-server/src/index.js:PER_DOC_METADATA_FIELDS — both must list the same fields in the same order`,
+  );
 });

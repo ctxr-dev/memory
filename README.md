@@ -298,14 +298,21 @@ flowchart TB
     Save["MCP save_to_dataset / save_lesson / write_memory"]
   end
 
+  subgraph PlanCapture["④ ExitPlanMode auto-capture (per approval)"]
+    direction TB
+    ExitPlan["PostToolUse: ExitPlanMode (approved=true)"] --> ExitPlanScript["scripts/hooks/exit-plan-mode.mjs"]
+  end
+
   Absorb --> KnowledgeDataset
   Save --> AnyDataset[("Dify named slots<br/>plans, investigations, ...")]
   Save --> SelfImprovement
+  ExitPlanScript --> PlansDataset[("Dify dataset 'plans'<br/>plan-&lt;slug&gt;.md")]
 
   DailyDataset --> Search(["MCP search_memory / recall_lessons"])
   KnowledgeDataset --> Search
   SelfImprovement --> Search
   AnyDataset --> Search
+  PlansDataset --> Search
 ```
 
 **Everything lives in Dify**, organised by named slots, retrieved via metadata-filtered queries.
@@ -327,9 +334,9 @@ flowchart TB
 
 Two routes: **automatic distillation** (flush + compile) and **on-demand upserts** (absorb + save_to_dataset).
 
-### Automatic atoms
+### Atoms extracted by flush+compile
 
-Eight atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
+Seven atom types are produced by the flush LLM extractor (`prompts/flush.md`) and routed by compile. Each carries the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
 
 | Type | Use when | Routes to |
 |---|---|---|
@@ -340,7 +347,12 @@ Eight atom types, each carrying the metadata block (`project_module`, `language`
 | `reference` | A pointer to a dashboard, runbook, or external project, with the reason to consult it. | `knowledge` |
 | `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. | `knowledge` |
 | `self-improvement-lesson` | NEGATIVE OR CORRECTIVE user feedback revealing a behaviour the AI should change next time. | `self_improvement` |
-| `plan` | Plan body captured by the `ExitPlanMode` hook (auto, on approval) or a manual `save_to_dataset` upsert. Compile never produces this type; plans are not extracted from transcripts. | `plans` |
+
+### Atoms set by hooks (not extracted from transcripts)
+
+| Type | Set by | Routes to |
+|---|---|---|
+| `plan` | `PostToolUse/ExitPlanMode` hook on approval, or manual `save_to_dataset(dataset="plans", ...)`. The flush extractor is explicitly forbidden from producing this type (see `prompts/flush.md`). | `plans` |
 
 ### On-demand uploads
 
@@ -373,6 +385,13 @@ cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
 ```
 
 Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
+
+> **Upgrading to plan-capture (PostToolUse/ExitPlanMode hook):**
+>
+> 1. **Re-run `./memory/scripts/dify-setup.sh`** after `git pull`. The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Pre-existing slots created by an OLDER `create_dataset` MCP tool (which did NOT auto-install the schema before this commit) get the six per-document fields retro-installed in seconds. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save until the wizard runs.
+> 2. **Optional new env knobs in `.env.example`** (`MEMORY_HOOK_EXITPLANMODE_DISABLE`, `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`) are not added to your existing `memory/.env` automatically (re-runs preserve user edits). Copy them from `.env.example` if you want to tune.
+> 3. **Behavior change in `upsertDocumentByName`**: same-name documents in any slot are now reduced to one on every upsert. If you relied on transient duplicates surviving (e.g. for hand-managed plans named identically), this commit silently merges them. Verify in the Dify UI before relying on the upsert path for non-plan content.
+> 4. **MCP-client restart**: hook-file changes (`.claude/settings.json`, `.agents/hooks.json`) take effect on the NEXT session start of your client. Already-running Claude Code/Cursor/Codex sessions won't fire the new hook until restart.
 
 ### Merge contract
 
@@ -430,9 +449,9 @@ Today the boilerplate ships two skills: `self-improvement.md` (the `recall_lesso
 | `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
 | `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
-| `PostToolUse` (matcher `ExitPlanMode`) | `scripts/hooks/exit-plan-mode.mjs` | When the user approves a plan, upserts `plan-<slug>.md` into the `plans` dataset slot (no LLM, no timestamp; same title overwrites). Body is redacted + wrapped in an untrusted-content fence. Skips silently on rejection, empty plan, oversized plan (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`, default 256KB), unbound slot, bridge failure, or `MEMORY_HOOK_EXITPLANMODE_DISABLE=true`. See [`plan-capture` skill](templates/skills/plan-capture.md). |
+| `PostToolUse` (matcher `ExitPlanMode`) | `scripts/hooks/exit-plan-mode.mjs` | When the user approves a plan, upserts `plan-<slug>.md` into the `plans` dataset slot (deterministic, no LLM, no timestamp; same title overwrites). Body is redacted + wrapped in an untrusted-content fence. Skips silently on rejection, empty plan, oversized plan (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`, default 256KB), unbound slot, bridge failure, or `MEMORY_HOOK_EXITPLANMODE_DISABLE=true`. See [`plan-capture` skill](templates/skills/plan-capture.md). |
 
-Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 30s for `PostToolUse/ExitPlanMode` (two bridge calls, no LLM), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
+Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 30s for `PostToolUse/ExitPlanMode` (no LLM, but multiple bridge round-trips: find + create + metadata + re-list + dedupe-delete), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
 
 ## Verification
 

@@ -136,7 +136,13 @@ async function main() {
       // see the slot binding. Wizard restarts the bridge after binding;
       // a hand-edited memory/.env wouldn't have. Hint the fix.
       const msg = err.message || "";
-      const looksLikeStaleEnv = /Dataset\s+'?plans'?\s+is not configured|requireDifyWriteConfig/i.test(msg);
+      // Stale-env error shapes the bridge can return (Dify version drift):
+      //   "Dataset 'plans' is not configured"
+      //   "Dify slot 'plans' is not bound"
+      //   "requireDifyWriteConfig: ..."
+      //   plain "404" with the slot name elsewhere in the message
+      // Match the broadest reasonable union so the hint actually fires.
+      const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|404/i.test(msg);
       const hint = looksLikeStaleEnv
         ? " — try ./memory/scripts/up.sh memory_mcp to refresh the bridge env"
         : "";

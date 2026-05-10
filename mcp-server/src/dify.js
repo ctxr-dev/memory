@@ -826,6 +826,12 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
   let deleteError;
   let deletedCount = 0;
   try {
+    // Note: Dify's `keyword` filter is a SUBSTRING match (server-side),
+    // so a query for "plan-foo" can return both "plan-foo.md" and
+    // "plan-foo-bar.md". The `.name === name` filter on the line below
+    // enforces exact match before we issue any delete. Without that
+    // exact-match guard, this loop would happily delete unrelated docs
+    // whose names share a prefix with the new doc's name.
     const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
     const toDelete = sameName
       .filter((d) => d?.id && d.id !== newDocId && d?.name === name);

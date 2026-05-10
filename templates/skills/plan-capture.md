@@ -48,7 +48,21 @@ To intentionally supersede a prior version with new content, write a NEW `save_t
 - The hook is gated on a 256KB plan-body cap (tunable via `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`). Bigger plans skip with `plan-too-large`. If you have a genuinely huge plan, split it or save manually with `save_to_dataset` after pre-truncating.
 - Plan body is **redacted** for common secret shapes (API keys, JWTs, PEM blocks, DB connection URLs, Azure storage keys) before persisting. Do not rely on this as a security boundary; never paste production secrets into a plan.
 - The persisted body is wrapped in a `<!-- BEGIN UNTRUSTED PLAN BODY ... -->` fence so future agents reading it via `recall_lessons` / `search_memory` see explicit data-vs-instructions boundaries (mitigates prompt-injection-via-memory).
-- Set `MEMORY_HOOK_EXITPLANMODE_DISABLE=true` in `memory/.env` to disable the auto-capture entirely; the hook becomes a no-op.
+- Set `MEMORY_HOOK_EXITPLANMODE_DISABLE=true` (case-sensitive) in `memory/.env` to disable the auto-capture entirely; the hook becomes a no-op.
+- Plan titles are slugified to ASCII (lowercase, hyphenated). Non-Latin titles (Cyrillic, Chinese, emoji-only) fold to `plan-untitled.md` and **collide** with each other, overwriting in place. Always include at least one ASCII word in your H1 if you work in a non-English project.
+
+## Verifying auto-capture worked
+
+After approving a plan, you have two breadcrumbs:
+
+1. **Stderr from the hook** (visible in your client's hook-output channel; in Claude Code it appears in the agent transcript):
+   ```
+   exit-plan-mode.mjs: wrote plan-<slug>.md to plans
+   ```
+   If you see `skipped (...)` instead, the reason is in the parens. Common reasons: `not-approved`, `empty-plan`, `plans slot not bound` (run `dify-setup.sh`), `bridge unavailable` (run `up.sh memory_mcp`), `plan-too-large`, `disabled via MEMORY_HOOK_EXITPLANMODE_DISABLE=true`.
+2. **Dify UI**: run `./memory/scripts/ui-url.sh` to print the URL, open Knowledge → `plans` dataset, and look for the new `plan-<slug>.md` document. Iterating on the same titled plan overwrites the same doc in place (no duplicates accumulate).
+
+For programmatic verification, an MCP-aware agent can call `search_memory({ query: "<plan title>", datasets: ["plans"], filters: { atom_type: "plan" } })` and assert at least one hit.
 
 ## When NOT to save
 

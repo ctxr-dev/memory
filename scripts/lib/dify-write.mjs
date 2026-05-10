@@ -66,6 +66,17 @@ async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIME
     // leak a stale `docker exec` waiting indefinitely on a now-orphaned
     // pipe. The bridge subprocess inside the container may still finish
     // its in-flight call, but at least the host-side client exits.
+    //
+    // Load-bearing contract: registering ANY listener for SIGTERM
+    // suppresses Node's default exit behavior on that signal, so every
+    // call site that uses execCli MUST exit explicitly via process.exit
+    // after handling the rejection. Both flush.mjs and exit-plan-mode.mjs
+    // do this. settle() removes the listener so a successful call doesn't
+    // leak it. Concurrent execCli calls each register their own once()
+    // listener; with many parallel calls Node may print
+    // MaxListenersExceededWarning above the default 10 — currently no
+    // call site does that, but bump process.setMaxListeners(N) here if
+    // a future caller needs it.
     const onParentSigterm = () => {
       safeKill();
       settle(() =>

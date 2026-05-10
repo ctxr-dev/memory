@@ -153,8 +153,11 @@ test("CLI: oversized plan -> exit 0, skip(plan-too-large)", () => {
 });
 
 test("CLI: hook log uses 'exit-plan-mode.mjs:' prefix (peer parity with flush.mjs)", () => {
+  // Loosened anchor: a future Node may print ExperimentalWarning or
+  // dotenv complaints to stderr before our line; assert presence of the
+  // prefix at start-of-line, not start-of-input.
   const r = runCli("");
-  assert.match(r.stderr, /^exit-plan-mode\.mjs: /);
+  assert.match(r.stderr, /(^|\n)exit-plan-mode\.mjs: /);
 });
 
 test("CLI: hook never exits non-zero (always exit 0 invariant)", () => {

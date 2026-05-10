@@ -378,10 +378,20 @@ server.registerTool(
           }
         }
       }
+      // Split semantics: `ok` reports DATASET creation success (the
+      // primary operation); `metadataSchema.complete` separately reports
+      // whether ALL six per-doc fields installed cleanly. A caller seeing
+      // `ok:true, metadataSchema.complete:false` should treat the dataset
+      // as usable but unfilterable until the missing fields are added
+      // (re-run dify-setup.sh, or call create_metadata_field directly).
       return jsonToolResponse({
-        ok: fieldErrors.length === 0,
+        ok: !!datasetId,
         dataset: created,
-        metadataSchema: { installed: fieldResults, failed: fieldErrors },
+        metadataSchema: {
+          installed: fieldResults,
+          failed: fieldErrors,
+          complete: fieldErrors.length === 0 && fieldResults.length === PER_DOC_METADATA_FIELDS.length,
+        },
       });
     } catch (error) {
       return errorToolResponse(error);
