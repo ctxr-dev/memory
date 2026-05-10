@@ -11,6 +11,7 @@ import {
   createDocumentByText,
   deleteDocument,
   disableDocument,
+  enableDocument,
   getConfig,
   listAllDatasets,
   maskSecret,
@@ -389,9 +390,9 @@ server.registerTool(
 server.registerTool(
   "delete_document",
   {
-    title: "Delete a document from a dataset",
+    title: "Delete a document from a dataset (PERMANENT)",
     description:
-      "Delete a single document by its Dify document id. Use this to clean up plans whose title slug changed (the auto-capture wrote a new doc under the new slug, leaving the old slug stale), or to retract any auto-captured / absorbed doc you no longer want indexed. Find the documentId via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI. The deletion is permanent (no soft-delete); pair with `disable_document` if you only want to hide a doc from search.",
+      "PERMANENT delete of a single document by its Dify document id. Accepts ANY slot — including auto-managed ones (`daily`, `knowledge`, `self_improvement`). Be careful: deleting a `self_improvement` lesson destroys it irrecoverably. Primary safe use: clean up a stale `plan-<old-slug>.md` after a title change. Also valid for retracting any auto-captured / absorbed doc you no longer want indexed. For lessons or compile-managed docs, prefer `disable_document` (reversible) unless you are sure. Find the documentId via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI.",
     inputSchema: {
       dataset: z.string().trim().min(1),
       documentId: z.string().trim().min(1),
@@ -414,7 +415,7 @@ server.registerTool(
   {
     title: "Disable a document (hide from search) without deleting",
     description:
-      "Soft-delete: mark a document as disabled so search_memory / recall_lessons stop returning it, but keep it in the Dify UI for audit. Reversible by re-enabling via the Dify UI. Use this when you want to retract a captured plan or lesson without losing the historical record.",
+      "Soft-delete: mark a document as disabled so search_memory / recall_lessons stop returning it, but keep it in the Dify UI for audit. Reversible via `enable_document` (or via the Dify UI). Use this when you want to retract a captured plan or lesson without losing the historical record.",
     inputSchema: {
       dataset: z.string().trim().min(1),
       documentId: z.string().trim().min(1),
@@ -425,6 +426,29 @@ server.registerTool(
       const config = getConfig();
       const datasetId = resolveDatasetId(config, dataset);
       const result = await disableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "enable_document",
+  {
+    title: "Re-enable a previously disabled document",
+    description:
+      "Symmetric counterpart to `disable_document`: brings a disabled doc back into search_memory / recall_lessons results. No-op (returns success) if the doc is already enabled. Use when you change your mind about a soft-delete.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await enableDocument(config, { datasetId, documentId });
       return jsonToolResponse({ ok: true, datasetId, documentId, result });
     } catch (error) {
       return errorToolResponse(error);

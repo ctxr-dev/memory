@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Local First" src="https://img.shields.io/badge/Local--First-memory-0A7C66">
   <img alt="Dify" src="https://img.shields.io/badge/RAG-Dify-2F6FEB">
@@ -374,7 +375,7 @@ Both use upsert-by-exact-name (delete-then-create): **same name → updated cont
 | `save_to_dataset` | Upsert by exact name with optional `metadata` (durable-artefact path). |
 | `save_lesson` | Sugar over `save_to_dataset` for `self_improvement`; required `metadata.error_pattern` is the dedup key. |
 | `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. `create_dataset` auto-installs the per-document metadata schema (the six fields). |
-| `delete_document` / `disable_document` | Clean up an upserted doc by id. `delete_document` is permanent; `disable_document` hides from search but keeps the audit trail (reversible via Dify UI). Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc you no longer want indexed. |
+| `delete_document` / `disable_document` / `enable_document` | Clean up an upserted doc by id. `delete_document` is permanent (warns about lessons/compile-managed slots); `disable_document` hides from search but keeps the audit trail; `enable_document` reverses a soft-delete. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc you no longer want indexed. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (`.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; user `ignore` patterns are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 

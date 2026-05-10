@@ -36,12 +36,13 @@ Use a stable, descriptive slug (`plan-auth-rewrite.md`, not `plan-1.md`). The sl
 
 ### Renaming and cleanup
 
-If the plan TITLE changes between iterations, the next approval writes a NEW Dify doc under the new slug; the old slug stays. There is no MCP delete tool. Two options:
+If the plan TITLE changes between iterations, the next approval writes a NEW Dify doc under the new slug; the old slug stays. Three options:
 
+- **Use the `delete_document` MCP tool** (permanent). Find the doc id via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI, then call `delete_document(dataset="plans", documentId="<id>")`. Closes the create-without-undo asymmetry the auto-capture would otherwise leave open.
+- **Use the `disable_document` MCP tool** (soft, reversible). Hides the stale doc from `search_memory` / `recall_lessons` but keeps the audit trail in the Dify UI. Re-enable from the Dify UI if you change your mind.
 - **Tolerate it.** Old plans are ranked below the latest by recency (`upload_date`) and metadata, and `search_memory` with a tight `scoreThreshold` will surface the right one.
-- **Clean up in the Dify UI.** Knowledge → `plans` dataset → delete the stale `plan-<old-slug>.md`.
 
-To intentionally supersede a prior version with new content, write a NEW `save_to_dataset` call with the OLD slug and the new body. Same name overwrites.
+To intentionally supersede a prior version with new content (without renaming), write a NEW `save_to_dataset` call with the OLD slug and the new body — same name overwrites in place.
 
 ## Hard rules
 

@@ -1,7 +1,8 @@
 # Minimal CI: run the test suite on macOS + Linux against Node 20 and 22.
+#
 # Windows is supported via WSL2 / Git Bash for end-users; we don't run CI
 # on bare Windows here because Docker Compose isn't available in
-# windows-latest runners by default and several tests assume a POSIX
+# windows-latest runners by default and several scripts assume a POSIX
 # environment.
 #
 # We do NOT install Docker or run the bridge in CI. The unit + CLI test
@@ -9,6 +10,11 @@
 # smoke (`scripts/plan-capture-smoke.sh`) requires a live Dify; it is
 # explicitly out of CI scope and is meant for opt-in install-verification
 # locally.
+#
+# No `npm install` step: the root package.json has zero deps; tests use
+# only the built-in `node:test` runner. The `mcp-server/` workspace has
+# its own deps but the test suite imports only the pure modules from
+# there (no `@modelcontextprotocol/sdk` / `zod` needed at test time).
 
 name: CI
 
@@ -32,13 +38,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Install dependencies
-        run: npm ci
       - name: Run tests
         run: npm test
       - name: Static checks (bash + node syntax)
-        if: matrix.os == 'ubuntu-latest'
+        # Run on macOS specifically: macOS still ships bash 3.2 (the
+        # portability floor we promise end-users), so bash -n there
+        # catches bash-3.2-incompatible syntax that ubuntu's bash 5.x
+        # would silently accept. Tests run on both OSes regardless.
+        if: matrix.os == 'macos-latest'
         run: |
           bash -n bootstrap.sh scripts/*.sh scripts/hooks/*.sh
           node --check scripts/compile.mjs scripts/hooks/*.mjs scripts/lib/*.mjs
           node --check mcp-server/src/*.js
+          node --check test/*.test.mjs

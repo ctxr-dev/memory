@@ -145,7 +145,13 @@ async function main() {
       // /is flag: case-insensitive + dotall so `.*` crosses the newlines
       // in wrapped multi-line bridge errors (memory-cli stderr can span
       // several lines when Dify's response body is propagated up).
-      const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|dataset.*404|404.*dataset/is.test(msg);
+      // The bare \b404\b alternative is intentional: real Dify-bridge
+      // errors often surface as plain "404" with the slot name elsewhere
+      // in the wrapped message (e.g. /datasets/<id>/documents/...). The
+      // false-positive risk (an unrelated 404 from embedding-API) is
+      // tolerable — the hint just suggests a bridge restart, which is
+      // benign if not actually needed.
+      const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|\b404\b/is.test(msg);
       const hint = looksLikeStaleEnv
         ? " — try ./memory/scripts/up.sh memory_mcp to refresh the bridge env"
         : "";

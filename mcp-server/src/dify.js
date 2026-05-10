@@ -906,6 +906,34 @@ export async function disableDocument(config, { datasetId, documentId }) {
   );
 }
 
+// Symmetric counterpart to disableDocument: re-enable a previously
+// disabled document so it shows up in search again. Same endpoint shape
+// as disable except the action verb. Exposed as the `enable_document`
+// MCP tool so the disable/enable pair stays inside the MCP surface and
+// agents don't need to drop into the Dify UI to undo a soft delete.
+export async function enableDocument(config, { datasetId, documentId }) {
+  if (!documentId) {
+    throw new Error("enableDocument requires documentId.");
+  }
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/status/enable`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ document_ids: [documentId] }),
+    },
+    config.timeoutMs,
+  );
+}
+
 export async function createDocumentByText(config, { datasetId, name, text }) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(

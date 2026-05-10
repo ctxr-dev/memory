@@ -298,7 +298,7 @@ For Claude Desktop, Cursor, or a generic MCP client, merge this server into the 
 
 Keep the command exactly the same. Do not paste `DIFY_KNOWLEDGE_API_KEY` into any MCP client config.
 
-The bridge exposes eleven MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
+The bridge exposes fourteen MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
 
 | Tool | Purpose |
 |---|---|
@@ -310,7 +310,9 @@ The bridge exposes eleven MCP tools (full descriptions in [README MCP tools tabl
 | `save_to_dataset` | Upsert by exact name into a named slot, optional `metadata` map. |
 | `save_lesson` | Inline self-improvement-lesson capture; required `metadata.error_pattern` is the dedup key. |
 | `list_datasets` | Show Dify datasets + local slot bindings. |
-| `create_dataset` | Create a new Dify dataset. |
+| `create_dataset` | Create a new Dify dataset; auto-installs the per-document metadata schema. |
+| `delete_document` | Permanent delete of a doc by id. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc. |
+| `disable_document` / `enable_document` | Soft delete + un-delete: hide from search but keep in Dify UI for audit; reversible. Use when you want to retract a captured plan or lesson without losing the historical record. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 

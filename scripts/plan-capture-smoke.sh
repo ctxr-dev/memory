@@ -4,13 +4,14 @@
 # scripts/mcp-smoke.sh is intentionally read-only (no writes that would
 # dirty the user's dataset). This script exercises the full write path
 # the ExitPlanMode hook depends on:
-#   1. Find any pre-existing plan-mcp-smoke-*.md to clean up later.
-#   2. Build a synthetic PostToolUse hook payload with approved=true and
-#      a known plan body.
-#   3. Pipe it to ./scripts/hooks/exit-plan-mode.mjs.
-#   4. Assert stderr matches "wrote plan-mcp-smoke-... to plans".
-#   5. Verify the doc landed via list_datasets / find-by-name.
-#   6. Optionally clean up via the new delete_document MCP tool.
+#   1. Build a synthetic PostToolUse hook payload with approved=true and
+#      a unique title (timestamp + pid).
+#   2. Pipe it to ./scripts/hooks/exit-plan-mode.mjs.
+#   3. Assert stderr matches "wrote plan-mcp-smoke-... to plans".
+#   4. Verify the doc landed via memory-cli `find-by-name`.
+#   5. Optionally clean up via memory-cli `delete` and re-verify
+#      via `find-by-name` that the doc is gone (covers the
+#      delete_document MCP tool's underlying primitive end-to-end).
 #
 # Requires: bridge container running, DIFY_DATASET_PLANS_ID bound, Dify
 # API key configured. Skips with a clear message if any prereq missing.
@@ -114,12 +115,36 @@ if [ "$CLEANUP" -eq 1 ]; then
   echo "plan-capture-smoke: deleting smoke doc ..."
   if ! docker exec -i "$container_name" node src/memory-cli.js delete --datasetId plans --documentId "$doc_id" >/dev/null; then
     echo "plan-capture-smoke WARN: cleanup delete failed; smoke doc ${expected_name} (id ${doc_id}) still present in Dify." >&2
-    echo "  Delete manually via the Dify UI if you want it gone." >&2
+    echo "  Run delete_document(dataset='plans', documentId='${doc_id}') from any MCP client, or delete via Dify UI." >&2
     exit 1
   fi
-  echo "plan-capture-smoke: cleanup complete."
+  # Re-verify: the doc should be GONE. Catches a regression where
+  # `delete` returns success but the doc actually persists (or where
+  # the delete primitive shape changes silently). Also covers the
+  # delete_document MCP tool's underlying primitive end-to-end.
+  echo "plan-capture-smoke: re-verifying delete ..."
+  post_json="$(docker exec -i "$container_name" node src/memory-cli.js find-by-name --datasetId plans --name "$expected_name" || true)"
+  post_doc="$(printf '%s' "$post_json" | node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+try {
+  const j = JSON.parse(raw);
+  if (j?.document?.id) process.stdout.write(j.document.id);
+} catch {}
+' || true)"
+  if [ -n "$post_doc" ]; then
+    echo "plan-capture-smoke FAIL: delete returned success but find-by-name still returns doc id ${post_doc}." >&2
+    exit 1
+  fi
+  echo "plan-capture-smoke: cleanup complete (verified absent)."
 else
   echo "plan-capture-smoke: --keep set; smoke doc ${expected_name} (id ${doc_id}) left in place."
+  if command -v "$SCRIPT_DIR/ui-url.sh" >/dev/null 2>&1; then
+    ui_url="$("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || true)"
+    if [ -n "$ui_url" ]; then
+      echo "  View at ${ui_url} → Knowledge → plans dataset."
+    fi
+  fi
 fi
 
 echo "plan-capture-smoke: PASS"
