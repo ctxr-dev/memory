@@ -224,7 +224,7 @@ Stop and ask me whenever you would otherwise guess. This is configuration, not r
 
 `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode`) are not yet shipped. Until they land, agents can call these tools directly mid-session.
+**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.sh`). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
 
 ## Self-improvement loop
 
@@ -429,8 +429,9 @@ Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lesson
 | `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
 | `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
+| `PostToolUse` (matcher `ExitPlanMode`) | `scripts/hooks/exit-plan-mode.mjs` | When the user approves a plan, upserts `plan-<slug>.md` into the `plans` dataset slot (no LLM, no timestamp; same title overwrites). Skips silently on rejection, empty plan, unbound slot, or bridge failure. See [`plan-capture` skill](templates/skills/plan-capture.md). |
 
-Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
+Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 30s for `PostToolUse/ExitPlanMode` (two bridge calls, no LLM), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
 
 ## Verification
 

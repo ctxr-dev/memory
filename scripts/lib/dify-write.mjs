@@ -65,6 +65,14 @@ export function writeMemory({ name, text, datasetId, supersedes, supersedesActio
   );
 }
 
+export function saveDocument({ name, text, datasetId, metadata } = {}) {
+  const flags = { name, datasetId };
+  if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
+    flags.metadata = JSON.stringify(metadata);
+  }
+  return execCli("save", flags, { stdin: text });
+}
+
 export function disableDocument({ documentId, datasetId } = {}) {
   return execCli("disable", { documentId, datasetId });
 }
