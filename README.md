@@ -224,7 +224,7 @@ Stop and ask me whenever you would otherwise guess. This is configuration, not r
 
 `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.sh`). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
+**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. Tagged `atom_type=plan`, `task_type=planning` (no `project_module` so it doesn't pollute filters; add one via a manual `save_to_dataset` if you want per-module scoping). The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
 
 ## Self-improvement loop
 
@@ -329,7 +329,7 @@ Two routes: **automatic distillation** (flush + compile) and **on-demand upserts
 
 ### Automatic atoms
 
-Seven atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
+Eight atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
 
 | Type | Use when | Routes to |
 |---|---|---|
@@ -340,6 +340,7 @@ Seven atom types, each carrying the metadata block (`project_module`, `language`
 | `reference` | A pointer to a dashboard, runbook, or external project, with the reason to consult it. | `knowledge` |
 | `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. | `knowledge` |
 | `self-improvement-lesson` | NEGATIVE OR CORRECTIVE user feedback revealing a behaviour the AI should change next time. | `self_improvement` |
+| `plan` | Plan body captured by the `ExitPlanMode` hook (auto, on approval) or a manual `save_to_dataset` upsert. Compile never produces this type; plans are not extracted from transcripts. | `plans` |
 
 ### On-demand uploads
 
@@ -419,7 +420,7 @@ When `--install-hooks` is on (default), `.claude/settings.json` is rendered with
 - `.claude/skills/<name>.md` (only when `--install-hooks`): Claude Code's project skills directory; auto-loaded.
 - `.agents/rules/<name>.md` (always): vendor-neutral. Cursor / Codex / generic clients can import from here.
 
-Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract).
+Today the boilerplate ships two skills: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract) and `plan-capture.md` (how the `ExitPlanMode` auto-capture and manual `save_to_dataset` paths interact for the `plans` slot).
 
 ## Hook reference
 
@@ -519,6 +520,7 @@ memory/
 │   ├── agents/                       # rendered to <project>/.agents/
 │   ├── claude/settings.json          # rendered to <project>/.claude/
 │   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
+│   ├── skills/plan-capture.md        # rendered to .claude/skills/ AND .agents/rules/
 │   └── gitignore.append              # appended to <project>/.gitignore
 └── vendor/dify/                # cloned at first dify-bootstrap
 

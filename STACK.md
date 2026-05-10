@@ -415,6 +415,18 @@ Current hook events:
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/exit-plan-mode.sh",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }
@@ -424,6 +436,7 @@ What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 - `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
 - `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later routes each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Source dailies are disabled after their atoms are promoted.
+- `PostToolUse` (matcher `ExitPlanMode`): when the user approves a plan, `scripts/hooks/exit-plan-mode.mjs` upserts `plan-<slug>.md` into the `plans` slot (deterministic, no LLM, two bridge calls, 30s timeout). Skips silently on rejection, empty plan body, unbound `plans` slot, or bridge failure. See [README → Saving plans](README.md#saving-plans-investigations-or-other-artefacts-manually) and the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract.
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
@@ -475,6 +488,7 @@ For hook-capable clients, wire lifecycle events to the matching script:
 | Before compaction/context pruning | `./memory/scripts/hooks/pre-compact.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
 | After compaction/summarization | `./memory/scripts/hooks/post-compact.sh` | `compact_summary` preferred; optional `session_id`, `cwd`, `reason` |
 | Session end | `./memory/scripts/hooks/session-end.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
+| After ExitPlanMode tool returns approved | `./memory/scripts/hooks/exit-plan-mode.sh` | `tool_input.plan` (string), `tool_response.approved` (true/false/null); optional `session_id`, `cwd`, `tool_name="ExitPlanMode"` |
 
 If a client has only a session-end hook, wire only `session-end.sh`. If it has only a summary-after-compaction hook, wire `post-compact.sh` and pass the summary as `compact_summary`. If it cannot pass a transcript path or compact summary, automatic continuous capture is not available for that client; use MCP `write_memory` manually or rely on clients that expose hook payloads.
 

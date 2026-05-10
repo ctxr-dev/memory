@@ -44,8 +44,9 @@ test("planDocSpec: approved + H1 -> plan-<slug>.md", () => {
   assert.deepEqual(spec.metadata, {
     atom_type: "plan",
     task_type: "planning",
-    project_module: "unknown",
   });
+  // project_module is intentionally omitted so it doesn't pollute filters.
+  assert.ok(!("project_module" in spec.metadata));
 });
 
 test("planDocSpec: approved + no H1 -> first-line slug", () => {

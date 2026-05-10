@@ -21,6 +21,9 @@ test("ATOM_TYPES: stable known set", () => {
     "reference",
     "pattern-gotcha",
     "self-improvement-lesson",
+    // `plan` was added when the ExitPlanMode auto-capture hook landed; it
+    // is set on plans (compile never produces it) and routes to `plans`.
+    "plan",
   ];
   for (const t of expected) {
     assert.ok(ATOM_TYPES.has(t), `missing atom type: ${t}`);

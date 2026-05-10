@@ -106,6 +106,12 @@ const OUR_TEMPLATE = {
         hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh', timeout: 130 }],
       },
     ],
+    PostToolUse: [
+      {
+        matcher: "ExitPlanMode",
+        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/exit-plan-mode.sh', timeout: 30 }],
+      },
+    ],
   },
 };
 
@@ -228,6 +234,40 @@ test("mergeHooksConfig: mixed event with both user and our entries -> user kept,
   assert.equal(reinstalled.hooks.SessionStart.length, 2);
   assert.equal(reinstalled.hooks.SessionStart[0].hooks[0].command, "./scripts/user-hook.sh");
   assert.equal(reinstalled.hooks.SessionStart[1].hooks[0].timeout, 60);
+});
+
+test("mergeHooksConfig: PostToolUse with same matcher 'ExitPlanMode' but user command is preserved alongside ours", () => {
+  // Regression: the new exit-plan-mode hook is the first event we ship
+  // with a non-empty matcher. mergeHooksConfig matches by inner-hook
+  // command path (HOOK_OWNERSHIP_SIGNATURE), not by matcher value, so a
+  // user PostToolUse entry with matcher: "ExitPlanMode" pointing at THEIR
+  // OWN script must survive a re-run as a separate array element next to
+  // ours. Loss of either entry is a critical regression.
+  const userExisting = {
+    hooks: {
+      PostToolUse: [
+        {
+          matcher: "ExitPlanMode",
+          hooks: [{ type: "command", command: "./tools/my-plan-archiver.sh", timeout: 10 }],
+        },
+      ],
+    },
+  };
+  const merged = mergeHooksConfig(userExisting, OUR_TEMPLATE);
+  assert.equal(merged.hooks.PostToolUse.length, 2, "user entry + our entry");
+  const userEntry = merged.hooks.PostToolUse.find((e) =>
+    e.hooks.some((h) => h.command === "./tools/my-plan-archiver.sh"),
+  );
+  const ourEntry = merged.hooks.PostToolUse.find((e) =>
+    e.hooks.some((h) => h.command.includes("memory/scripts/hooks/exit-plan-mode.sh")),
+  );
+  assert.ok(userEntry, "user entry preserved");
+  assert.ok(ourEntry, "our entry installed");
+  assert.equal(userEntry.matcher, "ExitPlanMode");
+  assert.equal(ourEntry.matcher, "ExitPlanMode");
+  // Re-run is byte-stable (no duplication).
+  const reRun = mergeHooksConfig(merged, OUR_TEMPLATE);
+  assert.equal(reRun.hooks.PostToolUse.length, 2);
 });
 
 test("mergeHooksConfig: nested user path 'tools/memory/scripts/hooks/...' is preserved on re-run", () => {
@@ -490,11 +530,12 @@ test("shipped templates: every hook entry in templates/{claude/settings,agents/h
       }
     }
   }
-  // Sanity: both templates ship 4 events × 1 entry each = 8 commands.
+  // Sanity: both templates ship 5 events × 1 entry each = 10 commands
+  // (SessionStart, PreCompact, PostCompact, SessionEnd, PostToolUse).
   // If this drops, someone removed events from templates without updating
   // the test; if it grows, someone added events and should also update
   // bootstrap.sh's merge_strategy_for if a new file appears.
-  assert.ok(totalChecked >= 8, `expected at least 8 entries across templates; got ${totalChecked}`);
+  assert.ok(totalChecked >= 10, `expected at least 10 entries across templates; got ${totalChecked}`);
 });
 
 test("merge-config CLI: --name=value form works (Bash quoting friendly)", (t) => {
