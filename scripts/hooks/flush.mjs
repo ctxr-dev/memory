@@ -149,6 +149,14 @@ function validateAtoms(parsed) {
     const title = String(atom.title || "").trim();
     const body = String(atom.body || "").trim();
     if (!ATOM_TYPES.has(type) || !title || !body) continue;
+    // `plan` is in ATOM_TYPES because the ExitPlanMode hook tags docs
+    // with it, but the flush+compile path must NOT produce plans (they
+    // are upsert-by-name into the `plans` slot, not dedup-merged
+    // dailies). Drop any LLM hallucination silently.
+    if (type === "plan") {
+      console.error(`flush.mjs: dropped plan-typed atom '${title.slice(0, 40)}' (plans are hook-only)`);
+      continue;
+    }
     const tags = Array.isArray(atom.tags)
       ? atom.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
       : [];

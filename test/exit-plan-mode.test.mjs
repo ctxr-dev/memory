@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { planDocSpec, extractTitle } from "../scripts/hooks/exit-plan-mode.mjs";
+import { planDocSpec, extractTitle, fencePlanBody } from "../scripts/hooks/exit-plan-mode.mjs";
 
 test("extractTitle: H1 wins when present", () => {
   assert.equal(extractTitle("# Foo Bar\n\nbody"), "Foo Bar");
@@ -233,13 +233,62 @@ test("planDocSpec: secrets in plan body are redacted before persistence", () => 
   assert.doesNotMatch(spec.text, /sk-aBcDeFgHiJkLmNoPqRsTuV12/, "raw secret must not survive");
 });
 
-test("planDocSpec: redact is idempotent (clean plan passes through unchanged)", () => {
+test("planDocSpec: redact is idempotent (clean plan body survives fencing intact)", () => {
   const clean = "# Clean plan\n\n1. Step one.\n2. Step two.";
   const spec = planDocSpec({
     tool_response: { approved: true },
     tool_input: { plan: clean },
   });
-  assert.equal(spec.text, clean);
+  // The fence wraps the body but doesn't mutate it; the original text is
+  // present verbatim between the BEGIN/END markers.
+  assert.match(spec.text, /BEGIN UNTRUSTED PLAN BODY/);
+  assert.match(spec.text, /END UNTRUSTED PLAN BODY/);
+  assert.ok(spec.text.includes(clean), "clean body must appear verbatim inside the fence");
+});
+
+// ---- untrusted-content fence ----
+
+test("fencePlanBody: wraps text in BEGIN/END markers with origin attribution", () => {
+  const wrapped = fencePlanBody("hello");
+  assert.match(wrapped, /BEGIN UNTRUSTED PLAN BODY \(origin: ExitPlanMode hook/);
+  assert.match(wrapped, /END UNTRUSTED PLAN BODY/);
+  assert.ok(wrapped.includes("hello"));
+});
+
+test("planDocSpec: spec.text is fenced so future agents see data-not-instructions", () => {
+  const spec = planDocSpec({
+    tool_response: { approved: true },
+    tool_input: { plan: "# Lock plan\n\nbody" },
+  });
+  assert.match(spec.text, /<!-- BEGIN UNTRUSTED PLAN BODY/);
+  assert.match(spec.text, /<!-- END UNTRUSTED PLAN BODY -->$/);
+});
+
+// ---- size cap ----
+
+test("planDocSpec: oversized plan -> skip(plan-too-large)", () => {
+  // Default cap is 256_000 bytes; pass an explicit small cap to test
+  // the gate without allocating 256KB strings.
+  const spec = planDocSpec(
+    {
+      tool_response: { approved: true },
+      tool_input: { plan: "# Title\n\n" + "x".repeat(2000) },
+    },
+    { maxBytes: 500 },
+  );
+  assert.equal(spec.skip?.startsWith("plan-too-large"), true, `got: ${spec.skip}`);
+});
+
+test("planDocSpec: under-cap plan -> success", () => {
+  const spec = planDocSpec(
+    {
+      tool_response: { approved: true },
+      tool_input: { plan: "# Title\n\nshort body" },
+    },
+    { maxBytes: 1000 },
+  );
+  assert.equal(spec.skip, undefined);
+  assert.equal(spec.name, "plan-title.md");
 });
 
 // ---- regression lock: metadata stays minimal ----

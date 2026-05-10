@@ -7,6 +7,7 @@ import {
   buildDatasetMap,
   buildMetadataCondition,
   createDataset,
+  createDatasetMetadataField,
   createDocumentByText,
   deleteDocument,
   disableDocument,
@@ -328,12 +329,29 @@ server.registerTool(
   },
 );
 
+// Per-document metadata fields installed on every dataset created via
+// create_dataset. Mirrors scripts/lib/datasets.mjs:METADATA_SCHEMA. If
+// you add a field there, add it here too (the bridge is a separate Node
+// module without import access to scripts/lib/). Without this, a dataset
+// created via the MCP tool would have NO atom_type / tags / etc., and
+// upsertDocumentByName would silently downgrade to no-metadata writes
+// (surfaced as metadataResult.warning, but invisible to the agent unless
+// it inspects the response).
+const PER_DOC_METADATA_FIELDS = [
+  "atom_type",
+  "tags",
+  "project_module",
+  "language",
+  "task_type",
+  "error_pattern",
+];
+
 server.registerTool(
   "create_dataset",
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default). Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -343,7 +361,28 @@ server.registerTool(
     try {
       const config = getConfig();
       const created = await createDataset(config, { name, description });
-      return jsonToolResponse({ ok: true, dataset: created });
+      const datasetId = created?.id || created?.dataset?.id;
+      // Best-effort schema install. Per-field failures are aggregated
+      // and returned; they do NOT abort dataset creation since the
+      // user can re-run dify-setup.sh to install missing fields later.
+      const fieldResults = [];
+      const fieldErrors = [];
+      if (datasetId) {
+        for (const fieldName of PER_DOC_METADATA_FIELDS) {
+          try {
+            const r = await createDatasetMetadataField(config, { datasetId, name: fieldName, type: "string" });
+            fieldResults.push({ name: fieldName, ok: true, id: r?.id });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            fieldErrors.push({ name: fieldName, error: msg });
+          }
+        }
+      }
+      return jsonToolResponse({
+        ok: fieldErrors.length === 0,
+        dataset: created,
+        metadataSchema: { installed: fieldResults, failed: fieldErrors },
+      });
     } catch (error) {
       return errorToolResponse(error);
     }

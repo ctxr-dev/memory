@@ -59,6 +59,7 @@ If nothing in the transcript is durable, return exactly: `{"atoms": []}`.
 - Skip generic platitudes ("we should write tests").
 - Skip session pleasantries.
 - Skip anything that would not be reusable in a future session.
+- Do NOT emit `type: "plan"`. Plans are written by the ExitPlanMode hook on user approval, not extracted from transcripts. A plan-typed atom from this prompt would pollute the upsert-by-name `plans` slot and be silently rejected downstream.
 
 # Quality bar
 

@@ -3,7 +3,18 @@ import { envValue } from "./env.mjs";
 
 export class DifyBridgeUnavailable extends Error {}
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+// 180s default: a Dify create-by-text on a multi-KB plan body
+// synchronously triggers embedding for the full doc, which can queue
+// behind other embeds when OpenAI rate-limits. 60s was too tight for
+// the new save path; we choose 180s as a balance (still bounded by the
+// hook's own outer timeout, which is 30s for ExitPlanMode and 130s for
+// the flush hooks — i.e. the outer hook timeout typically wins).
+const DEFAULT_TIMEOUT_MS = 180_000;
+
+// Cap stdout/stderr at 1MB each: a misbehaving bridge that prints a
+// multi-MB stack trace would otherwise OOM the host hook process.
+// Hooks run in the agent's process tree; OOM there is user-visible.
+const MAX_BUFFER_BYTES = 1_048_576;
 
 function containerName() {
   const name = envValue("MCP_CONTAINER_NAME");
@@ -26,30 +37,84 @@ async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIME
     const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let overflowed = false;
+    let settled = false;
+
+    const safeKill = () => {
+      try { child.kill("SIGKILL"); } catch {}
+    };
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.off("SIGTERM", onParentSigterm);
+      process.off("SIGINT", onParentSigterm);
+      fn();
+    };
+
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new DifyBridgeUnavailable(`docker exec ${subcommand} timed out after ${timeoutMs}ms`));
+      safeKill();
+      settle(() =>
+        reject(new DifyBridgeUnavailable(`docker exec ${subcommand} timed out after ${timeoutMs}ms`)),
+      );
     }, timeoutMs);
 
-    child.stdout.on("data", (c) => stdout.push(c));
-    child.stderr.on("data", (c) => stderr.push(c));
+    // If the parent (the hook) is killed by Claude Code's outer hook
+    // timeout, propagate the kill to the docker exec child so we do NOT
+    // leak a stale `docker exec` waiting indefinitely on a now-orphaned
+    // pipe. The bridge subprocess inside the container may still finish
+    // its in-flight call, but at least the host-side client exits.
+    const onParentSigterm = () => {
+      safeKill();
+      settle(() =>
+        reject(new DifyBridgeUnavailable(`docker exec ${subcommand} cancelled by parent signal`)),
+      );
+    };
+    process.once("SIGTERM", onParentSigterm);
+    process.once("SIGINT", onParentSigterm);
+
+    const collect = (buf, chunk, which) => {
+      if (overflowed) return;
+      buf.push(chunk);
+      const next = which === "stdout" ? (stdoutBytes += chunk.length) : (stderrBytes += chunk.length);
+      if (next > MAX_BUFFER_BYTES) {
+        overflowed = true;
+        safeKill();
+        settle(() =>
+          reject(
+            new DifyBridgeUnavailable(
+              `memory-cli ${subcommand} ${which} exceeded ${MAX_BUFFER_BYTES} bytes; aborting`,
+            ),
+          ),
+        );
+      }
+    };
+    child.stdout.on("data", (c) => collect(stdout, c, "stdout"));
+    child.stderr.on("data", (c) => collect(stderr, c, "stderr"));
     child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(new DifyBridgeUnavailable(`docker exec failed to start: ${err.message}`));
+      settle(() => reject(new DifyBridgeUnavailable(`docker exec failed to start: ${err.message}`)));
     });
     child.on("close", (code) => {
-      clearTimeout(timer);
+      if (settled) return;
       const out = Buffer.concat(stdout).toString("utf8");
       const errOut = Buffer.concat(stderr).toString("utf8");
       if (code !== 0) {
-        reject(new DifyBridgeUnavailable(`memory-cli ${subcommand} exited ${code}: ${errOut.trim() || out.trim()}`));
+        settle(() =>
+          reject(
+            new DifyBridgeUnavailable(`memory-cli ${subcommand} exited ${code}: ${errOut.trim() || out.trim()}`),
+          ),
+        );
         return;
       }
-      try {
-        resolve(JSON.parse(out));
-      } catch (e) {
-        reject(new DifyBridgeUnavailable(`memory-cli ${subcommand} returned non-JSON: ${out.slice(0, 300)}`));
-      }
+      settle(() => {
+        try {
+          resolve(JSON.parse(out));
+        } catch {
+          reject(new DifyBridgeUnavailable(`memory-cli ${subcommand} returned non-JSON: ${out.slice(0, 300)}`));
+        }
+      });
     });
 
     if (stdin != null) child.stdin.write(stdin);

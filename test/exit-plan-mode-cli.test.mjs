@@ -3,6 +3,13 @@
 // (hooks must NEVER block the agent) and the host-side preflight skip
 // paths. Without this file, main(), readStdin, the slot preflight, and
 // the DifyBridgeUnavailable catch are 0% covered.
+//
+// Why a separate file from test/exit-plan-mode.test.mjs (the unit tests):
+// the CLI driver has independent invariants (always exit 0, propagate the
+// SkipPlanCapture pattern, never read stdin twice) that benefit from
+// being colocated and from spawnSync isolation. flush.mjs has no
+// analogous split because its main() is not cleanly factorable into
+// pure helpers + thin driver. Do NOT merge the two files.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -94,7 +101,7 @@ test("CLI: approved + valid plan but slot unbound -> exit 0, slot-not-bound skip
     // assert "skipped" + exit 0 only.
   });
   assert.equal(r.status, 0);
-  assert.match(r.stderr, /exit-plan-mode: skipped/);
+  assert.match(r.stderr, /exit-plan-mode\.mjs: skipped/);
   // Either "plans slot not bound" (dev env without binding) OR
   // "bridge unavailable" (dev env with binding but no container).
   assert.ok(
@@ -116,6 +123,38 @@ test("CLI: approved + valid plan + bogus container name -> exit 0, bridge unavai
   });
   assert.equal(r.status, 0);
   assert.match(r.stderr, /skipped \(bridge unavailable/);
+});
+
+test("CLI: MEMORY_HOOK_EXITPLANMODE_DISABLE=true kills auto-capture even on a valid approved plan", () => {
+  const payload = JSON.stringify({
+    tool_response: { approved: true },
+    tool_input: { plan: "# Capture me\n\nbody" },
+  });
+  const r = runCli(payload, {
+    MEMORY_HOOK_EXITPLANMODE_DISABLE: "true",
+    DIFY_DATASET_PLANS_ID: "ds-bound",
+    MCP_CONTAINER_NAME: "irrelevant-because-disabled",
+  });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /skipped \(disabled via MEMORY_HOOK_EXITPLANMODE_DISABLE/);
+});
+
+test("CLI: oversized plan -> exit 0, skip(plan-too-large)", () => {
+  // Tighten the cap via env so we can prove the gate without piping
+  // 300KB through spawnSync's stdin pipe (which has practical buffering
+  // limits and would slow the test). Same code path; smaller fixture.
+  const payload = JSON.stringify({
+    tool_response: { approved: true },
+    tool_input: { plan: "# Big plan\n\n" + "x".repeat(2000) },
+  });
+  const r = runCli(payload, { MEMORY_HOOK_EXITPLANMODE_MAX_BYTES: "500" });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /skipped \(plan-too-large/);
+});
+
+test("CLI: hook log uses 'exit-plan-mode.mjs:' prefix (peer parity with flush.mjs)", () => {
+  const r = runCli("");
+  assert.match(r.stderr, /^exit-plan-mode\.mjs: /);
 });
 
 test("CLI: hook never exits non-zero (always exit 0 invariant)", () => {

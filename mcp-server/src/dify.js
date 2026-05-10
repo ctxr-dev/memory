@@ -813,19 +813,42 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
     }
   }
 
+  // Re-list at delete time to catch ANY doc with the same name that is
+  // not the one we just created. Closes the concurrent-write race
+  // window: if two upserts run in parallel, both see the SAME `existing`
+  // at find time but each creates a new doc; the naive single-id delete
+  // would leave one orphan. By re-listing here we delete every same-name
+  // doc except the freshly-created one, regardless of how many concurrent
+  // calls happened. Worst case (all concurrent calls succeed in create
+  // and then race here) the dataset settles to ONE doc with the latest
+  // body — no orphans, no infinite multiplication.
+  const newDocId = created?.document?.id || created?.id || null;
   let deleteError;
-  if (existing?.id) {
-    try {
-      await deleteDocument(config, { datasetId: selectedDatasetId, documentId: existing.id });
-    } catch (err) {
-      deleteError = err instanceof Error ? err.message : String(err);
+  let deletedCount = 0;
+  try {
+    const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
+    const toDelete = sameName
+      .filter((d) => d?.id && d.id !== newDocId && d?.name === name);
+    for (const dup of toDelete) {
+      try {
+        await deleteDocument(config, { datasetId: selectedDatasetId, documentId: dup.id });
+        deletedCount += 1;
+      } catch (err) {
+        // Aggregate per-id failures into one error string but keep going;
+        // a 404 here means a sibling concurrent upsert already deleted it.
+        const m = err instanceof Error ? err.message : String(err);
+        deleteError = deleteError ? `${deleteError}; ${m}` : m;
+      }
     }
+  } catch (err) {
+    deleteError = err instanceof Error ? err.message : String(err);
   }
 
   return {
     name,
     datasetId: selectedDatasetId,
     replacedId: existing?.id || null,
+    deletedCount,
     created,
     metadataResult,
     metadataError,

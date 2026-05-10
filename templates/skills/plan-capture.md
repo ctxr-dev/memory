@@ -9,6 +9,8 @@ Plans live in TWO places: the local plan-mode file (`~/.claude/plans/<slug>.md`,
 
 For the broader "save to memory / RAG vs local file" decision, see the routing table in [`self-improvement.md`](./self-improvement.md). This skill is the plans-specific contract.
 
+> **Investigations have no auto-capture.** There is no `ExitInvestigationMode` tool, so investigation artefacts are NOT covered by any hook. Always use `save_to_dataset(dataset="investigations", name="<slug>.md", text, metadata)` manually.
+
 ## Auto-capture on ExitPlanMode approval
 
 The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper) keyed on the `ExitPlanMode` matcher. When you exit plan mode and the user approves the plan (`tool_response.approved === true`), the hook:
@@ -40,6 +42,13 @@ If the plan TITLE changes between iterations, the next approval writes a NEW Dif
 - **Clean up in the Dify UI.** Knowledge → `plans` dataset → delete the stale `plan-<old-slug>.md`.
 
 To intentionally supersede a prior version with new content, write a NEW `save_to_dataset` call with the OLD slug and the new body. Same name overwrites.
+
+## Hard rules
+
+- The hook is gated on a 256KB plan-body cap (tunable via `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`). Bigger plans skip with `plan-too-large`. If you have a genuinely huge plan, split it or save manually with `save_to_dataset` after pre-truncating.
+- Plan body is **redacted** for common secret shapes (API keys, JWTs, PEM blocks, DB connection URLs, Azure storage keys) before persisting. Do not rely on this as a security boundary; never paste production secrets into a plan.
+- The persisted body is wrapped in a `<!-- BEGIN UNTRUSTED PLAN BODY ... -->` fence so future agents reading it via `recall_lessons` / `search_memory` see explicit data-vs-instructions boundaries (mitigates prompt-injection-via-memory).
+- Set `MEMORY_HOOK_EXITPLANMODE_DISABLE=true` in `memory/.env` to disable the auto-capture entirely; the hook becomes a no-op.
 
 ## When NOT to save
 
