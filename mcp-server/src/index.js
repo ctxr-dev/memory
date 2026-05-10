@@ -21,6 +21,7 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
+import { PER_DOC_METADATA_FIELDS } from "./schema.js";
 
 const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
 const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
@@ -330,21 +331,7 @@ server.registerTool(
 );
 
 // Per-document metadata fields installed on every dataset created via
-// create_dataset. Mirrors scripts/lib/datasets.mjs:METADATA_SCHEMA. If
-// you add a field there, add it here too (the bridge is a separate Node
-// module without import access to scripts/lib/). Without this, a dataset
-// created via the MCP tool would have NO atom_type / tags / etc., and
-// upsertDocumentByName would silently downgrade to no-metadata writes
-// (surfaced as metadataResult.warning, but invisible to the agent unless
-// it inspects the response).
-const PER_DOC_METADATA_FIELDS = [
-  "atom_type",
-  "tags",
-  "project_module",
-  "language",
-  "task_type",
-  "error_pattern",
-];
+// create_dataset come from sibling schema.js (top-level import below).
 
 server.registerTool(
   "create_dataset",
@@ -393,6 +380,52 @@ server.registerTool(
           complete: fieldErrors.length === 0 && fieldResults.length === PER_DOC_METADATA_FIELDS.length,
         },
       });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "delete_document",
+  {
+    title: "Delete a document from a dataset",
+    description:
+      "Delete a single document by its Dify document id. Use this to clean up plans whose title slug changed (the auto-capture wrote a new doc under the new slug, leaving the old slug stale), or to retract any auto-captured / absorbed doc you no longer want indexed. Find the documentId via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI. The deletion is permanent (no soft-delete); pair with `disable_document` if you only want to hide a doc from search.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await deleteDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "disable_document",
+  {
+    title: "Disable a document (hide from search) without deleting",
+    description:
+      "Soft-delete: mark a document as disabled so search_memory / recall_lessons stop returning it, but keep it in the Dify UI for audit. Reversible by re-enabling via the Dify UI. Use this when you want to retract a captured plan or lesson without losing the historical record.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await disableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
     } catch (error) {
       return errorToolResponse(error);
     }

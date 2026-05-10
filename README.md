@@ -373,7 +373,8 @@ Both use upsert-by-exact-name (delete-then-create): **same name → updated cont
 | `write_memory` / `update_memory` | Create-or-supersede a single document (low-level; compile uses `update_memory`). |
 | `save_to_dataset` | Upsert by exact name with optional `metadata` (durable-artefact path). |
 | `save_lesson` | Sugar over `save_to_dataset` for `self_improvement`; required `metadata.error_pattern` is the dedup key. |
-| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. |
+| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. `create_dataset` auto-installs the per-document metadata schema (the six fields). |
+| `delete_document` / `disable_document` | Clean up an upserted doc by id. `delete_document` is permanent; `disable_document` hides from search but keeps the audit trail (reversible via Dify UI). Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc you no longer want indexed. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (`.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; user `ignore` patterns are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
@@ -502,6 +503,17 @@ docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -
 ```
 
 If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.
+
+### Tier 4.5 — Plan-capture write-path smoke (opt-in)
+
+`mcp-smoke.sh` is intentionally read-only (no writes that would dirty your dataset). To verify the **ExitPlanMode auto-capture write path** end-to-end against your real Dify:
+
+```bash
+./memory/scripts/plan-capture-smoke.sh           # writes + verifies + deletes a synthetic plan-mcp-smoke-*.md
+./memory/scripts/plan-capture-smoke.sh --keep    # leaves the smoke doc in place for visual inspection
+```
+
+Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot isn't bound, or `MCP_CONTAINER_NAME` isn't set in `memory/.env`. Use this once after install (or after any upgrade that touches the hook) to prove the full pipeline works against your tenant.
 
 ## Repository layout (cloned `./memory/`)
 

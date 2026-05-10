@@ -142,7 +142,10 @@ async function main() {
       //   "requireDifyWriteConfig: ..."
       //   plain "404" with the slot name elsewhere in the message
       // Match the broadest reasonable union so the hint actually fires.
-      const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|404/i.test(msg);
+      // /is flag: case-insensitive + dotall so `.*` crosses the newlines
+      // in wrapped multi-line bridge errors (memory-cli stderr can span
+      // several lines when Dify's response body is propagated up).
+      const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|dataset.*404|404.*dataset/is.test(msg);
       const hint = looksLikeStaleEnv
         ? " — try ./memory/scripts/up.sh memory_mcp to refresh the bridge env"
         : "";

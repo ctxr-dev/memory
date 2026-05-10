@@ -1,0 +1,44 @@
+# Minimal CI: run the test suite on macOS + Linux against Node 20 and 22.
+# Windows is supported via WSL2 / Git Bash for end-users; we don't run CI
+# on bare Windows here because Docker Compose isn't available in
+# windows-latest runners by default and several tests assume a POSIX
+# environment.
+#
+# We do NOT install Docker or run the bridge in CI. The unit + CLI test
+# suites run hermetically (no container). The plan-capture integration
+# smoke (`scripts/plan-capture-smoke.sh`) requires a live Dify; it is
+# explicitly out of CI scope and is meant for opt-in install-verification
+# locally.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+      - name: Static checks (bash + node syntax)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bash -n bootstrap.sh scripts/*.sh scripts/hooks/*.sh
+          node --check scripts/compile.mjs scripts/hooks/*.mjs scripts/lib/*.mjs
+          node --check mcp-server/src/*.js

@@ -148,18 +148,12 @@ test("extractTitle: CRLF line endings (Windows clipboard)", () => {
   assert.equal(extractTitle("# CRLF Title\r\n\r\nbody"), "CRLF Title");
 });
 
-test("extractTitle: H2 only (no H1) falls through to first non-empty line verbatim", () => {
-  // The regex requires ONE leading hash; "## Foo" doesn't match. Falls
-  // through to first-line "## Foo" — slugify will strip the hashes, so
-  // the eventual doc name is plan-foo.md. Lock current behaviour.
-  assert.equal(extractTitle("## Foo\n\nbody"), "## Foo");
-});
-
-test("extractTitle: H1 with markdown emphasis is captured verbatim (slugify drops the asterisks)", () => {
-  // Documenting the literal capture; slug correctness is asserted in the
-  // planDocSpec test below.
-  assert.equal(extractTitle("# **Bold** title"), "**Bold** title");
-});
+// Note: H2-without-H1 and H1-with-emphasis fall back / pass through dumb
+// regex behavior. Don't lock implementation details here — the
+// user-facing contract is the doc NAME (slug), asserted via planDocSpec
+// below. If extractTitle is rewritten to use a real markdown parser,
+// adjust planDocSpec tests if the eventual slug changes; otherwise no
+// fixup needed.
 
 test("planDocSpec: H1 with emphasis -> slug strips emphasis", () => {
   const spec = planDocSpec({
