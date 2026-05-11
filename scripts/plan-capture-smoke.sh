@@ -71,7 +71,7 @@ fi
 # Use a unique title so concurrent CI runs don't trample each other; the
 # slugify will fold this to plan-mcp-smoke-<timestamp>-<pid>.md.
 ts="$(date -u +%Y%m%d-%H%M%S)"
-title="MCP smoke ${ts} pid${$}"
+title="MCP smoke ${ts} pid$$"
 expected_slug="$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
 expected_name="plan-${expected_slug}.md"
 

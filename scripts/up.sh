@@ -16,15 +16,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # `up.sh --help`) keeps default semantics so we don't churn Postgres /
 # Redis / Qdrant on every run.
 #
-# Service-name detection: an arg that does NOT start with `-` is treated
-# as a service name. Flag args (`--help`, `--no-deps`, `-v`) pass through
-# without triggering recreation.
+# Service-name detection: only args that EXACTLY match a Compose service
+# name trigger recreate. This avoids misclassifying option values (e.g.
+# `--profile foo`, `--pull always`, `--project-name X`) as service names.
 has_service_arg=0
+services="$(docker_compose config --services 2>/dev/null || true)"
 for arg in "$@"; do
-  case "$arg" in
-    -*) ;;       # flag, ignore
-    *) has_service_arg=1 ;;
-  esac
+  if printf '%s\n' "$services" | grep -Fx -- "$arg" >/dev/null; then
+    has_service_arg=1
+    break
+  fi
 done
 
 if [ "$has_service_arg" -eq 1 ]; then
