@@ -8,6 +8,7 @@ import {
   createDocumentByText,
   deleteDocument,
   disableDocument,
+  enableDocument,
   fetchJsonWithTimeout,
   findDocumentByExactName,
   getConfig,
@@ -23,9 +24,7 @@ import {
   upsertDocumentByName,
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
-
-const WORKSPACE_ROOT = process.env.WORKSPACE_MOUNT || "/workspace";
-const MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
+import { WORKSPACE_MOUNT as WORKSPACE_ROOT, ABSORB_MAX_FILE_BYTES as MAX_FILE_BYTES } from "./workspace.js";
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -185,6 +184,11 @@ async function readCmd(config, { datasetId, documentId }) {
 async function disableCmd(config, { datasetId, documentId }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   return disableDocument(config, { datasetId, documentId });
+}
+
+async function enableCmd(config, { datasetId, documentId }) {
+  if (!documentId) throw new Error("--documentId <id> is required");
+  return enableDocument(config, { datasetId, documentId });
 }
 
 async function listMetadataFieldsCmd(config, { datasetId }) {
@@ -390,6 +394,7 @@ try {
     case "list": result = await listCmd(config, args); break;
     case "read": result = await readCmd(config, args); break;
     case "disable": result = await disableCmd(config, args); break;
+    case "enable": result = await enableCmd(config, args); break;
     case "delete": result = await deleteCmd(config, args); break;
     case "list-datasets": result = await listDatasetsCmd(config); break;
     case "create-dataset": result = await createDatasetCmd(config, args); break;

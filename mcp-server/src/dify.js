@@ -116,15 +116,20 @@ export async function fetchJsonWithTimeout(url, options, timeoutMs) {
 
 // Bridge-side mirror of scripts/lib/env.mjs:slotEnvKey() — the host
 // helper cannot be imported here because the bridge runs in a separate
-// Node module without access to ../scripts/lib/. Cross-runtime parity is
-// locked by test/cross-runtime-slug-sync.test.mjs which imports BOTH
-// `hostSlotEnvKey` (host) and THIS function (exported just for the test)
-// and runs the same set of slot inputs through both. Treats null /
-// undefined / falsy inputs the same as the host helper (empty string,
-// not the literal "null" / "undefined") so a defensive caller passing
-// `undefined` doesn't produce a different env-var name across runtimes.
-export function slotEnvKey(name) {
-  return `DIFY_DATASET_${String(name || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
+// Node module without access to ../scripts/lib/. Cross-runtime parity
+// is locked by test/cross-runtime-slug-sync.test.mjs which imports BOTH
+// `hostSlotEnvKey` (host) and THIS function and runs the same set of
+// slot inputs through both. Treats null/undefined/falsy inputs the same
+// as the host helper (empty string, not the literal "null" / "undefined")
+// so a defensive caller passing `undefined` doesn't produce a different
+// env-var name across runtimes.
+//
+// Param name matches the host signature (`slot`) for symmetry in IDE
+// hover help. **@internal** — exported only so the parity test in
+// test/cross-runtime-slug-sync.test.mjs can import it directly; no
+// production code outside this module should import it.
+export function slotEnvKey(slot) {
+  return `DIFY_DATASET_${String(slot || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
 }
 
 // Slot is declared by presence of any DIFY_DATASET_<NAME>_ID env line.

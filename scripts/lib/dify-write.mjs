@@ -163,6 +163,14 @@ export function disableDocument({ documentId, datasetId } = {}) {
   return execCli("disable", { documentId, datasetId });
 }
 
+// Symmetric counterpart to disableDocument. Calls the bridge's `enable`
+// CLI subcommand (PATCHes Dify's /documents/status/enable). Closes the
+// host-side asymmetry that round-26 created when the MCP tool
+// `enable_document` shipped without a matching CLI subcommand.
+export function enableDocument({ documentId, datasetId } = {}) {
+  return execCli("enable", { documentId, datasetId });
+}
+
 export function deleteDocument({ documentId, datasetId } = {}) {
   return execCli("delete", { documentId, datasetId });
 }

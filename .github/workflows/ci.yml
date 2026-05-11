@@ -25,11 +25,22 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["main"]
+  # workflow_dispatch lets a maintainer re-run CI without an empty commit
+  # (useful after a flaky-looking failure or a runner-side outage).
+  workflow_dispatch: {}
+
+# Defense-in-depth: explicitly declare read-only contents access. The
+# workflow doesn't write to the repo or to any external service.
+permissions:
+  contents: read
 
 jobs:
   test:
     name: npm test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
+    # A hung test would otherwise burn the 6h default. Real CI run is
+    # ~30s; 10min leaves ample headroom for slow runner days.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -43,8 +54,13 @@ jobs:
           cache: "npm"
       - name: Install (reproducible)
         run: npm ci
+
+      # Capture test output once. Both the test run and the
+      # CHANGELOG-count guard (later step) consume this artifact, so we
+      # don't pay for `npm test` twice on the macOS+node22 cell.
       - name: Run tests
-        run: npm test
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test.out"
+
       - name: Static checks (bash + node syntax)
         # Run on macOS specifically: macOS still ships bash 3.2 (the
         # portability floor we promise end-users), so bash -n there
@@ -56,24 +72,50 @@ jobs:
           node --check scripts/compile.mjs scripts/hooks/*.mjs scripts/lib/*.mjs
           node --check mcp-server/src/*.js
           node --check test/*.test.mjs
+          # Static-check the shared test helpers too (test/lib/*.mjs).
+          # Guarded via compgen so adding/removing the directory doesn't
+          # make CI red on this step alone.
+          if compgen -G 'test/lib/*.mjs' >/dev/null; then
+            node --check test/lib/*.mjs
+          fi
 
       - name: CHANGELOG test-count guard
-        # The CHANGELOG mentions the current test count in the [Unreleased]
-        # block. It has gone stale multiple times across audit rounds
-        # because the same commit that adds tests was supposed to update
-        # the number. This guard makes the staleness visible at PR time
-        # instead of waiting for the next audit reviewer to notice.
-        # Runs on macOS only (one node version is enough to count tests).
+        # The CHANGELOG mentions the current test count in the
+        # [Unreleased] block. It has gone stale multiple times across
+        # audit rounds because the same commit that adds tests was
+        # supposed to update the number. This guard makes the staleness
+        # visible at PR time instead of waiting for the next audit
+        # reviewer to notice.
+        #
+        # WARNING: if the matrix matrix loses macos-latest or node 22,
+        # the guard silently never runs. Update this condition if you
+        # restructure the matrix.
         if: matrix.os == 'macos-latest' && matrix.node == '22'
         run: |
-          actual=$(npm test 2>&1 | grep -oE 'tests [0-9]+' | head -n 1 | awk '{print $2}')
+          actual=$(grep -oE 'tests [0-9]+' "$RUNNER_TEMP/test.out" | head -n 1 | awk '{print $2}')
           if [ -z "$actual" ]; then
-            echo "::error::Could not extract test count from npm test output"
+            echo "::error::Could not extract test count from npm test output (file: $RUNNER_TEMP/test.out)"
             exit 1
           fi
-          if ! grep -qE "from 156 to ${actual} tests" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md test count is stale. Actual: ${actual}. Update the 'Test suite grew from 156 to <N> tests' line in CHANGELOG.md to match."
+          # Regex `from [0-9]+ to ${actual} tests` accepts any baseline
+          # so the line can evolve without breaking CI for non-bug
+          # reasons. The point of the guard is "current count is
+          # recorded in CHANGELOG"; the baseline `156` is incidental.
+          if ! grep -qE "from [0-9]+ to ${actual} tests" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md test count is stale. Actual: ${actual}. Update the 'Test suite grew from <floor> to <N> tests' line in CHANGELOG.md to match."
             grep -nE 'Test suite grew' CHANGELOG.md || true
             exit 1
           fi
           echo "CHANGELOG test count is current at ${actual}."
+
+      - name: Bridge dependency security audit
+        # Non-blocking informational scan of the bridge container's npm
+        # deps (`@modelcontextprotocol/sdk`, `zod`). Dependabot weekly
+        # PRs handle the actual upgrades; this is an in-PR canary so we
+        # see new CVEs as soon as they surface.
+        # `continue-on-error: true` keeps PRs unblocked on advisories
+        # the maintainer needs time to triage.
+        if: matrix.os == 'macos-latest' && matrix.node == '22'
+        continue-on-error: true
+        working-directory: mcp-server
+        run: npm audit --audit-level=high --omit=dev

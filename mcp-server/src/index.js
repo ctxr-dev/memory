@@ -23,9 +23,7 @@ import {
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
 import { PER_DOC_METADATA_FIELDS } from "./schema.js";
-
-const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
-const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
+import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES } from "./workspace.js";
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
