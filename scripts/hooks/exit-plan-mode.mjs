@@ -121,9 +121,9 @@ async function main() {
     const notes = [];
     if (result?.metadataError) notes.push(`metadata error: ${result.metadataError}`);
     // metadataResult.warning fires when the dataset has no matching
-    // per-doc fields (skipped wizard, or dataset was created via
-    // create_dataset MCP tool). Surface it so the user knows the doc
-    // landed but is unfilterable.
+    // per-doc fields (for example: dataset created before the metadata-
+    // schema auto-install existed, or a partial schema-install failure).
+    // Surface it so the user knows the doc landed but is unfilterable.
     if (result?.metadataResult?.warning) {
       notes.push(`metadata warning: ${result.metadataResult.warning}`);
     }

@@ -37,7 +37,7 @@ const PATTERNS = [
   [/\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|rediss):\/\/)[^\s:@\/]+:[^\s@\/]+@/gi, "$1[REDACTED]:[REDACTED]@"],
   // Azure Storage account keys (AccountKey=...; in connection strings).
   // The key is base64 + padding, ~80 chars; the connection string itself
-  // is comma-separated key=value pairs.
+  // is semicolon-separated key=value pairs.
   [/\bAccountKey=([A-Za-z0-9+/=]{20,})/g, "AccountKey=[REDACTED]"],
   // Azure SAS tokens (sig=... in URLs). The signature is the part that
   // grants access; the rest of the URL is routing.

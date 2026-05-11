@@ -149,7 +149,12 @@ export function writeMemory({ name, text, datasetId, supersedes, supersedesActio
 // "undefined" string would silently downgrade the call.
 export function buildSaveFlags({ name, datasetId, metadata }) {
   const flags = { name, datasetId };
-  if (metadata && typeof metadata === "object" && Object.keys(metadata).length > 0) {
+  const isPlainObject =
+    metadata &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    (Object.getPrototypeOf(metadata) === Object.prototype || Object.getPrototypeOf(metadata) === null);
+  if (isPlainObject && Object.keys(metadata).length > 0) {
     flags.metadata = JSON.stringify(metadata);
   }
   return flags;

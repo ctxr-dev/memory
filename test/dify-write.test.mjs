@@ -40,6 +40,16 @@ test("buildSaveFlags: non-object metadata (string/number/bool) -> flag OMITTED",
   }
 });
 
+test("buildSaveFlags: array metadata -> flag OMITTED", () => {
+  const f = buildSaveFlags({ name: "x", datasetId: "y", metadata: ["not", "a", "map"] });
+  assert.ok(!("metadata" in f));
+});
+
+test("buildSaveFlags: non-plain-object metadata -> flag OMITTED", () => {
+  const f = buildSaveFlags({ name: "x", datasetId: "y", metadata: new Date("2026-01-01T00:00:00Z") });
+  assert.ok(!("metadata" in f));
+});
+
 test("buildSaveFlags: normal metadata -> JSON-encoded once", () => {
   const md = { atom_type: "plan", task_type: "planning" };
   const f = buildSaveFlags({ name: "x", datasetId: "y", metadata: md });
