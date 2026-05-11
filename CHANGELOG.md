@@ -54,7 +54,7 @@ All notable user-visible changes to this boilerplate. Dates use UTC.
 
 ### Tests
 
-- Test suite grew from 156 to 227 tests (4 new test files; existing files extended; later rounds consolidated some duplicates). New: `test/exit-plan-mode.test.mjs` (planDocSpec contract), `test/exit-plan-mode-cli.test.mjs` (CLI driver always-exit-0 invariants), `test/dify-write.test.mjs` (saveDocument flag-builder), `test/env.test.mjs` (slotEnvKey + envValue precedence). Extended: `test/datasets.test.mjs` (schema parity bridge↔host), `test/redact.test.mjs` (DB / Azure / npm / Anthropic patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
+- Test suite grew from 156 to 237 tests (4 new test files; existing files extended; later rounds consolidated duplicates and added unit coverage for the new `enable_document` MCP tool and the `pickDuplicatesToDelete` upsert helper). New: `test/exit-plan-mode.test.mjs` (planDocSpec contract), `test/exit-plan-mode-cli.test.mjs` (CLI driver always-exit-0 invariants), `test/dify-write.test.mjs` (saveDocument flag-builder), `test/env.test.mjs` (slotEnvKey + envValue precedence). Extended: `test/datasets.test.mjs` (schema parity bridge↔host), `test/redact.test.mjs` (DB / Azure / npm / Anthropic patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
 - New integration smoke `scripts/plan-capture-smoke.sh` exercises the create + metadata + dedupe-delete write path end-to-end against a running bridge. Skips with a clear message when the bridge or `plans` slot is not configured. Designed for opt-in use during install verification (write-path coverage gap that `mcp-smoke.sh` intentionally skips).
 
 ---

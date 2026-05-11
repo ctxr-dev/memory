@@ -326,6 +326,19 @@ test("pickDuplicatesToDelete: non-array input -> empty list (defensive)", () => 
   assert.deepEqual(pickDuplicatesToDelete("not an array", "x", "y"), []);
 });
 
+test("pickDuplicatesToDelete: null newDocId -> empty list (NEVER nuke the freshly created doc)", () => {
+  // Critical: if the create-by-text response was malformed and the
+  // caller passed newDocId === null, the predicate d.id !== null would
+  // match EVERY doc, including the one we just created. Bail out so we
+  // leave duplicates instead of destroying the new write.
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" }, // we DON'T know which one this is
+  ];
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", null), []);
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", undefined), []);
+});
+
 // ---------- enableDocument / disableDocument (URL + body shape) ----------
 //
 // Round-26 added enable_document as the symmetric counterpart to

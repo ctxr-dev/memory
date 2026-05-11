@@ -24,7 +24,7 @@ This is a single-maintainer project, so I cannot guarantee a fixed response time
 - A `redact()` pattern misses an Azure storage connection string in a specific format we haven't seen (e.g. `BlobEndpoint=...;SharedAccessSignature=...`).
 - A crafted plan body bypasses the untrusted-content fence and gets a downstream agent to call `delete_document` on every doc in the `self_improvement` slot.
 - A specific Dify error message wrapped by `DifyBridgeUnavailable` echoes a Bearer token into the agent transcript.
-- A plan title with a particular Unicode sequence makes `slugify` produce a slug that escapes the `plans/` namespace (e.g. lands in `daily/` or `..`).
+- A plan title with a particular Unicode sequence makes `slugify` produce a slug that collides with a reserved doc-name pattern (e.g. matches `daily-<ts>.md` or `lesson-<slug>-<ts>.md` and gets mishandled by compile or recall_lessons).
 - A 200-byte plan body triggers a 5GB memory allocation via a regex backtracking bug in `redact()` or `fencePlanBody`.
 
 **Out of scope** (please don't report, or only report informally):

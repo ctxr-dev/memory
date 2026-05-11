@@ -92,8 +92,9 @@ git clone https://github.com/ctxr-dev/memory ./memory
 ./memory/bootstrap.sh --slug <project-slug>
 ./memory/scripts/up.sh    # FIRST RUN IS SLOW: clones the upstream Dify repo
                           # into memory/vendor/dify, pulls Dify images, and
-                          # builds the bridge. Expect 2-5 minutes and a
-                          # few GB of pulls. up.sh prints the Dify UI URL
+                          # builds the bridge. First-run cold pull is 2-5 min
+                          # multi-GB; warm cache is ~30-60s. up.sh prints
+                          # the Dify UI URL
                           # at the end.
 ```
 
@@ -233,7 +234,7 @@ Stop and ask me whenever you would otherwise guess. This is configuration, not r
 
 `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. Tagged `atom_type=plan`, `task_type=planning` (no `project_module` so it doesn't pollute filters; add one via a manual `save_to_dataset` if you want per-module scoping). The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
+**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. Tagged `atom_type=plan`, `task_type=planning` (no `project_module` so it doesn't pollute filters; add one via a manual `save_to_dataset` if you want per-module scoping). The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. **The hook only fires once Claude Code reloads `.claude/settings.json`, so after a fresh install or an upgrade you must restart Claude Code before the first plan capture will trigger.** See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
 
 ## Self-improvement loop
 
@@ -395,6 +396,8 @@ cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
 ```
 
 Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
+
+**If you're upgrading across a plan-capture release**, also re-run `./memory/scripts/dify-setup.sh` after `git pull` so the per-document metadata schema gets retro-installed on existing slots. See the callout below for the full upgrade recipe.
 
 > **Upgrading to plan-capture (PostToolUse/ExitPlanMode hook):**
 >

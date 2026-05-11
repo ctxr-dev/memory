@@ -788,8 +788,15 @@ export async function findDocumentByExactName(config, { datasetId, name }) {
 // we'd delete unrelated docs sharing a prefix), (b) the just-created
 // doc is never deleted (it's the one we want to keep), and (c) malformed
 // entries without an `id` are skipped.
+//
+// Critical null-guard: if `newDocId` is null/undefined (the create
+// response failed to surface an id), `d.id !== newDocId` would be true
+// for EVERY doc and we'd delete the freshly-created one along with the
+// duplicates. Bail out — we'd rather leave duplicates than nuke the new
+// write. Caller surfaces this via `metadataError` / next-upsert merging.
 export function pickDuplicatesToDelete(docs, name, newDocId) {
   if (!Array.isArray(docs)) return [];
+  if (newDocId == null) return [];
   return docs.filter((d) => d?.id && d.id !== newDocId && d?.name === name);
 }
 
