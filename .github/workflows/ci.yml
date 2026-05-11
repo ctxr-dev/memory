@@ -114,8 +114,10 @@ jobs:
         # PRs handle the actual upgrades; this is an in-PR canary so we
         # see new CVEs as soon as they surface.
         # `continue-on-error: true` keeps PRs unblocked on advisories
-        # the maintainer needs time to triage.
-        if: matrix.os == 'macos-latest' && matrix.node == '22'
+        # the maintainer needs time to triage. `always()` makes the
+        # audit run even when an earlier step (e.g. the CHANGELOG
+        # guard) failed — defeating its non-blocking design otherwise.
+        if: always() && matrix.os == 'macos-latest' && matrix.node == '22'
         continue-on-error: true
         working-directory: mcp-server
-        run: npm audit --audit-level=high --omit=dev
+        run: npm audit --audit-level=high

@@ -22,7 +22,7 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
-import { PER_DOC_METADATA_FIELDS } from "./schema.js";
+import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
 import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES } from "./workspace.js";
 
 const FilterSchema = z.object({
@@ -550,7 +550,7 @@ server.registerTool(
 
       // Build the per-document metadata map; OMIT empty fields so Dify
       // treats them as absent rather than `is ""` matchable.
-      const fullMetadata = { atom_type: "self-improvement-lesson" };
+      const fullMetadata = { atom_type: LESSON_ATOM_TYPE };
       if (tagList.length > 0) fullMetadata.tags = tagList.join(",");
       if (metadata.project_module) fullMetadata.project_module = metadata.project_module;
       if (metadata.language) fullMetadata.language = metadata.language;
@@ -615,7 +615,7 @@ server.registerTool(
       const lessonDatasetId = resolveDatasetId(config, lessonSlot);
 
       const baseFilters = {
-        atom_type: "self-improvement-lesson",
+        atom_type: LESSON_ATOM_TYPE,
         ...(project_module ? { project_module } : {}),
         ...(language ? { language } : {}),
         ...(task_type ? { task_type } : {}),
@@ -705,7 +705,7 @@ server.registerTool(
         const knowledgeSlot = config.datasetMap.get("knowledge")?.id ? "knowledge" : null;
         if (knowledgeSlot) {
           const knowledgeId = resolveDatasetId(config, knowledgeSlot);
-          for (const t of ["bug-root-cause", "feedback-rule"]) {
+          for (const t of KNOWLEDGE_CROSSREF_ATOM_TYPES) {
             const records = await retrieveChunks(config, {
               datasetId: knowledgeId,
               query,

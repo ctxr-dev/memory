@@ -388,3 +388,30 @@ test("enableDocument: missing documentId -> throws", async () => {
     /enableDocument requires documentId/,
   );
 });
+
+// ---------- workspace.js shared constants ----------
+//
+// Round-33 extracted WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES into a
+// shared module to eliminate the silent dup between index.js and
+// memory-cli.js. Lock the defaults and the env-var override contract.
+
+test("workspace.js: WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES export the expected defaults", async () => {
+  // Read via dynamic import so any side-effects of module load happen
+  // here, and so we can later compare against a re-imported instance
+  // with a different env (skipping that for now — module load happens
+  // once per node process anyway).
+  const ws = await import("../mcp-server/src/workspace.js");
+  assert.equal(typeof ws.WORKSPACE_MOUNT, "string");
+  assert.ok(ws.WORKSPACE_MOUNT.length > 0, "WORKSPACE_MOUNT must be a non-empty string");
+  assert.equal(typeof ws.ABSORB_MAX_FILE_BYTES, "number");
+  assert.ok(ws.ABSORB_MAX_FILE_BYTES > 0, "ABSORB_MAX_FILE_BYTES must be a positive number");
+  // The default when neither env var is set. In CI / test env neither
+  // is set, so we should see the defaults verbatim. If the test runner
+  // runs under a non-default env, this still locks "value is sane."
+  if (!process.env.WORKSPACE_MOUNT) {
+    assert.equal(ws.WORKSPACE_MOUNT, "/workspace");
+  }
+  if (!process.env.ABSORB_MAX_FILE_BYTES) {
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000);
+  }
+});
