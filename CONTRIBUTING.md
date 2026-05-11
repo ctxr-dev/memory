@@ -29,11 +29,14 @@ npm test
 
 The full suite is hermetic (no Docker, no Dify) and runs in ~2s. Tests live under `test/*.test.mjs` (one file per module/area). New tests: add a sibling file matching the convention.
 
-For the **write-path integration smoke** (requires a running bridge + a bound `plans` slot), use:
+**For a first PR, `npm test` is all you need.** CI runs the same suite plus static checks on every push.
+
+For the **write-path integration smoke** (opt-in; requires a running bridge + a bound `plans` slot), use:
 
 ```bash
 ./scripts/plan-capture-smoke.sh           # writes + verifies + deletes a synthetic doc
 ./scripts/plan-capture-smoke.sh --keep    # leaves the smoke doc for visual inspection
+./scripts/plan-capture-smoke.sh --help    # full flag list
 ```
 
 ## Static checks
@@ -71,14 +74,16 @@ Multi-paragraph bodies are welcome for non-trivial commits: the `git log` of thi
 
 ## PR review process
 
-The audit history of this branch (many rounds of parallel-reviewer fixups, currently round-27 and counting) is the working model for non-trivial changes:
+What to expect as a contributor:
 
-1. **Land the change.** Include tests + docs in the same commit when possible.
-2. **Spawn 2-3 parallel reviewers** for non-trivial changes (security / performance / docs / e2e). The Claude Code `Task` tool is the lightest path: launch general-purpose agents in parallel with a focused prompt each.
-3. **Fix findings in a follow-up commit.** Tag with the same scope.
-4. **Update `CHANGELOG.md`** (Added / Changed / Migration sections) before merging to `main`.
+1. **Land your change** with tests + docs in the same commit when possible. Pick a scope (see Commit conventions).
+2. **Wait for triage.** I aim to acknowledge new PRs within a week (best-effort, single maintainer).
+3. **Expect feedback.** Non-trivial changes often go through a round or two of fix-ups. Use Conventional Commits with the same scope for follow-ups.
+4. **CHANGELOG update.** Add an entry under `[Unreleased]` (Added / Changed / Migration sections) once the change stabilises.
 
-When the feature branch is ready to merge, expect to squash-merge: the per-round audit commits are useful history on the branch but noise on `main`. The CHANGELOG entry is the canonical history.
+When the feature branch is ready to merge, expect to squash-merge: the per-commit fix-up history is useful on the branch but noise on `main`. The CHANGELOG entry is the canonical history.
+
+**Maintainer-side process (not required from contributors):** for non-trivial changes I usually spawn 2-3 parallel reviewer agents via the Claude Code `Task` tool with focused prompts each (security / performance / docs / e2e), then bundle their findings into a follow-up commit. This is why the branch history has many "round-N audit fixes" commits. Contributors are not expected to do this; it's the maintainer's quality gate, not a barrier to your PR.
 
 ## Style notes
 

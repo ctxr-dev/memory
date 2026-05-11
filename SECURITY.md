@@ -15,7 +15,24 @@ This is a single-maintainer project, so I cannot guarantee a fixed response time
 - **Bridge command injection**: a way to inject shell metacharacters via plan title, slug, MCP tool argument, or env variable that ends up executed by the bridge's `execCli` / `docker exec` flow. The current model uses `spawn` (no shell) and `slugify` ASCII-folds; a bypass is in scope.
 - **Secret leakage in error messages**: a path where the bridge's error wrapping (`DifyBridgeUnavailable` propagation) surfaces an API key, plan body, or other sensitive content into the agent transcript.
 - **Path traversal / symlink redirection**: any way to make `bootstrap.sh`, the hook scripts, or `dify-setup.sh` write outside the workspace via a crafted symlink or filename.
-- **Resource exhaustion**: an input that makes the hook OOM the host. The 1MB `execCli` stdout/stderr buffer cap in `scripts/lib/dify-write.mjs` and the 256KB (`256_000` bytes) plan-body cap (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`) are the current mitigations; a bypass is in scope.
+- **Resource exhaustion** (memory / CPU / disk on the host running the hook): an input that defeats one of the existing caps. The 1MB `execCli` stdout/stderr buffer cap in `scripts/lib/dify-write.mjs` and the 256KB (`256_000` bytes) plan-body cap (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`) are the current mitigations; a bypass is in scope.
+
+### Concrete examples
+
+**In scope** (please report):
+
+- A `redact()` pattern misses an Azure storage connection string in a specific format we haven't seen (e.g. `BlobEndpoint=...;SharedAccessSignature=...`).
+- A crafted plan body bypasses the untrusted-content fence and gets a downstream agent to call `delete_document` on every doc in the `self_improvement` slot.
+- A specific Dify error message wrapped by `DifyBridgeUnavailable` echoes a Bearer token into the agent transcript.
+- A plan title with a particular Unicode sequence makes `slugify` produce a slug that escapes the `plans/` namespace (e.g. lands in `daily/` or `..`).
+- A 200-byte plan body triggers a 5GB memory allocation via a regex backtracking bug in `redact()` or `fencePlanBody`.
+
+**Out of scope** (please don't report, or only report informally):
+
+- A novel API-key format (e.g. a new SaaS vendor's key prefix) that the current pattern set doesn't catch. This is a feature request; PRs welcome.
+- A crafted plan body that, when read aloud, persuades the user (the human) to install something malicious. Social-engineering-of-the-human is not in our threat model.
+- A misconfigured Dify instance that exposes its admin UI to the internet. Dify ops security is upstream.
+- A workspace-write attacker editing `scripts/hooks/exit-plan-mode.mjs` to skip redaction. If they can write to your repo, they have already won.
 
 ## Out of scope
 

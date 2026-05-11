@@ -132,7 +132,7 @@ test("metadataForDify: handles missing/garbage atom gracefully", () => {
 test("METADATA_SCHEMA matches mcp-server/src/schema.js PER_DOC_METADATA_FIELDS verbatim", () => {
   // The schema list is duplicated across runtimes (boilerplate scripts
   // import scripts/lib/datasets.mjs; the bridge module imports
-  // mcp-server/src/schema.js — a separate Node module without import
+  // mcp-server/src/schema.js: a separate Node module without import
   // access to scripts/lib/). The two sources MUST stay in lock-step or
   // create_dataset will install a different schema than dify-setup.sh
   // does. Direct imports both ends; deepEqual locks order + names.
@@ -140,6 +140,22 @@ test("METADATA_SCHEMA matches mcp-server/src/schema.js PER_DOC_METADATA_FIELDS v
   assert.deepEqual(
     PER_DOC_METADATA_FIELDS,
     hostFields,
-    `drift between scripts/lib/datasets.mjs:METADATA_SCHEMA and mcp-server/src/schema.js:PER_DOC_METADATA_FIELDS — both must list the same fields in the same order`,
+    `drift between scripts/lib/datasets.mjs:METADATA_SCHEMA and mcp-server/src/schema.js:PER_DOC_METADATA_FIELDS: both must list the same fields in the same order`,
   );
+});
+
+test("METADATA_SCHEMA: every field is type=string", () => {
+  // Dify supports only string / number / time per-doc metadata types.
+  // Today every field is string. If a future change flips one to number
+  // without updating the bridge installer or the docs, dify-setup.sh and
+  // create_dataset would install mismatched types and metadata writes
+  // would silently skip the field. Lock the type alongside the name
+  // parity test above.
+  for (const field of METADATA_SCHEMA) {
+    assert.equal(
+      field.type,
+      "string",
+      `METADATA_SCHEMA field '${field.name}' is type='${field.type}'; expected 'string'`,
+    );
+  }
 });

@@ -782,6 +782,17 @@ export async function findDocumentByExactName(config, { datasetId, name }) {
   return docs.find((d) => d?.name === name) || null;
 }
 
+// Pick same-name documents to delete after creating a replacement.
+// Exported for unit testing. The filter enforces (a) exact-name match
+// (Dify's `keyword` filter is server-side substring; without this guard
+// we'd delete unrelated docs sharing a prefix), (b) the just-created
+// doc is never deleted (it's the one we want to keep), and (c) malformed
+// entries without an `id` are skipped.
+export function pickDuplicatesToDelete(docs, name, newDocId) {
+  if (!Array.isArray(docs)) return [];
+  return docs.filter((d) => d?.id && d.id !== newDocId && d?.name === name);
+}
+
 export async function upsertDocumentByName(config, { datasetId, name, text, metadata }) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const existing = await findDocumentByExactName(config, { datasetId: selectedDatasetId, name });
@@ -833,8 +844,7 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
     // exact-match guard, this loop would happily delete unrelated docs
     // whose names share a prefix with the new doc's name.
     const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
-    const toDelete = sameName
-      .filter((d) => d?.id && d.id !== newDocId && d?.name === name);
+    const toDelete = pickDuplicatesToDelete(sameName, name, newDocId);
     for (const dup of toDelete) {
       try {
         await deleteDocument(config, { datasetId: selectedDatasetId, documentId: dup.id });
