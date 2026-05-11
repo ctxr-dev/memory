@@ -1,7 +1,7 @@
 const PATTERNS = [
   [/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]"],
   [/(api[_-]?key|secret|token|password)(["'\s:=]+)[^"'\s]+/gi, "$1$2[REDACTED]"],
-  [/\bsk-[A-Za-z0-9_-]{16,}\b/g, "sk-[REDACTED]"],
+  [/\bsk-(?!ant-)[A-Za-z0-9_-]{16,}\b/g, "sk-[REDACTED]"],
   [/\bctx7sk-[A-Za-z0-9_-]{16,}\b/g, "ctx7sk-[REDACTED]"],
   [/\bghp_[A-Za-z0-9]{20,}\b/g, "ghp_[REDACTED]"],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "github_pat_[REDACTED]"],
@@ -27,9 +27,7 @@ const PATTERNS = [
   // newlines inside the block don't terminate the match. Covers
   // RSA/EC/DSA/OPENSSH/'ENCRYPTED' variants via [A-Z ]*.
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED-PRIVATE-KEY]"],
-  // Anthropic keys (sk-ant-...). Caught by the generic `sk-` pattern by
-  // luck of prefix; explicit pattern is forward-compat if Anthropic
-  // changes the prefix style.
+  // Anthropic keys (sk-ant-...).
   [/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "sk-ant-[REDACTED]"],
   // Database connection URLs with credentials in the userinfo segment:
   //   postgres://user:pw@host/db, postgresql://, mysql://, mongodb://,

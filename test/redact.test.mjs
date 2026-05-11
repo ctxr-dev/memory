@@ -257,8 +257,8 @@ test("redact: idempotent across the new patterns", () => {
 // ---- new patterns added in round-23 ----
 
 test("redact: anthropic sk-ant- key", () => {
-  const out = redact("ANTHROPIC_API_KEY=sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv");
-  assert.ok(out.includes("sk-ant-[REDACTED]") || out.includes("[REDACTED]"));
+  const out = redact("use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv in local env");
+  assert.ok(out.includes("sk-ant-[REDACTED]"));
   assert.ok(!out.includes("AbCdEfGhIjKlMnOpQrStUv"));
 });
 

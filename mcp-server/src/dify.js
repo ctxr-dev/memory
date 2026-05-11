@@ -857,28 +857,30 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
   const newDocId = created?.document?.id || created?.id || null;
   let deleteError;
   let deletedCount = 0;
-  try {
-    // Note: Dify's `keyword` filter is a SUBSTRING match (server-side),
-    // so a query for "plan-foo" can return both "plan-foo.md" and
-    // "plan-foo-bar.md". The `.name === name` filter on the line below
-    // enforces exact match before we issue any delete. Without that
-    // exact-match guard, this loop would happily delete unrelated docs
-    // whose names share a prefix with the new doc's name.
-    const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
-    const toDelete = pickDuplicatesToDelete(sameName, name, newDocId);
-    for (const dup of toDelete) {
-      try {
-        await deleteDocument(config, { datasetId: selectedDatasetId, documentId: dup.id });
-        deletedCount += 1;
-      } catch (err) {
-        // Aggregate per-id failures into one error string but keep going;
-        // a 404 here means a sibling concurrent upsert already deleted it.
-        const m = err instanceof Error ? err.message : String(err);
-        deleteError = deleteError ? `${deleteError}; ${m}` : m;
+  if (newDocId) {
+    try {
+      // Note: Dify's `keyword` filter is a SUBSTRING match (server-side),
+      // so a query for "plan-foo" can return both "plan-foo.md" and
+      // "plan-foo-bar.md". The `.name === name` filter on the line below
+      // enforces exact match before we issue any delete. Without that
+      // exact-match guard, this loop would happily delete unrelated docs
+      // whose names share a prefix with the new doc's name.
+      const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
+      const toDelete = pickDuplicatesToDelete(sameName, name, newDocId);
+      for (const dup of toDelete) {
+        try {
+          await deleteDocument(config, { datasetId: selectedDatasetId, documentId: dup.id });
+          deletedCount += 1;
+        } catch (err) {
+          // Aggregate per-id failures into one error string but keep going;
+          // a 404 here means a sibling concurrent upsert already deleted it.
+          const m = err instanceof Error ? err.message : String(err);
+          deleteError = deleteError ? `${deleteError}; ${m}` : m;
+        }
       }
+    } catch (err) {
+      deleteError = err instanceof Error ? err.message : String(err);
     }
-  } catch (err) {
-    deleteError = err instanceof Error ? err.message : String(err);
   }
 
   return {

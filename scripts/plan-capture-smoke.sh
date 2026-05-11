@@ -86,7 +86,7 @@ if ! printf '%s\n' "{\"tool_response\":{\"approved\":true},\"tool_input\":{\"pla
   exit 1
 fi
 
-if ! grep -qE "wrote ${expected_name} to plans" "$stderr_file"; then
+if ! grep -qF "wrote ${expected_name} to plans" "$stderr_file"; then
   echo "plan-capture-smoke FAIL: expected 'wrote ${expected_name} to plans' on stderr; got:" >&2
   cat "$stderr_file" >&2
   exit 1
