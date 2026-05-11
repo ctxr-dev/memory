@@ -223,7 +223,7 @@ test("planDocSpec: secrets in plan body are redacted before persistence", () => 
     tool_input: { plan: "# Auth plan\n\nUse the key sk-aBcDeFgHiJkLmNoPqRsTuV12 to call the API." },
   });
   assert.equal(spec.name, "plan-auth-plan.md");
-  assert.match(spec.text, /\[REDACTED|REDACTED\]/, "redact() must rewrite the secret");
+  assert.match(spec.text, /sk-\[REDACTED\]/, "redact() must rewrite the secret");
   assert.doesNotMatch(spec.text, /sk-aBcDeFgHiJkLmNoPqRsTuV12/, "raw secret must not survive");
 });
 
