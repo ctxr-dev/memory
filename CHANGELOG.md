@@ -2,7 +2,9 @@
 
 All notable user-visible changes to this boilerplate. Dates use UTC.
 
-## [Unreleased] — feat/typed-memory-pipeline
+## [Unreleased]
+
+> **API stability note:** the boilerplate is pre-1.0. Tool names (`save_to_dataset`, `delete_document`, etc.) and env-var names (`MEMORY_HOOK_EXITPLANMODE_*`, `DIFY_DATASET_<NAME>_ID`) may change between 0.x minor versions. Pin your consumed boilerplate commit (or eventually a tag) if you depend on a specific contract; see [Updates](README.md#updates) for the safe upgrade path.
 
 ### Added
 
@@ -40,7 +42,9 @@ All notable user-visible changes to this boilerplate. Dates use UTC.
 - **`prompts/flush.md`** explicitly forbids emitting `type: "plan"`; `flush.mjs:validateAtoms` enforces it with a stderr breadcrumb.
 - **Hook log prefix** is now `exit-plan-mode.mjs:` (was `exit-plan-mode:`) for parity with `flush.mjs:`, `compile.mjs:`, `session-start.mjs:`.
 
-### Migration
+### Upgrade notes (development clones)
+
+If you cloned the boilerplate during development before the plan-capture feature shipped, the first install of an `[Unreleased]` build needs the following steps. For first-time installs that start from this release, the standard install flow in [README → Install](README.md#install) covers everything; ignore this block.
 
 **Required steps in order, after `git pull`:**
 
@@ -54,7 +58,7 @@ All notable user-visible changes to this boilerplate. Dates use UTC.
 
 ### Tests
 
-- Test suite grew from 156 to 237 tests (4 new test files; existing files extended; later rounds consolidated duplicates and added unit coverage for the new `enable_document` MCP tool and the `pickDuplicatesToDelete` upsert helper). New: `test/exit-plan-mode.test.mjs` (planDocSpec contract), `test/exit-plan-mode-cli.test.mjs` (CLI driver always-exit-0 invariants), `test/dify-write.test.mjs` (saveDocument flag-builder), `test/env.test.mjs` (slotEnvKey + envValue precedence). Extended: `test/datasets.test.mjs` (schema parity bridge↔host), `test/redact.test.mjs` (DB / Azure / npm / Anthropic patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
+- Test suite grew from 156 to 238 tests (4 new test files; existing files extended; later rounds consolidated duplicates and added unit coverage for the new `enable_document` MCP tool, the `pickDuplicatesToDelete` upsert helper including the null-newDocId guard, and the METADATA_SCHEMA type-parity lock). New: `test/exit-plan-mode.test.mjs` (planDocSpec contract), `test/exit-plan-mode-cli.test.mjs` (CLI driver always-exit-0 invariants), `test/dify-write.test.mjs` (saveDocument flag-builder), `test/env.test.mjs` (slotEnvKey + envValue precedence). Extended: `test/datasets.test.mjs` (schema parity bridge↔host), `test/redact.test.mjs` (DB / Azure / npm / Anthropic patterns), `test/merge-config.test.mjs` (matcher-collision regression for the new PostToolUse entry).
 - New integration smoke `scripts/plan-capture-smoke.sh` exercises the create + metadata + dedupe-delete write path end-to-end against a running bridge. Skips with a clear message when the bridge or `plans` slot is not configured. Designed for opt-in use during install verification (write-path coverage gap that `mcp-smoke.sh` intentionally skips).
 
 ---

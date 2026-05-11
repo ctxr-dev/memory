@@ -13,43 +13,18 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runCli as runCliShared } from "./lib/run-cli.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MJS = path.resolve(HERE, "..", "scripts", "hooks", "exit-plan-mode.mjs");
 
+// Thin wrapper that pins the .mjs path for every test in this file.
+// The shared helper handles env stripping (DIFY_DATASET_*, MEMORY_HOOK_*,
+// MCP_CONTAINER_NAME, etc.) and overrides.
 function runCli(stdin, envOverrides = {}) {
-  // Strip every env var that the hook reads, so a developer who exports
-  // (e.g.) MEMORY_HOOK_EXITPLANMODE_DISABLE=true in their shell doesn't
-  // silently flip every test to "disabled, exit 0, pass for the wrong
-  // reason". The strip list covers DIFY_DATASET_*_ID,
-  // MCP_CONTAINER_NAME, MEMORY_HOOK_*, DIFY_*, MEMORY_*. Each test then
-  // lays its needed env back via envOverrides.
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (
-      key.startsWith("DIFY_DATASET_") ||
-      key === "MCP_CONTAINER_NAME" ||
-      key.startsWith("MEMORY_HOOK_") ||
-      key.startsWith("DIFY_") ||
-      key.startsWith("MEMORY_")
-    ) {
-      delete env[key];
-    }
-  }
-  // Point envValue's .env-file fallback at a non-existent path so the
-  // helper can't pick up the workspace's real memory/.env (which may or
-  // may not exist depending on dev state).
-  Object.assign(env, envOverrides);
-  const r = spawnSync("node", [MJS], {
-    input: stdin,
-    env,
-    encoding: "utf8",
-    timeout: 10_000,
-  });
-  return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
+  return runCliShared(MJS, stdin, envOverrides);
 }
 
 test("CLI: empty stdin -> exit 0, skip(not-approved)", () => {

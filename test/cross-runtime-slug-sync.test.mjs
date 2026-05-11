@@ -106,3 +106,39 @@ for (const fn of SHARED_FUNCTIONS) {
     );
   });
 }
+
+// ---------- slotEnvKey cross-runtime parity ----------
+//
+// scripts/lib/env.mjs exports `slotEnvKey(slot)` and mcp-server/src/dify.js
+// has a private `slotEnvKey(name)` with the same body (the bridge module
+// cannot import from scripts/lib/). The two MUST produce identical output
+// for any slot string or one side will reference an env var the other
+// doesn't recognize, and slot-binding error messages will be wrong.
+import { slotEnvKey as hostSlotEnvKey } from "../scripts/lib/env.mjs";
+
+function bridgeSlotEnvKey(name) {
+  // Verbatim duplicate of mcp-server/src/dify.js:slotEnvKey. If you change
+  // either side, change BOTH here and in dify.js, otherwise this test
+  // fails and the parity contract is locked.
+  return `DIFY_DATASET_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
+}
+
+test("slotEnvKey cross-runtime parity: host scripts/lib/env.mjs == bridge mcp-server/src/dify.js", () => {
+  const cases = [
+    "plans",
+    "knowledge",
+    "self_improvement",
+    "my-runbooks",
+    "Foo Bar",
+    "a.b.c",
+    "",
+    "123",
+  ];
+  for (const slot of cases) {
+    assert.equal(
+      bridgeSlotEnvKey(slot),
+      hostSlotEnvKey(slot),
+      `slotEnvKey drift for input '${slot}': host=${hostSlotEnvKey(slot)} bridge=${bridgeSlotEnvKey(slot)}`,
+    );
+  }
+});

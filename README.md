@@ -151,7 +151,7 @@ Steps:
    For Codex (if not auto-registered in step 7):
    codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
 
-9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (typically 2-5 minutes, multi-GB):
+9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (2-5 minutes on a cold pull, multi-GB; ~30-60s once the Docker image cache is warm):
    ./memory/scripts/up.sh
    (`up.sh` invokes `ui-url.sh` itself, so the Dify UI URL is printed when it finishes.)
 

@@ -17,6 +17,7 @@ import {
   enableDocument,
   disableDocument,
 } from "../mcp-server/src/dify.js";
+import { withFetchStub } from "./lib/fetch-stub.mjs";
 
 // ---------- buildDatasetMap ----------
 
@@ -343,27 +344,8 @@ test("pickDuplicatesToDelete: null newDocId -> empty list (NEVER nuke the freshl
 //
 // Round-26 added enable_document as the symmetric counterpart to
 // disable_document. Both PATCH /datasets/<id>/documents/status/<verb>
-// with body { document_ids: [id] }. We stub globalThis.fetch to capture
-// the URL + method + body without actually hitting Dify.
-
-async function withFetchStub(fn) {
-  const calls = [];
-  const original = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    calls.push({ url: String(url), method: opts?.method, body: opts?.body });
-    return {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: async () => '{"result": "success"}',
-    };
-  };
-  try {
-    return await fn(calls);
-  } finally {
-    globalThis.fetch = original;
-  }
-}
+// with body { document_ids: [id] }. We use the shared withFetchStub
+// helper (imported at top) to swap globalThis.fetch for each test.
 
 const STUB_CONFIG = {
   apiKey: "test-key",

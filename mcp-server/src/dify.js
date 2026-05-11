@@ -114,7 +114,12 @@ export async function fetchJsonWithTimeout(url, options, timeoutMs) {
   }
 }
 
-function envEnvKey(name) {
+// Bridge-side mirror of scripts/lib/env.mjs:slotEnvKey() — the host
+// helper cannot be imported here because the bridge runs in a separate
+// Node module without access to ../scripts/lib/. Cross-runtime parity is
+// locked by test/cross-runtime-slug-sync.test.mjs which calls both ends
+// with the same slot inputs.
+function slotEnvKey(name) {
   return `DIFY_DATASET_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
 }
 
@@ -189,7 +194,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
     const resolved = resolveDatasetId(config, datasetNameOrId);
     if (!resolved) {
       throw new Error(
-        `Dataset '${datasetNameOrId}' is not configured. Add ${envEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
+        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
       );
     }
     return resolved;
