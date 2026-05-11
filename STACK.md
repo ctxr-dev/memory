@@ -298,7 +298,7 @@ For Claude Desktop, Cursor, or a generic MCP client, merge this server into the 
 
 Keep the command exactly the same. Do not paste `DIFY_KNOWLEDGE_API_KEY` into any MCP client config.
 
-The bridge exposes eleven MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
+The bridge exposes fourteen MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
 
 | Tool | Purpose |
 |---|---|
@@ -310,7 +310,10 @@ The bridge exposes eleven MCP tools (full descriptions in [README MCP tools tabl
 | `save_to_dataset` | Upsert by exact name into a named slot, optional `metadata` map. |
 | `save_lesson` | Inline self-improvement-lesson capture; required `metadata.error_pattern` is the dedup key. |
 | `list_datasets` | Show Dify datasets + local slot bindings. |
-| `create_dataset` | Create a new Dify dataset. |
+| `create_dataset` | Create a new Dify dataset; auto-installs the per-document metadata schema. |
+| `delete_document` | Permanent delete of a doc by id. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc. |
+| `disable_document` | Soft delete: hide from search but keep in Dify UI for audit. Use to retract a captured plan or lesson without losing the historical record. |
+| `enable_document` | Reverse a `disable_document`: bring a previously hidden doc back into search results. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
@@ -415,6 +418,18 @@ Current hook events:
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/exit-plan-mode.sh",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }
@@ -424,6 +439,7 @@ What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 - `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
 - `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later routes each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Source dailies are disabled after their atoms are promoted.
+- `PostToolUse` (matcher `ExitPlanMode`): when the user approves a plan, `scripts/hooks/exit-plan-mode.mjs` upserts `plan-<slug>.md` into the `plans` slot (deterministic, no LLM, several bridge round-trips: find + create + metadata + re-list + dedupe-delete; 30s timeout). Skips silently on rejection, empty plan body, unbound `plans` slot, or bridge failure. See [README → Saving plans](README.md#saving-plans-investigations-or-other-artefacts-manually) and the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract.
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
@@ -453,7 +469,7 @@ Claude Code hook details:
 - `PreCompact` is the context-pressure safety net. It fires before Claude Code compacts a full context window, including automatic compaction.
 - `SessionEnd` and `PreCompact` payloads include `transcript_path`; `PostCompact` includes `compact_summary`. Flush handles both shapes.
 - `SessionStart` returns `additionalContext` only to remind the agent that memory exists. It does NOT inject stored memory blobs (that is the agent's job via `search_memory`).
-- Hook timeouts: 130s for the flush hooks (PreCompact / PostCompact / SessionEnd) and 15s for SessionStart. The LLM extraction call dominates wall-clock time on the flush path; 130s gives the default 120s LLM timeout headroom for spawn + parse.
+- Hook timeouts: 130s for the flush hooks (PreCompact / PostCompact / SessionEnd), 30s for PostToolUse/ExitPlanMode (no LLM, but several bridge round-trips for find + create + metadata + re-list + dedupe-delete), and 15s for SessionStart. The LLM extraction call dominates wall-clock time on the flush path; 130s gives the default 120s LLM timeout headroom for spawn + parse.
 
 This boilerplate follows the same lifecycle shape as [`coleam00/claude-memory-compiler`](https://github.com/coleam00/claude-memory-compiler) (capture at SessionEnd / PreCompact, summary at PostCompact, re-orient at SessionStart) and adds:
 
@@ -475,6 +491,7 @@ For hook-capable clients, wire lifecycle events to the matching script:
 | Before compaction/context pruning | `./memory/scripts/hooks/pre-compact.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
 | After compaction/summarization | `./memory/scripts/hooks/post-compact.sh` | `compact_summary` preferred; optional `session_id`, `cwd`, `reason` |
 | Session end | `./memory/scripts/hooks/session-end.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
+| After ExitPlanMode tool returns approved | `./memory/scripts/hooks/exit-plan-mode.sh` | `tool_input.plan` (string), `tool_response.approved` (true/false/null); optional `session_id`, `cwd`, `tool_name="ExitPlanMode"` |
 
 If a client has only a session-end hook, wire only `session-end.sh`. If it has only a summary-after-compaction hook, wire `post-compact.sh` and pass the summary as `compact_summary`. If it cannot pass a transcript path or compact summary, automatic continuous capture is not available for that client; use MCP `write_memory` manually or rely on clients that expose hook payloads.
 

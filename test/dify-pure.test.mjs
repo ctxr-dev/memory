@@ -13,7 +13,11 @@ import {
   requireDifyWriteConfig,
   sanitizeHeaderValue,
   getConfig,
+  pickDuplicatesToDelete,
+  enableDocument,
+  disableDocument,
 } from "../mcp-server/src/dify.js";
+import { withFetchStub } from "./lib/fetch-stub.mjs";
 
 // ---------- buildDatasetMap ----------
 
@@ -268,4 +272,176 @@ test("getConfig: apiKey + apiUrl arrive sanitised even when env contains CRLF", 
   });
   assert.equal(cfg.apiKey, "dataset-secret-pasted-with-newline");
   assert.equal(cfg.apiUrl, "http://api:5001/v1");
+});
+
+// ---------- pickDuplicatesToDelete (upsertDocumentByName helper) ----------
+//
+// Locks the round-23 re-list-and-delete-duplicates contract: same-name
+// docs are reduced to one on every upsert, with the freshly-created doc
+// always preserved. The helper is exported from dify.js purely so this
+// test can run without spawning HTTP / Dify.
+
+test("pickDuplicatesToDelete: keeps the new doc, deletes other same-name", () => {
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" }, // the freshly-created one
+    { id: "old-2", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map((d) => d.id).sort(), ["old-1", "old-2"]);
+});
+
+test("pickDuplicatesToDelete: skips docs whose name only PARTIALLY matches", () => {
+  // Dify's `keyword` filter is substring; the exact-match guard is what
+  // stops us from deleting unrelated plan-foo-bar.md when we just wrote
+  // plan-foo.md. Regression test for that guard.
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "neighbour", name: "plan-foo-bar.md" }, // substring match
+    { id: "new-x", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.deepEqual(out.map((d) => d.id), ["old-1"]);
+});
+
+test("pickDuplicatesToDelete: no duplicates -> empty list", () => {
+  const docs = [{ id: "new-x", name: "plan-foo.md" }];
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", "new-x"), []);
+});
+
+test("pickDuplicatesToDelete: skips docs with missing id", () => {
+  const docs = [
+    { name: "plan-foo.md" }, // missing id
+    { id: null, name: "plan-foo.md" },
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.deepEqual(out.map((d) => d.id), ["old-1"]);
+});
+
+test("pickDuplicatesToDelete: non-array input -> empty list (defensive)", () => {
+  assert.deepEqual(pickDuplicatesToDelete(null, "x", "y"), []);
+  assert.deepEqual(pickDuplicatesToDelete(undefined, "x", "y"), []);
+  assert.deepEqual(pickDuplicatesToDelete("not an array", "x", "y"), []);
+});
+
+test("pickDuplicatesToDelete: null newDocId -> empty list (NEVER nuke the freshly created doc)", () => {
+  // Critical: if the create-by-text response was malformed and the
+  // caller passed newDocId === null, the predicate d.id !== null would
+  // match EVERY doc, including the one we just created. Bail out so we
+  // leave duplicates instead of destroying the new write.
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" }, // we DON'T know which one this is
+  ];
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", null), []);
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", undefined), []);
+});
+
+// ---------- enableDocument / disableDocument (URL + body shape) ----------
+//
+// Round-26 added enable_document as the symmetric counterpart to
+// disable_document. Both PATCH /datasets/<id>/documents/status/<verb>
+// with body { document_ids: [id] }. We use the shared withFetchStub
+// helper (imported at top) to swap globalThis.fetch for each test.
+
+const STUB_CONFIG = {
+  apiKey: "test-key",
+  apiUrl: "https://dify.test/v1",
+  timeoutMs: 5000,
+  datasetMap: new Map([["plans", { id: "ds-uuid-plans" }]]),
+};
+
+test("enableDocument: PATCHes /documents/status/enable with document_ids body", async () => {
+  await withFetchStub(async (calls) => {
+    await enableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-abc" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "PATCH");
+    assert.equal(calls[0].url, "https://dify.test/v1/datasets/ds-uuid-plans/documents/status/enable");
+    assert.deepEqual(JSON.parse(calls[0].body), { document_ids: ["doc-abc"] });
+  });
+});
+
+test("disableDocument: PATCHes /documents/status/disable with document_ids body", async () => {
+  await withFetchStub(async (calls) => {
+    await disableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-abc" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "PATCH");
+    assert.equal(calls[0].url, "https://dify.test/v1/datasets/ds-uuid-plans/documents/status/disable");
+    assert.deepEqual(JSON.parse(calls[0].body), { document_ids: ["doc-abc"] });
+  });
+});
+
+test("enableDocument / disableDocument: symmetric URL pattern (only verb differs)", async () => {
+  await withFetchStub(async (calls) => {
+    await disableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-z" });
+    await enableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-z" });
+    assert.equal(calls[0].url.replace("/disable", "/<VERB>"), calls[1].url.replace("/enable", "/<VERB>"));
+  });
+});
+
+test("enableDocument: missing documentId -> throws", async () => {
+  await assert.rejects(
+    enableDocument(STUB_CONFIG, { datasetId: "plans" }),
+    /enableDocument requires documentId/,
+  );
+});
+
+// ---------- workspace.js shared constants ----------
+//
+// Round-33 extracted WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES into a
+// shared module to eliminate the silent dup between index.js and
+// memory-cli.js. Lock the defaults and the env-var override contract.
+
+test("workspace.js: WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES export the expected defaults", async () => {
+  // Read via dynamic import so any side-effects of module load happen
+  // here, and so we can later compare against a re-imported instance
+  // with a different env (skipping that for now — module load happens
+  // once per node process anyway).
+  const ws = await import("../mcp-server/src/workspace.js");
+  assert.equal(typeof ws.WORKSPACE_MOUNT, "string");
+  assert.ok(ws.WORKSPACE_MOUNT.length > 0, "WORKSPACE_MOUNT must be a non-empty string");
+  assert.equal(typeof ws.ABSORB_MAX_FILE_BYTES, "number");
+  assert.ok(ws.ABSORB_MAX_FILE_BYTES > 0, "ABSORB_MAX_FILE_BYTES must be a positive number");
+  // The default when neither env var is set. In CI / test env neither
+  // is set, so we should see the defaults verbatim. If the test runner
+  // runs under a non-default env, this still locks "value is sane."
+  if (!process.env.WORKSPACE_MOUNT) {
+    assert.equal(ws.WORKSPACE_MOUNT, "/workspace");
+  }
+  if (!process.env.ABSORB_MAX_FILE_BYTES) {
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000);
+  }
+});
+
+async function importWorkspaceFresh() {
+  return import(`../mcp-server/src/workspace.js?cacheBust=${Date.now()}-${Math.random()}`);
+}
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES falls back to default on invalid env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    for (const v of ["-1", "0", "not-a-number"]) {
+      process.env.ABSORB_MAX_FILE_BYTES = v;
+      const ws = await importWorkspaceFresh();
+      assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000, `value=${v} should fallback to default`);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
+});
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES honors positive env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    process.env.ABSORB_MAX_FILE_BYTES = "1234";
+    const ws = await importWorkspaceFresh();
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 1234);
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
 });

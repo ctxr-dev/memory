@@ -7,9 +7,11 @@ import {
   buildDatasetMap,
   buildMetadataCondition,
   createDataset,
+  createDatasetMetadataField,
   createDocumentByText,
   deleteDocument,
   disableDocument,
+  enableDocument,
   getConfig,
   listAllDatasets,
   maskSecret,
@@ -20,9 +22,8 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
-
-const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
-const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
+import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
+import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES } from "./workspace.js";
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
@@ -328,12 +329,15 @@ server.registerTool(
   },
 );
 
+// Per-document metadata fields installed on every dataset created via
+// create_dataset come from sibling schema.js (top-level import below).
+
 server.registerTool(
   "create_dataset",
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default). Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -343,7 +347,107 @@ server.registerTool(
     try {
       const config = getConfig();
       const created = await createDataset(config, { name, description });
-      return jsonToolResponse({ ok: true, dataset: created });
+      const datasetId = created?.id || created?.dataset?.id;
+      // Best-effort schema install. Per-field failures are aggregated
+      // and returned; they do NOT abort dataset creation since the
+      // user can re-run dify-setup.sh to install missing fields later.
+      const fieldResults = [];
+      const fieldErrors = [];
+      if (datasetId) {
+        for (const fieldName of PER_DOC_METADATA_FIELDS) {
+          try {
+            const r = await createDatasetMetadataField(config, { datasetId, name: fieldName, type: "string" });
+            fieldResults.push({ name: fieldName, ok: true, id: r?.id });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            fieldErrors.push({ name: fieldName, error: msg });
+          }
+        }
+      }
+      // Split semantics: `ok` reports DATASET creation success (the
+      // primary operation); `metadataSchema.complete` separately reports
+      // whether ALL six per-doc fields installed cleanly. A caller seeing
+      // `ok:true, metadataSchema.complete:false` should treat the dataset
+      // as usable but unfilterable until the missing fields are added
+      // (re-run dify-setup.sh, or call create_metadata_field directly).
+      return jsonToolResponse({
+        ok: !!datasetId,
+        dataset: created,
+        metadataSchema: {
+          installed: fieldResults,
+          failed: fieldErrors,
+          complete: fieldErrors.length === 0 && fieldResults.length === PER_DOC_METADATA_FIELDS.length,
+        },
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "delete_document",
+  {
+    title: "Delete a document from a dataset (PERMANENT)",
+    description:
+      "PERMANENT delete of a single document by its Dify document id. Accepts ANY slot — including auto-managed ones (`daily`, `knowledge`, `self_improvement`). Be careful: deleting a `self_improvement` lesson destroys it irrecoverably. Primary safe use: clean up a stale `plan-<old-slug>.md` after a title change. Also valid for retracting any auto-captured / absorbed doc you no longer want indexed. For lessons or compile-managed docs, prefer `disable_document` (reversible) unless you are sure. Find the documentId via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await deleteDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "disable_document",
+  {
+    title: "Disable a document (hide from search) without deleting",
+    description:
+      "Soft-delete: mark a document as disabled so search_memory / recall_lessons stop returning it, but keep it in the Dify UI for audit. Reversible via `enable_document` (or via the Dify UI). Use this when you want to retract a captured plan or lesson without losing the historical record.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await disableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "enable_document",
+  {
+    title: "Re-enable a previously disabled document",
+    description:
+      "Symmetric counterpart to `disable_document`: brings a disabled doc back into search_memory / recall_lessons results. No-op (returns success) if the doc is already enabled. Use when you change your mind about a soft-delete.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await enableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
     } catch (error) {
       return errorToolResponse(error);
     }
@@ -446,7 +550,7 @@ server.registerTool(
 
       // Build the per-document metadata map; OMIT empty fields so Dify
       // treats them as absent rather than `is ""` matchable.
-      const fullMetadata = { atom_type: "self-improvement-lesson" };
+      const fullMetadata = { atom_type: LESSON_ATOM_TYPE };
       if (tagList.length > 0) fullMetadata.tags = tagList.join(",");
       if (metadata.project_module) fullMetadata.project_module = metadata.project_module;
       if (metadata.language) fullMetadata.language = metadata.language;
@@ -511,7 +615,7 @@ server.registerTool(
       const lessonDatasetId = resolveDatasetId(config, lessonSlot);
 
       const baseFilters = {
-        atom_type: "self-improvement-lesson",
+        atom_type: LESSON_ATOM_TYPE,
         ...(project_module ? { project_module } : {}),
         ...(language ? { language } : {}),
         ...(task_type ? { task_type } : {}),
@@ -601,7 +705,7 @@ server.registerTool(
         const knowledgeSlot = config.datasetMap.get("knowledge")?.id ? "knowledge" : null;
         if (knowledgeSlot) {
           const knowledgeId = resolveDatasetId(config, knowledgeSlot);
-          for (const t of ["bug-root-cause", "feedback-rule"]) {
+          for (const t of KNOWLEDGE_CROSSREF_ATOM_TYPES) {
             const records = await retrieveChunks(config, {
               datasetId: knowledgeId,
               query,

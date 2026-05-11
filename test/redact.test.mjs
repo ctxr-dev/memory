@@ -253,3 +253,76 @@ test("redact: idempotent across the new patterns", () => {
     assert.equal(twice, once, `not idempotent: ${s}`);
   }
 });
+
+// ---- new patterns added in round-23 ----
+
+test("redact: anthropic sk-ant- key", () => {
+  const out = redact("use sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv in local env");
+  assert.ok(out.includes("sk-ant-[REDACTED]"));
+  assert.ok(!out.includes("AbCdEfGhIjKlMnOpQrStUv"));
+});
+
+test("redact: postgres connection URL credentials", () => {
+  const out = redact("postgres://alice:s3cr3tP@db.internal:5432/app");
+  assert.ok(out.includes("postgres://[REDACTED]:[REDACTED]@db.internal"), `got: ${out}`);
+  assert.ok(!out.includes("s3cr3tP"));
+  assert.ok(!out.includes("alice:"));
+});
+
+test("redact: postgresql:// also caught", () => {
+  const out = redact("postgresql://u:p@h/db");
+  assert.ok(out.includes("postgresql://[REDACTED]:[REDACTED]@h/db"));
+});
+
+test("redact: mongodb+srv connection URL credentials", () => {
+  const out = redact("mongodb+srv://admin:topsecret@cluster.mongodb.net/db");
+  assert.ok(out.includes("mongodb+srv://[REDACTED]:[REDACTED]@cluster.mongodb.net"));
+  assert.ok(!out.includes("topsecret"));
+});
+
+test("redact: mysql / redis / amqp / rediss URL credentials", () => {
+  for (const scheme of ["mysql", "redis", "amqp", "rediss"]) {
+    const out = redact(`${scheme}://u:p@h/x`);
+    assert.ok(out.includes(`${scheme}://[REDACTED]:[REDACTED]@h/x`), `${scheme} failed: ${out}`);
+  }
+});
+
+test("redact: connection URL WITHOUT credentials is untouched", () => {
+  // No userinfo -> no match.
+  assert.equal(redact("postgres://localhost/db"), "postgres://localhost/db");
+  assert.equal(redact("mongodb://host:27017/x"), "mongodb://host:27017/x");
+});
+
+test("redact: Azure storage AccountKey in connection string", () => {
+  const out = redact("DefaultEndpointsProtocol=https;AccountKey=AbCdEfGh1234567890+/=qrstuv;EndpointSuffix=core.windows.net");
+  assert.ok(out.includes("AccountKey=[REDACTED]"), `got: ${out}`);
+  assert.ok(!out.includes("AbCdEfGh1234567890+/=qrstuv"));
+});
+
+test("redact: Azure SAS token in URL", () => {
+  const out = redact("https://acct.blob.core.windows.net/c/blob?sv=2020-08-04&sig=AbCdEfGh1234567890%2Fxyz%3D&se=2030-01-01");
+  assert.ok(out.includes("sig=[REDACTED]"), `got: ${out}`);
+  assert.ok(!out.includes("AbCdEfGh1234567890"));
+});
+
+test("redact: npm authToken in .npmrc-style line", () => {
+  const out = redact("//registry.npmjs.org/:_authToken=npm_AbCdEfGhIjKlMnOpQrStUvWx012345");
+  assert.ok(out.includes("//registry.npmjs.org/:_authToken=[REDACTED]"), `got: ${out}`);
+  assert.ok(!out.includes("AbCdEfGhIjKlMnOpQrStUvWx012345"));
+});
+
+test("redact: idempotent across all new patterns", () => {
+  const samples = [
+    "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx",
+    "postgres://u:p@h/db",
+    "mongodb+srv://x:y@host/db",
+    "AccountKey=AbCdEfGh1234567890+/=qrs",
+    "?sig=AbCdEfGh1234567890%2F",
+    "//registry.npmjs.org/:_authToken=npm_xyz0123456789012345678901234567",
+  ];
+  for (const s of samples) {
+    const once = redact(s);
+    const twice = redact(once);
+    assert.equal(twice, once, `not idempotent: ${s}`);
+  }
+});

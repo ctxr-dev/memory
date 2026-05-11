@@ -10,6 +10,12 @@ export const ATOM_TYPES = new Set([
   "reference",
   "pattern-gotcha",
   "self-improvement-lesson",
+  // `plan` is set by the ExitPlanMode auto-capture hook and by manual
+  // save_to_dataset calls into the `plans` slot. Compile never produces it
+  // (plans are not extracted from transcripts), but it must be a known type
+  // so future filtered retrieval can reach plans by atom_type without
+  // tripping enum-validation paths.
+  "plan",
 ]);
 
 // Atom-type -> default dataset slot when promoted by compile.
@@ -24,6 +30,7 @@ export const ATOM_TYPE_TO_DATASET = {
   "reference": "knowledge",
   "pattern-gotcha": "knowledge",
   "self-improvement-lesson": "self_improvement",
+  "plan": "plans",
 };
 
 // Per-document metadata schema applied to every Dify dataset. Dify supports

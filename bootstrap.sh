@@ -461,9 +461,10 @@ Bootstrap complete.
 
 Next steps:
   1) ./memory/scripts/up.sh                     # start the Dify stack
-                                                  (FIRST RUN: ~30-60s on a warm
-                                                   Docker image cache, up to 5
-                                                   minutes on a cold pull.)
+                                                  (FIRST RUN: 2-5 minutes on a
+                                                   cold Docker image pull
+                                                   (multi-GB); ~30-60s once the
+                                                   image cache is warm.)
   2) ./memory/scripts/ui-url.sh                 # open the printed URL
   3) In Dify UI: create the admin account.
      Then Settings -> Model Provider:
@@ -471,17 +472,22 @@ Next steps:
        - install the plugin if it isn't already, paste your API key
        - System Model Settings: set as the DEFAULT Embedding Model
          (text-embedding-3-small for OpenAI, bge-m3 for Ollama)
-     Then Knowledge -> Service API -> create a Knowledge API key, paste it
-     into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>.
-  4) Recreate the bridge so it picks up the new API key:
-       ./memory/scripts/up.sh memory_mcp
-  5) ./memory/scripts/dify-setup.sh              # paste API key, bind/auto-create
-                                                  the five dataset slots (daily,
-                                                  knowledge, plans, investigations,
-                                                  self_improvement), install per-doc
-                                                  metadata schema, optionally absorb
-                                                  existing docs.
-  6) Restart your MCP client so it picks up the new memory MCP server.
+     Then Knowledge -> Service API -> create a Knowledge API key.
+     (Do NOT paste the key into memory/.env by hand; the next step's
+      wizard will prompt for it and write it for you.)
+  4) ./memory/scripts/dify-setup.sh              # paste the Knowledge API key
+                                                  when prompted; auto-create
+                                                  the configured dataset slots
+                                                  (defaults: daily, knowledge,
+                                                  plans, investigations,
+                                                  self_improvement; add more by
+                                                  appending DIFY_DATASET_<NAME>_ID=
+                                                  to memory/.env), install per-
+                                                  doc metadata schema, restart
+                                                  the bridge to pick up the new
+                                                  env, optionally absorb existing
+                                                  docs.
+  5) Restart your MCP client so it picks up the new memory MCP server.
      Where it's registered:
        - Claude Code: project-scope ./.mcp.json (auto-written by bootstrap)
        - Cursor / Codex / Claude Desktop: copy the relevant snippet from
@@ -489,7 +495,15 @@ Next steps:
          `./memory/scripts/mcp-config.sh all` to print them again.
      The server only becomes callable from inside an agent session
      AFTER this client restart.
-  7) ./memory/scripts/mcp-smoke.sh               # validate
+  6) ./memory/scripts/mcp-smoke.sh               # validate
+
+Plan-mode integration (Claude Code only; other clients can ignore):
+  When you exit plan mode and approve a plan, the PostToolUse hook
+  upserts plan-<slug>.md into the 'plans' dataset slot automatically
+  (no LLM, multiple bridge round-trips, typically ~1-2s). Same plan
+  title overwrites in place. Set MEMORY_HOOK_EXITPLANMODE_DISABLE=true
+  in memory/.env to opt out. See templates/skills/plan-capture.md
+  for the agent contract.
 
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug

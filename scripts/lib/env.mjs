@@ -34,3 +34,13 @@ export function envInt(name, fallback) {
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+// Canonical env-var name for a dataset slot binding. Mirrors the tokeniser
+// used by dify-setup.sh (lowercase + hyphen -> uppercase + underscore) so a
+// slot called "my-runbooks" maps to DIFY_DATASET_MY_RUNBOOKS_ID, not
+// DIFY_DATASET_MY-RUNBOOKS_ID. Single source of truth, used by every hook
+// that does host-side slot-binding preflight.
+export function slotEnvKey(slot) {
+  const tag = String(slot || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  return `DIFY_DATASET_${tag}_ID`;
+}

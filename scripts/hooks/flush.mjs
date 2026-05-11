@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROMPTS_DIR, envInt, envValue } from "../lib/env.mjs";
+import { PROMPTS_DIR, envInt, envValue, slotEnvKey } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
 import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
@@ -22,6 +22,10 @@ const SESSION_END_MIN_TURNS = envInt("MEMORY_HOOK_SESSION_END_MIN_TURNS", 1);
 const PRECOMPACT_MIN_TURNS = envInt("MEMORY_HOOK_PRECOMPACT_MIN_TURNS", 5);
 
 function readStdin() {
+  // When invoked outside a hook context (a curious user runs the .sh
+  // directly with no pipe) fd 0 is a TTY and readFileSync(0) blocks until
+  // Ctrl-D. Short-circuit to "" so manual debug runs are non-blocking.
+  if (process.stdin.isTTY) return "";
   try {
     return fs.readFileSync(0, "utf8");
   } catch {
@@ -145,6 +149,14 @@ function validateAtoms(parsed) {
     const title = String(atom.title || "").trim();
     const body = String(atom.body || "").trim();
     if (!ATOM_TYPES.has(type) || !title || !body) continue;
+    // `plan` is in ATOM_TYPES because the ExitPlanMode hook tags docs
+    // with it, but the flush+compile path must NOT produce plans (they
+    // are upsert-by-name into the `plans` slot, not dedup-merged
+    // dailies). Drop any LLM hallucination silently.
+    if (type === "plan") {
+      console.error(`flush.mjs: dropped plan-typed atom '${title.slice(0, 40)}' (plans are hook-only)`);
+      continue;
+    }
     const tags = Array.isArray(atom.tags)
       ? atom.tags.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
       : [];
@@ -240,12 +252,12 @@ async function main() {
 
   // Preflight: refuse cleanly if the slot is declared but unbound, so the
   // user gets a useful skip message instead of a generic Dify 4xx.
-  const slotEnvKey = `DIFY_DATASET_${datasetName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
-  const boundId = envValue(slotEnvKey, "");
+  const envKey = slotEnvKey(datasetName);
+  const boundId = envValue(envKey, "");
   const legacyId = envValue("DIFY_WRITE_DATASET_ID", "");
   if (!boundId && !legacyId) {
     throw new SkipMemory(
-      `Dify slot '${datasetName}' is not bound (${slotEnvKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ./memory/scripts/dify-setup.sh.`,
+      `Dify slot '${datasetName}' is not bound (${envKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ./memory/scripts/dify-setup.sh.`,
     );
   }
 

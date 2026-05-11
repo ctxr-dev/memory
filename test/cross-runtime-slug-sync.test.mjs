@@ -12,6 +12,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Imports for the slotEnvKey parity test at the bottom of this file.
+// Pulled up to module top per ESM convention.
+import { slotEnvKey as hostSlotEnvKey } from "../scripts/lib/env.mjs";
+import { slotEnvKey as bridgeSlotEnvKey } from "../mcp-server/src/dify.js";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 
@@ -106,3 +111,44 @@ for (const fn of SHARED_FUNCTIONS) {
     );
   });
 }
+
+// ---------- slotEnvKey cross-runtime parity ----------
+//
+// scripts/lib/env.mjs exports `slotEnvKey(slot)` and mcp-server/src/dify.js
+// exports a parallel `slotEnvKey(name)` (the bridge module cannot import
+// from scripts/lib/). The two MUST produce identical output for any
+// slot input or one side will reference an env var the other doesn't
+// recognize, and slot-binding error messages will be wrong.
+//
+// Both functions are imported at module top — no local duplicate — so
+// a change to either side surfaces here as a test failure. The earlier
+// local-duplicate pattern would have passed silently after a bridge
+// edit (it tested the test file's own copy, not the bridge function).
+
+test("slotEnvKey cross-runtime parity: host scripts/lib/env.mjs == bridge mcp-server/src/dify.js", () => {
+  const cases = [
+    "plans",
+    "knowledge",
+    "self_improvement",
+    "my-runbooks",
+    "Foo Bar",
+    "a.b.c",
+    "",
+    "123",
+    // Defensive: non-string / falsy inputs. Both runtimes should treat
+    // them as empty-slot ("DIFY_DATASET__ID"), not produce
+    // "DIFY_DATASET_NULL_ID" / "DIFY_DATASET_UNDEFINED_ID" / etc.
+    // Caught a real bridge-vs-host drift in round-32 audit.
+    null,
+    undefined,
+    0,
+    false,
+  ];
+  for (const slot of cases) {
+    assert.equal(
+      bridgeSlotEnvKey(slot),
+      hostSlotEnvKey(slot),
+      `slotEnvKey drift for input ${JSON.stringify(slot)}: host=${hostSlotEnvKey(slot)} bridge=${bridgeSlotEnvKey(slot)}`,
+    );
+  }
+});

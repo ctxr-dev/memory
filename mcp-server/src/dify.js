@@ -114,8 +114,22 @@ export async function fetchJsonWithTimeout(url, options, timeoutMs) {
   }
 }
 
-function envEnvKey(name) {
-  return `DIFY_DATASET_${String(name).toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
+// Bridge-side mirror of scripts/lib/env.mjs:slotEnvKey() — the host
+// helper cannot be imported here because the bridge runs in a separate
+// Node module without access to ../scripts/lib/. Cross-runtime parity
+// is locked by test/cross-runtime-slug-sync.test.mjs which imports BOTH
+// `hostSlotEnvKey` (host) and THIS function and runs the same set of
+// slot inputs through both. Treats null/undefined/falsy inputs the same
+// as the host helper (empty string, not the literal "null" / "undefined")
+// so a defensive caller passing `undefined` doesn't produce a different
+// env-var name across runtimes.
+//
+// Param name matches the host signature (`slot`) for symmetry in IDE
+// hover help. **@internal** — exported only so the parity test in
+// test/cross-runtime-slug-sync.test.mjs can import it directly; no
+// production code outside this module should import it.
+export function slotEnvKey(slot) {
+  return `DIFY_DATASET_${String(slot || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ID`;
 }
 
 // Slot is declared by presence of any DIFY_DATASET_<NAME>_ID env line.
@@ -189,7 +203,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
     const resolved = resolveDatasetId(config, datasetNameOrId);
     if (!resolved) {
       throw new Error(
-        `Dataset '${datasetNameOrId}' is not configured. Add ${envEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
+        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
       );
     }
     return resolved;
@@ -782,6 +796,24 @@ export async function findDocumentByExactName(config, { datasetId, name }) {
   return docs.find((d) => d?.name === name) || null;
 }
 
+// Pick same-name documents to delete after creating a replacement.
+// Exported for unit testing. The filter enforces (a) exact-name match
+// (Dify's `keyword` filter is server-side substring; without this guard
+// we'd delete unrelated docs sharing a prefix), (b) the just-created
+// doc is never deleted (it's the one we want to keep), and (c) malformed
+// entries without an `id` are skipped.
+//
+// Critical null-guard: if `newDocId` is null/undefined (the create
+// response failed to surface an id), `d.id !== newDocId` would be true
+// for EVERY doc and we'd delete the freshly-created one along with the
+// duplicates. Bail out — we'd rather leave duplicates than nuke the new
+// write. Caller surfaces this via `metadataError` / next-upsert merging.
+export function pickDuplicatesToDelete(docs, name, newDocId) {
+  if (!Array.isArray(docs)) return [];
+  if (newDocId == null) return [];
+  return docs.filter((d) => d?.id && d.id !== newDocId && d?.name === name);
+}
+
 export async function upsertDocumentByName(config, { datasetId, name, text, metadata }) {
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const existing = await findDocumentByExactName(config, { datasetId: selectedDatasetId, name });
@@ -813,10 +845,39 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
     }
   }
 
+  // Re-list at delete time to catch ANY doc with the same name that is
+  // not the one we just created. Closes the concurrent-write race
+  // window: if two upserts run in parallel, both see the SAME `existing`
+  // at find time but each creates a new doc; the naive single-id delete
+  // would leave one orphan. By re-listing here we delete every same-name
+  // doc except the freshly-created one, regardless of how many concurrent
+  // calls happened. Worst case (all concurrent calls succeed in create
+  // and then race here) the dataset settles to ONE doc with the latest
+  // body — no orphans, no infinite multiplication.
+  const newDocId = created?.document?.id || created?.id || null;
   let deleteError;
-  if (existing?.id) {
+  let deletedCount = 0;
+  if (newDocId) {
     try {
-      await deleteDocument(config, { datasetId: selectedDatasetId, documentId: existing.id });
+      // Note: Dify's `keyword` filter is a SUBSTRING match (server-side),
+      // so a query for "plan-foo" can return both "plan-foo.md" and
+      // "plan-foo-bar.md". The `.name === name` filter on the line below
+      // enforces exact match before we issue any delete. Without that
+      // exact-match guard, this loop would happily delete unrelated docs
+      // whose names share a prefix with the new doc's name.
+      const sameName = await listAllDocuments(config, { datasetId: selectedDatasetId, keyword: name });
+      const toDelete = pickDuplicatesToDelete(sameName, name, newDocId);
+      for (const dup of toDelete) {
+        try {
+          await deleteDocument(config, { datasetId: selectedDatasetId, documentId: dup.id });
+          deletedCount += 1;
+        } catch (err) {
+          // Aggregate per-id failures into one error string but keep going;
+          // a 404 here means a sibling concurrent upsert already deleted it.
+          const m = err instanceof Error ? err.message : String(err);
+          deleteError = deleteError ? `${deleteError}; ${m}` : m;
+        }
+      }
     } catch (err) {
       deleteError = err instanceof Error ? err.message : String(err);
     }
@@ -826,6 +887,7 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
     name,
     datasetId: selectedDatasetId,
     replacedId: existing?.id || null,
+    deletedCount,
     created,
     metadataResult,
     metadataError,
@@ -862,6 +924,34 @@ export async function disableDocument(config, { datasetId, documentId }) {
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
     selectedDatasetId,
   )}/documents/status/disable`;
+
+  return fetchJsonWithTimeout(
+    endpoint,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ document_ids: [documentId] }),
+    },
+    config.timeoutMs,
+  );
+}
+
+// Symmetric counterpart to disableDocument: re-enable a previously
+// disabled document so it shows up in search again. Same endpoint shape
+// as disable except the action verb. Exposed as the `enable_document`
+// MCP tool so the disable/enable pair stays inside the MCP surface and
+// agents don't need to drop into the Dify UI to undo a soft delete.
+export async function enableDocument(config, { datasetId, documentId }) {
+  if (!documentId) {
+    throw new Error("enableDocument requires documentId.");
+  }
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(
+    selectedDatasetId,
+  )}/documents/status/enable`;
 
   return fetchJsonWithTimeout(
     endpoint,

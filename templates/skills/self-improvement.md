@@ -26,6 +26,8 @@ description: Use the project memory to look up self-improvement lessons before r
 > | Reusable code-level pattern / library footgun | `save_to_dataset` | `knowledge` (atom_type=pattern-gotcha) |
 >
 > All `save_to_dataset` calls use upsert-by-name semantics: same `name` overwrites, no duplicates.
+>
+> **Plans-specific note:** approved plans (via `ExitPlanMode`) are auto-captured by a `PostToolUse` hook into the `plans` slot — see [`plan-capture.md`](./plan-capture.md). Do NOT also call `save_to_dataset` for an approved plan; the hook handles it. Manual `save_to_dataset` is for mid-iteration plans, investigations, and stand-alone artefacts.
 
 # Self-improvement memory (the lesson loop)
 
