@@ -415,3 +415,33 @@ test("workspace.js: WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES export the expected 
     assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000);
   }
 });
+
+async function importWorkspaceFresh() {
+  return import(`../mcp-server/src/workspace.js?cacheBust=${Date.now()}-${Math.random()}`);
+}
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES falls back to default on invalid env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    for (const v of ["-1", "0", "not-a-number"]) {
+      process.env.ABSORB_MAX_FILE_BYTES = v;
+      const ws = await importWorkspaceFresh();
+      assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000, `value=${v} should fallback to default`);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
+});
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES honors positive env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    process.env.ABSORB_MAX_FILE_BYTES = "1234";
+    const ws = await importWorkspaceFresh();
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 1234);
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
+});

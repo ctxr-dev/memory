@@ -9,5 +9,8 @@
 
 export const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
 
+const parsedAbsorbMaxFileBytes = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10);
 export const ABSORB_MAX_FILE_BYTES =
-  Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
+  Number.isFinite(parsedAbsorbMaxFileBytes) && parsedAbsorbMaxFileBytes > 0
+    ? parsedAbsorbMaxFileBytes
+    : 500_000;
