@@ -22,7 +22,7 @@ The boilerplate ships a `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, 
 3. Slugifies the title and upserts `plan-<slug>.md` into the `plans` slot via the same upsert-by-name path `save_to_dataset` uses (create-or-replace by exact name, then a follow-up metadata write; the bridge does both internally as one MCP call).
 4. Tags the doc with `atom_type=plan`, `task_type=planning`. (`project_module` is intentionally omitted, not set to `unknown`, so it doesn't pollute downstream metadata filters.)
 
-Iterating on the SAME plan title overwrites the SAME Dify doc: no duplicates accumulate. The hook is silent on rejection (`approved !== true`), empty plans, an unbound `plans` slot, or a downed bridge.
+Iterating on the SAME plan title overwrites the SAME Dify doc: no duplicates accumulate. The hook skips cleanly (exit 0) with a stderr message on rejection (`approved !== true`), empty plans, an unbound `plans` slot, or a downed bridge.
 
 You do NOT need to manually save approved plans. The hook handles it.
 
