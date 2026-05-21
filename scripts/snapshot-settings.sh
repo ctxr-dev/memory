@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Best-effort: NEVER abort the caller. We deliberately do NOT use `set -e`
+# so a failing copy / mkdir / heredoc (permissions, full disk) prints a
+# warning and the script still reaches `exit 0`. Keep nounset + pipefail
+# for sane variable + pipe behavior.
+set -uo pipefail
 
 # Snapshot user settings (memory/.env, memory/.dify-version, and a
 # best-effort embedding-model record) into <MEMORY_DATA_DIR>/settings/ so
@@ -43,7 +47,9 @@ fi
 ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
 container="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 embed_model=""
-if [ -n "$container" ] && command -v docker >/dev/null 2>&1; then
+if [ -n "$container" ] && command -v docker >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+  # `node` (host) is used to parse the JSON below; guard it so a missing
+  # node doesn't leak "command not found" even in this best-effort path.
   embed_json="$(docker exec -i "$container" node src/memory-cli.js list-embedding-models 2>/dev/null || true)"
   if [ -n "$embed_json" ]; then
     embed_model="$(printf '%s' "$embed_json" | node -e '

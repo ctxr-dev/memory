@@ -69,7 +69,9 @@ resolve_docker_bin() {
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
       PATH="$(dirname "$candidate"):$PATH"; export PATH
-      echo "lib.sh: using docker from $candidate" >&2
+      # Quiet by default (lib.sh is sourced by scripts that emit machine-
+      # readable output, e.g. mcp-config.sh). Set MEMORY_DEBUG=1 to surface.
+      if [ -n "${MEMORY_DEBUG:-}" ]; then echo "lib.sh: using docker from $candidate" >&2; fi
       return 0
     fi
   done

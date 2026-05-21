@@ -94,7 +94,7 @@ resolve_docker_bin() {
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
       PATH="$(dirname "$candidate"):$PATH"; export PATH
-      echo "bootstrap.sh: using docker from $candidate" >&2
+      if [ -n "${MEMORY_DEBUG:-}" ]; then echo "bootstrap.sh: using docker from $candidate" >&2; fi
       return 0
     fi
   done
@@ -446,12 +446,18 @@ env_file="$MEMORY_DIR/.env"
 # bindings, so re-running dify-setup.sh becomes optional. Use the DEFAULT
 # data dir here: at first bootstrap there is no memory/.env to read a
 # custom MEMORY_DATA_DIR from.
-settings_env="$WORKSPACE_DIR/.memory/settings/.env"
+# Resolve the settings dir from MEMORY_DATA_DIR (honor an exported override;
+# at first bootstrap there's no memory/.env yet to read it from) so a user
+# with a non-default data dir still gets their snapshot restored. Reused
+# below for the embedding-model reminder.
+settings_data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
+settings_env="$settings_data_dir/settings/.env"
 if [ ! -f "$env_file" ]; then
   if [ -f "$settings_env" ]; then
     cp "$settings_env" "$env_file"
-    env_action="restored from ./.memory/settings/"
-    echo "Restored prior settings (.env) from ./.memory/settings/ — API key + dataset bindings reattached; running dify-setup.sh is optional."
+    chmod 600 "$env_file" 2>/dev/null || true   # carries the API key
+    env_action="restored from $settings_data_dir/settings/"
+    echo "Restored prior settings (.env) from $settings_data_dir/settings/ — API key + dataset bindings reattached; running dify-setup.sh is optional."
   else
     render "$MEMORY_DIR/.env.example" > "$env_file"
     # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
@@ -561,10 +567,10 @@ EOF
 # If a prior install recorded an embedding model, remind the user to
 # configure the SAME one in the Dify UI so retrieval stays consistent.
 # Non-fatal if absent.
-settings_embed="$WORKSPACE_DIR/.memory/settings/embedding-model.txt"
+settings_embed="${settings_data_dir:-$WORKSPACE_DIR/.memory}/settings/embedding-model.txt"
 if [ -f "$settings_embed" ]; then
   echo
-  echo "Recorded embedding model from your prior install (.memory/settings/embedding-model.txt):"
+  echo "Recorded embedding model from your prior install ($settings_embed):"
   sed 's/^/  /' "$settings_embed"
   echo "  -> set the SAME embedding model as the System Default in the Dify UI."
 fi
