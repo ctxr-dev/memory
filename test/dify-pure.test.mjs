@@ -150,9 +150,16 @@ test("canonicalFilterKey: different filters hash differently", () => {
   assert.notEqual(canonicalFilterKey(a), canonicalFilterKey(b));
 });
 
-test("canonicalFilterKey: null/undefined handled", () => {
-  assert.equal(canonicalFilterKey(null), JSON.stringify(null));
-  assert.equal(canonicalFilterKey(undefined), JSON.stringify(undefined));
+test("canonicalFilterKey: non-object inputs ALWAYS return a string (never undefined)", () => {
+  // The dedup-key contract requires a string. JSON.stringify(undefined)
+  // is the value undefined (not a string); the helper must coerce so a
+  // Set key is never the literal undefined.
+  assert.equal(canonicalFilterKey(null), "null");
+  assert.equal(canonicalFilterKey(undefined), "undefined");
+  assert.equal(typeof canonicalFilterKey(undefined), "string");
+  assert.equal(typeof canonicalFilterKey(null), "string");
+  assert.equal(canonicalFilterKey(42), "42");
+  assert.equal(typeof canonicalFilterKey(() => {}), "string");
 });
 
 test("canonicalFilterKey: empty object is stable", () => {

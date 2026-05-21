@@ -782,7 +782,14 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 // silently break dedup. Sort keys before stringifying so the contract
 // survives reorderings.
 export function canonicalFilterKey(filters) {
-  if (!filters || typeof filters !== "object") return JSON.stringify(filters);
+  // Always return a STRING (the documented "stable string identity"
+  // contract — it is used as a Set dedup key). For non-object inputs,
+  // JSON.stringify can yield the VALUE undefined (e.g.
+  // JSON.stringify(undefined) === undefined, not a string) or otherwise
+  // non-string results; coerce via String() so a dedup key is never
+  // `undefined`. In practice the ladder always passes plain objects, but
+  // the contract holds for any input.
+  if (!filters || typeof filters !== "object") return String(JSON.stringify(filters));
   const sorted = {};
   for (const key of Object.keys(filters).sort()) sorted[key] = filters[key];
   return JSON.stringify(sorted);
