@@ -83,10 +83,13 @@ require_cmd() {
 # would abort before the require_cmd docker message. HOME-based candidates are
 # skipped when HOME is empty.
 resolve_docker_bin() {
+  # `local` keeps the temporaries out of the script's global scope (parity
+  # with the lib.sh copy) so they can't collide with later vars.
+  local _dkr_dir candidate candidates
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
     _dkr_dir="$(dirname "$DOCKER_BIN")"
     if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
-    export PATH; unset _dkr_dir
+    export PATH
     return 0
   fi
   if command -v docker >/dev/null 2>&1; then
@@ -111,7 +114,7 @@ $candidates"
       export DOCKER_BIN="$candidate"
       _dkr_dir="$(dirname "$candidate")"
       if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
-      export PATH; unset _dkr_dir
+      export PATH
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "bootstrap.sh: using docker from $candidate" >&2; fi
       return 0
     fi
