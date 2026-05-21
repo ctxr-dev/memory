@@ -20,6 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # without COMPOSE_PROJECT_NAME, so we deliberately do NOT call it.
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/lib.sh"
+# lib.sh runs `set -euo pipefail`; sourcing it RE-ENABLES errexit in this
+# shell. Disable it again so this best-effort script never aborts the
+# caller and always reaches `exit 0`.
+set +e
 
 # Resolve the settings dir directly (tolerate partial state).
 data_dir="${MEMORY_DATA_DIR:-$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)}"
@@ -59,10 +63,14 @@ if [ -n "$container" ] && command -v docker >/dev/null 2>&1 && command -v node >
         const providers = o && Array.isArray(o.providers) ? o.providers : [];
         for (const p of providers) {
           const prov = p && (p.provider || p.name) ? (p.provider || p.name) : "";
-          const models = p && Array.isArray(p.models) ? p.models : [];
-          if (models.length) {
-            for (const m of models) {
-              const id = m && (m.model || m.name || m.id) ? (m.model || m.name || m.id) : "";
+          // The CLI returns `modelNames` (array of plain strings). Fall
+          // back to `models` (array of objects) for forward-compat.
+          const names = p && Array.isArray(p.modelNames) ? p.modelNames
+            : (p && Array.isArray(p.models) ? p.models : []);
+          if (names.length) {
+            for (const m of names) {
+              const id = typeof m === "string" ? m
+                : (m && (m.model || m.name || m.id) ? (m.model || m.name || m.id) : "");
               if (id) out.push(prov ? prov + "/" + id : id);
             }
           } else if (prov) {
