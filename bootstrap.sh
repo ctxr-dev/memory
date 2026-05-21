@@ -530,8 +530,22 @@ if [ ! -f "$env_file" ]; then
 else
   # Existing settings/.env: merge any keys added to .env.example upstream so a
   # `git pull` upgrade surfaces new knobs without a hand-diff. Append-only.
-  node "$MEMORY_DIR/scripts/lib/merge-env.mjs" "$MEMORY_DIR/.env.example" "$env_file" || true
-  if [ "$migrated" -eq 1 ]; then env_action="migrated from memory/.env"; else env_action="updated"; fi
+  # Don't hard-fail the install on a merge error (the existing env is still
+  # usable), but warn loudly and reflect it in env_action so the user knows
+  # new keys may not have landed.
+  if node "$MEMORY_DIR/scripts/lib/merge-env.mjs" "$MEMORY_DIR/.env.example" "$env_file"; then
+    merge_ok=1
+  else
+    merge_ok=0
+    echo "warning: merge-env.mjs failed; new keys from .env.example may NOT have been merged into $env_file (your existing settings are intact). Re-run bootstrap or merge manually." >&2
+  fi
+  if [ "$migrated" -eq 1 ]; then
+    env_action="migrated from memory/.env"
+  elif [ "$merge_ok" -eq 1 ]; then
+    env_action="updated"
+  else
+    env_action="updated (merge failed; see warning)"
+  fi
 fi
 
 # Reconcile identity fields from the CURRENT --slug. On a fresh render they are
