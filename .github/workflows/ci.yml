@@ -1,0 +1,176 @@
+# Minimal CI: run the test suite on macOS + Linux against Node 20 and 22.
+#
+# Windows is supported via WSL2 / Git Bash for end-users; we don't run CI
+# on bare Windows here because Docker Compose isn't available in
+# windows-latest runners by default and several scripts assume a POSIX
+# environment.
+#
+# We do NOT install Docker or run the bridge in CI. The unit + CLI test
+# suites run hermetically (no container). The plan-capture integration
+# smoke (`scripts/plan-capture-smoke.sh`) requires a live Dify; it is
+# explicitly out of CI scope and is meant for opt-in install-verification
+# locally.
+#
+# Root has zero dependencies but ships a `package-lock.json` so `npm ci`
+# is reproducible (and any future dev-dep addition lands without a
+# silent CI break). The `mcp-server/` workspace has its own deps but the
+# test suite imports only the pure modules from there (no
+# `@modelcontextprotocol/sdk` / `zod` needed at test time), so we don't
+# install bridge deps in CI either.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main"]
+  # workflow_dispatch lets a maintainer re-run CI without an empty commit
+  # (useful after a flaky-looking failure or a runner-side outage).
+  workflow_dispatch: {}
+
+# Defense-in-depth: explicitly declare read-only contents access. The
+# workflow doesn't write to the repo or to any external service.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    # A hung test would otherwise burn the 6h default. Real CI run is
+    # ~30s; 10min leaves ample headroom for slow runner days.
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+      - name: Install (reproducible)
+        run: npm ci
+
+      # Capture test output once. Both the test run and the
+      # CHANGELOG-count guard (later step) consume this artifact, so we
+      # don't pay for `npm test` twice on the macOS+node22 cell.
+      - name: Run tests
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/test.out"
+
+      - name: Static checks (bash + node syntax)
+        # Run on macOS specifically: macOS still ships bash 3.2 (the
+        # portability floor we promise end-users), so bash -n there
+        # catches bash-3.2-incompatible syntax that ubuntu's bash 5.x
+        # would silently accept. Tests run on both OSes regardless.
+        if: matrix.os == 'macos-latest'
+        run: |
+          bash -n bootstrap.sh scripts/*.sh scripts/hooks/*.sh
+          node --check scripts/compile.mjs scripts/hooks/*.mjs scripts/lib/*.mjs
+          node --check mcp-server/src/*.js
+          node --check test/*.test.mjs
+          # Static-check the shared test helpers too (test/lib/*.mjs).
+          # Guarded via compgen so adding/removing the directory doesn't
+          # make CI red on this step alone.
+          if compgen -G 'test/lib/*.mjs' >/dev/null; then
+            node --check test/lib/*.mjs
+          fi
+
+      - name: CHANGELOG test-count guard
+        # The CHANGELOG mentions the current test count in the
+        # [Unreleased] block. It has gone stale multiple times across
+        # audit rounds because the same commit that adds tests was
+        # supposed to update the number. This guard makes the staleness
+        # visible at PR time instead of waiting for the next audit
+        # reviewer to notice.
+        #
+        # WARNING: if the matrix matrix loses macos-latest or node 22,
+        # the guard silently never runs. Update this condition if you
+        # restructure the matrix.
+        if: matrix.os == 'macos-latest' && matrix.node == '22'
+        run: |
+          actual=$(grep -oE 'tests [0-9]+' "$RUNNER_TEMP/test.out" | head -n 1 | awk '{print $2}')
+          if [ -z "$actual" ]; then
+            echo "::error::Could not extract test count from npm test output (file: $RUNNER_TEMP/test.out)"
+            exit 1
+          fi
+          # Regex `from [0-9]+ to ${actual} tests` accepts any baseline
+          # so the line can evolve without breaking CI for non-bug
+          # reasons. The point of the guard is "current count is
+          # recorded in CHANGELOG"; the baseline `156` is incidental.
+          if ! grep -qE "from [0-9]+ to ${actual} tests" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md test count is stale. Actual: ${actual}. Update the 'Test suite grew from <floor> to <N> tests' line in CHANGELOG.md to match."
+            grep -nE 'Test suite grew' CHANGELOG.md || true
+            exit 1
+          fi
+          echo "CHANGELOG test count is current at ${actual}."
+
+      - name: Cross-runtime parity annotation
+        # Cross-runtime parity tests (slug, schema, atom-types, slotEnvKey,
+        # ATOM_TYPES) lock host scripts/lib/* against bridge mcp-server/src/*.
+        # They already run inside the main `npm test`; this dedicated step
+        # surfaces the failure as a GitHub Actions annotation tagged
+        # explicitly so a reviewer scanning the PR summary cannot miss
+        # cross-runtime drift. Runs once per push (macos+node22 only) to
+        # avoid duplicate annotations.
+        if: matrix.os == 'macos-latest' && matrix.node == '22'
+        run: |
+          if ! node --test test/cross-runtime-slug-sync.test.mjs test/datasets.test.mjs; then
+            echo "::error title=Cross-runtime parity drift::Host scripts/lib and bridge mcp-server/src have diverged on slug / schema / atom-types / slotEnvKey. See test/cross-runtime-slug-sync.test.mjs and test/datasets.test.mjs."
+            exit 1
+          fi
+
+      - name: Atom_type literal lint
+        # Defence against the round-33 drift class: hardcoded atom_type
+        # literals in mcp-server/src/index.js silently diverging from the
+        # canonical list in mcp-server/src/schema.js. Every atom_type
+        # comparison in index.js should reference one of the exported
+        # constants (LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
+        # ATOM_TYPES). String literals in COMMENTS and DESCRIPTIONS are
+        # allowed (they're tool docstrings, not comparisons). The lint
+        # below ignores lines that look like comments or descriptions.
+        if: matrix.os == 'macos-latest' && matrix.node == '22'
+        run: |
+          set -euo pipefail
+          # Grep for any string literal in index.js matching the canonical
+          # atom types, then filter out lines that are clearly inside a
+          # comment block, a `description:` string, or a tool registration's
+          # docstring. The remaining matches are real comparisons that should
+          # reference schema.js constants instead.
+          tmpfile="$(mktemp)"
+          # The atom-type list is intentionally inlined here (rather than
+          # being read from schema.js) so this CI step is self-contained.
+          # If schema.js's ATOM_TYPES list ever grows, update this list.
+          if grep -nE '"(self-improvement-lesson|bug-root-cause|feedback-rule|plan|decision|reference|pattern-gotcha|project-lore)"' mcp-server/src/index.js \
+              | grep -vE '^[^:]+:[0-9]+: *(//|/\*|\*)' \
+              | grep -vE 'description:' \
+              | grep -vE '"description"' \
+              | grep -vE "title:" \
+              | grep -vE 'context for|atom_type=' \
+              > "$tmpfile"; then
+            if [ -s "$tmpfile" ]; then
+              echo "::error title=Atom_type literal drift::mcp-server/src/index.js contains hardcoded atom_type string literals outside of tool descriptions. Use the LESSON_ATOM_TYPE / KNOWLEDGE_CROSSREF_ATOM_TYPES / ATOM_TYPES constants from mcp-server/src/schema.js instead:"
+              cat "$tmpfile"
+              rm -f "$tmpfile"
+              exit 1
+            fi
+          fi
+          rm -f "$tmpfile"
+          echo "Atom_type literal lint passed."
+
+      - name: Bridge dependency security audit
+        # Non-blocking informational scan of the bridge container's npm
+        # deps (`@modelcontextprotocol/sdk`, `zod`). Dependabot weekly
+        # PRs handle the actual upgrades; this is an in-PR canary so we
+        # see new CVEs as soon as they surface.
+        # `continue-on-error: true` keeps PRs unblocked on advisories
+        # the maintainer needs time to triage. `always()` makes the
+        # audit run even when an earlier step (e.g. the CHANGELOG
+        # guard) failed — defeating its non-blocking design otherwise.
+        if: always() && matrix.os == 'macos-latest' && matrix.node == '22'
+        continue-on-error: true
+        working-directory: mcp-server
+        run: npm audit --audit-level=high

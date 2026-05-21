@@ -94,6 +94,26 @@ prompt() {
   printf '%s' "${ans:-$default}"
 }
 
+# Silent prompt for secrets (API keys, passwords). Echo is suppressed,
+# the terminal sees only a newline after the user hits return, and
+# trailing CR / whitespace (common from copy-paste of wrapped lines in
+# web UIs) is trimmed before returning the value.
+prompt_secret() {
+  local msg="$1"
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    return 0
+  fi
+  printf '%s: ' "$msg" >&2
+  local ans
+  IFS= read -rs ans
+  printf '\n' >&2
+  # Strip CR (Windows / wrapped-paste) and trim surrounding whitespace.
+  ans="${ans%$'\r'}"
+  ans="${ans#"${ans%%[![:space:]]*}"}"
+  ans="${ans%"${ans##*[![:space:]]}"}"
+  printf '%s' "$ans"
+}
+
 confirm() {
   local msg="$1" default="${2-y}"
   if [ "$NON_INTERACTIVE" -eq 1 ]; then
@@ -189,8 +209,9 @@ EOF
   fi
   echo "Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>'))"
   echo "Knowledge -> Service API -> create a Knowledge API key. Paste it now."
-  api_key="$(prompt 'DIFY_KNOWLEDGE_API_KEY' '')"
-  [ -n "$api_key" ] || { echo 'aborted' >&2; exit 1; }
+  echo "(Input is hidden; trailing whitespace and carriage returns are trimmed.)"
+  api_key="$(prompt_secret 'DIFY_KNOWLEDGE_API_KEY')"
+  [ -n "$api_key" ] || { echo 'aborted (no key entered)' >&2; exit 1; }
   set_env_var DIFY_KNOWLEDGE_API_KEY "$api_key"
   API_KEY="$api_key"
   echo "Restarting bridge with the new key..."

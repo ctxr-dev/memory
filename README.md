@@ -9,6 +9,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ctxr-dev/memory/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ctxr-dev/memory?display_name=tag&sort=semver"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Local First" src="https://img.shields.io/badge/Local--First-memory-0A7C66">
   <img alt="Dify" src="https://img.shields.io/badge/RAG-Dify-2F6FEB">
@@ -32,6 +34,12 @@
   <a href="#client-config">Clients</a>
   |
   <a href="STACK.md">Stack docs</a>
+  |
+  <a href="CONTRIBUTING.md">Contributing</a>
+  |
+  <a href="SECURITY.md">Security</a>
+  |
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
@@ -85,8 +93,9 @@ git clone https://github.com/ctxr-dev/memory ./memory
 ./memory/bootstrap.sh --slug <project-slug>
 ./memory/scripts/up.sh    # FIRST RUN IS SLOW: clones the upstream Dify repo
                           # into memory/vendor/dify, pulls Dify images, and
-                          # builds the bridge. Expect 2-5 minutes and a
-                          # few GB of pulls. up.sh prints the Dify UI URL
+                          # builds the bridge. First-run cold pull is 2-5 min
+                          # multi-GB; warm cache is ~30-60s. up.sh prints
+                          # the Dify UI URL
                           # at the end.
 ```
 
@@ -118,7 +127,7 @@ Steps:
    - openai (REST with OPENAI_API_KEY in memory/.env)
    Detect which CLIs are on PATH before asking. If only one is available, default to it and ask me to confirm.
 
-4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
+4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd, and PostToolUse (matcher ExitPlanMode, for auto-capturing approved plans into the `plans` slot) to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
 
 5. Ask which MCP clients I want registered: Claude Desktop, Cursor, Codex/OpenAI, generic. Note the choices for step 8; the actual snippets only exist after bootstrap.sh runs.
 
@@ -143,7 +152,7 @@ Steps:
    For Codex (if not auto-registered in step 7):
    codex mcp add <slug>-memory -- docker exec -i <slug>-memory node src/index.js
 
-9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (typically 2-5 minutes, multi-GB):
+9. Start the stack. WARN ME this is slow on first run: dify-bootstrap clones the upstream Dify repo (~hundreds of MB) and `up.sh` then pulls and builds Dify + the bridge image (2-5 minutes on a cold pull, multi-GB; ~30-60s once the Docker image cache is warm):
    ./memory/scripts/up.sh
    (`up.sh` invokes `ui-url.sh` itself, so the Dify UI URL is printed when it finishes.)
 
@@ -217,6 +226,8 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
 
 7. Sanity round-trip (proves the metadata schema you installed in step 4 actually works): call `save_lesson` with a deliberately-tagged smoke lesson (title "Onboarding smoke", error_pattern "smoke-test", project_module "smoke", task_type "unknown"), then immediately call `recall_lessons(query="smoke", project_module="smoke")`. The lesson must round-trip. If it does NOT, the metadata schema install probably failed; tell me to re-run `./memory/scripts/dify-setup.sh`.
 
+8. Tell me about the cleanup tools available. Three MCP tools handle retracting auto-captured / absorbed docs: `delete_document` (permanent, accepts any slot — use sparingly on lessons / compile-managed slots), `disable_document` (soft, hides from search but keeps audit trail), `enable_document` (reverses a disable). Mention these so I know how to clean up if a plan title changes (the auto-capture writes a new doc under the new slug; the old slug stays unless I explicitly remove it).
+
 Stop and ask me whenever you would otherwise guess. This is configuration, not refactoring.
 ```
 
@@ -224,7 +235,7 @@ Stop and ask me whenever you would otherwise guess. This is configuration, not r
 
 `save_to_dataset(dataset, name, text, metadata?)` does upsert-by-exact-name: same `name` overwrites, no duplicates. Iterate freely on a `plan-auth-rewrite.md` and the second save replaces the first. Same applies to absorbed files. The optional `metadata` map applies the per-document Dify fields so the doc is filterable in future `search_memory` and `recall_lessons` calls.
 
-For Claude Code / Codex hooks that should auto-dump plan/investigation artefacts to RAG when finalised: the MCP tools (`save_to_dataset`, `update_memory`) are ready, but the per-event hook recipes (e.g. a `PostToolUse` matcher on `ExitPlanMode`) are not yet shipped. Until they land, agents can call these tools directly mid-session.
+**Plans approved via `ExitPlanMode` are auto-captured** to the `plans` slot by the boilerplate's `PostToolUse` hook (`scripts/hooks/exit-plan-mode.mjs`, invoked via the `exit-plan-mode.sh` wrapper). The doc name is `plan-<slugified-title>.md`, derived from the first H1 in the plan body, so iterating on the same titled plan overwrites the same Dify doc. Tagged `atom_type=plan`, `task_type=planning` (no `project_module` so it doesn't pollute filters; add one via a manual `save_to_dataset` if you want per-module scoping). The hook is a no-op when the user rejects the plan (`tool_response.approved !== true`), when the plan body is empty, when the `plans` slot isn't bound, or when the bridge is unavailable. **The hook only fires once Claude Code reloads `.claude/settings.json`, so after a fresh install or an upgrade you must restart Claude Code before the first plan capture will trigger.** See the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract. Investigations remain manual: call `save_to_dataset(dataset="investigations", name=...)` directly until the equivalent capture point exists.
 
 ## Self-improvement loop
 
@@ -255,7 +266,7 @@ Six per-document fields, installed by `dify-setup.sh` on every bound slot (Dify 
 
 | Field | Used by `recall_lessons` for | Notes |
 |---|---|---|
-| `atom_type` | filter by atom type | one of seven types; `self-improvement-lesson` is the lesson key |
+| `atom_type` | filter by atom type | one of eight types (seven extracted by flush+compile, plus `plan` set by the ExitPlanMode hook); `self-improvement-lesson` is the lesson key |
 | `project_module` | filter by part-of-codebase | lowercase, hyphenated; `unknown` when unsure |
 | `language` | filter by programming language | empty for language-agnostic lessons |
 | `task_type` | filter by task category | enum: planning, implementation, debugging, refactor, review, deploy, docs, unknown |
@@ -298,14 +309,21 @@ flowchart TB
     Save["MCP save_to_dataset / save_lesson / write_memory"]
   end
 
+  subgraph PlanCapture["④ ExitPlanMode auto-capture (per approval)"]
+    direction TB
+    ExitPlan["PostToolUse: ExitPlanMode (approved=true)"] --> ExitPlanScript["scripts/hooks/exit-plan-mode.mjs"]
+  end
+
   Absorb --> KnowledgeDataset
   Save --> AnyDataset[("Dify named slots<br/>plans, investigations, ...")]
   Save --> SelfImprovement
+  ExitPlanScript --> PlansDataset[("Dify dataset 'plans'<br/>plan-&lt;slug&gt;.md")]
 
   DailyDataset --> Search(["MCP search_memory / recall_lessons"])
   KnowledgeDataset --> Search
   SelfImprovement --> Search
   AnyDataset --> Search
+  PlansDataset --> Search
 ```
 
 **Everything lives in Dify**, organised by named slots, retrieved via metadata-filtered queries.
@@ -327,9 +345,9 @@ flowchart TB
 
 Two routes: **automatic distillation** (flush + compile) and **on-demand upserts** (absorb + save_to_dataset).
 
-### Automatic atoms
+### Atoms extracted by flush+compile
 
-Seven atom types, each carrying the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
+Seven atom types are produced by the flush LLM extractor (`prompts/flush.md`) and routed by compile. Each carries the metadata block (`project_module`, `language`, `task_type`, optional `error_pattern`) plus `tags`. The compile prompt biases toward **update** over **create** when `atom_type`, `project_module`, and (for lessons) `error_pattern` match: same fact never gets written twice; same lesson converges into one canonical document.
 
 | Type | Use when | Routes to |
 |---|---|---|
@@ -340,6 +358,12 @@ Seven atom types, each carrying the metadata block (`project_module`, `language`
 | `reference` | A pointer to a dashboard, runbook, or external project, with the reason to consult it. | `knowledge` |
 | `pattern-gotcha` | A reusable code-level lesson: API quirk, framework footgun, library behavior. | `knowledge` |
 | `self-improvement-lesson` | NEGATIVE OR CORRECTIVE user feedback revealing a behaviour the AI should change next time. | `self_improvement` |
+
+### Atoms set by hooks (not extracted from transcripts)
+
+| Type | Set by | Routes to |
+|---|---|---|
+| `plan` | `PostToolUse/ExitPlanMode` hook on approval, or manual `save_to_dataset(dataset="plans", ...)`. The flush extractor is explicitly forbidden from producing this type (see `prompts/flush.md`). | `plans` |
 
 ### On-demand uploads
 
@@ -360,7 +384,9 @@ Both use upsert-by-exact-name (delete-then-create): **same name → updated cont
 | `write_memory` / `update_memory` | Create-or-supersede a single document (low-level; compile uses `update_memory`). |
 | `save_to_dataset` | Upsert by exact name with optional `metadata` (durable-artefact path). |
 | `save_lesson` | Sugar over `save_to_dataset` for `self_improvement`; required `metadata.error_pattern` is the dedup key. |
-| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. |
+| `list_datasets` / `create_dataset` | Inspect or create Dify datasets; bind via `dify-setup.sh`. `create_dataset` auto-installs the per-document metadata schema (the six fields). |
+| `delete_document` / `disable_document` / `enable_document` | Clean up an upserted doc by id. `delete_document` is permanent (warns about lessons/compile-managed slots); `disable_document` hides from search but keeps the audit trail; `enable_document` reverses a soft-delete. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc you no longer want indexed. |
+| `audit_memory` | Walk the `plans`, `knowledge`, and `self_improvement` slots and return a list of cleanup candidates across four classes: `stale-plans` (slug substring of newer plan, leftover renames), `missing-metadata` (atom-type required fields absent), `stale-project-lore` (older than `MEMORY_AUDIT_LORE_STALE_DAYS`, default 90), `duplicate-error-pattern` (lessons sharing a pattern with a newer canonical). List-only; act via `delete_document` / `disable_document`. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. The default ignore list (`.git`, `node_modules`, `.venv`, `__pycache__`, `target`, `vendor`, `dist`, `build`, `.next`, `Pods`, `DerivedData`, `_build`, `.terraform`, `.idea`, etc., at any nesting depth) is ALWAYS applied; user `ignore` patterns are added on top, never used as a replacement. `include` defaults to markdown/text; pass `include` to override. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 
@@ -372,6 +398,20 @@ cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
 ```
 
 Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
+
+**If you're upgrading across a plan-capture release**, also re-run `./memory/scripts/dify-setup.sh` after `git pull` so the per-document metadata schema gets retro-installed on existing slots. See the callout below for the full upgrade recipe.
+
+> **Upgrading to plan-capture (PostToolUse/ExitPlanMode hook):**
+>
+> Required steps in order:
+>
+> 1. **Re-run `./memory/scripts/dify-setup.sh`** after `git pull`. The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Pre-existing slots created by an OLDER `create_dataset` MCP tool (which did NOT auto-install the schema before this commit) get the six per-document fields retro-installed in seconds. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save until the wizard runs.
+> 2. **Recreate the bridge container** to pick up env + image changes: `./memory/scripts/up.sh memory_mcp`. The bridge reads `memory/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until restart.
+> 3. **Restart your MCP client** (Claude Code / Cursor / Codex) so it picks up the new `.claude/settings.json` / `.agents/hooks.json` hook entries. Already-running sessions won't fire the new hook until restart.
+>
+> Optional: copy the new `MEMORY_HOOK_EXITPLANMODE_DISABLE` and `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES` knobs from `.env.example` into your existing `memory/.env` if you want to tune (re-runs preserve user edits, so they aren't auto-merged). If you set them, redo step 2 to refresh bridge env.
+>
+> **Behavior change to be aware of:** `upsertDocumentByName` now reduces same-name documents to one per upsert (closes a concurrent-write race window). If you had transient duplicates from a prior bug, this commit silently merges them on the next upsert. Verify in the Dify UI before relying on the upsert path for non-plan content.
 
 ### Merge contract
 
@@ -419,7 +459,7 @@ When `--install-hooks` is on (default), `.claude/settings.json` is rendered with
 - `.claude/skills/<name>.md` (only when `--install-hooks`): Claude Code's project skills directory; auto-loaded.
 - `.agents/rules/<name>.md` (always): vendor-neutral. Cursor / Codex / generic clients can import from here.
 
-Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract).
+Today the boilerplate ships three skills: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract), `plan-capture.md` (how the `ExitPlanMode` auto-capture and manual `save_to_dataset` paths interact for the `plans` slot), and `investigation-capture.md` (when and how to save a long debugging session as a durable artefact in the `investigations` slot; agent-side rule, no hook).
 
 ## Hook reference
 
@@ -429,8 +469,9 @@ Today the boilerplate ships one skill: `self-improvement.md` (the `recall_lesson
 | `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
 | `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
+| `PostToolUse` (matcher `ExitPlanMode`) | `scripts/hooks/exit-plan-mode.mjs` | When the user approves a plan, upserts `plan-<slug>.md` into the `plans` dataset slot (deterministic, no LLM, no timestamp; same title overwrites). Body is redacted + wrapped in an untrusted-content fence. Skips cleanly (exit 0) with a stderr message on rejection, empty plan, oversized plan (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`, default 256KB), unbound slot, bridge failure, or `MEMORY_HOOK_EXITPLANMODE_DISABLE=true`. See [`plan-capture` skill](templates/skills/plan-capture.md). |
 
-Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
+Hook timeouts: 130s for flush hooks (LLM defaults to 120s per call + headroom), 30s for `PostToolUse/ExitPlanMode` (no LLM, but multiple bridge round-trips: find + create + metadata + re-list + dedupe-delete), 15s for `SessionStart` (only emits a reminder + spawns compile detached).
 
 ## Verification
 
@@ -482,6 +523,17 @@ docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -
 
 If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has no configured id", run `./memory/scripts/dify-setup.sh` to bind the slots.
 
+### Tier 4.5 — Plan-capture write-path smoke (opt-in)
+
+`mcp-smoke.sh` is intentionally read-only (no writes that would dirty your dataset). To verify the **ExitPlanMode auto-capture write path** end-to-end against your real Dify:
+
+```bash
+./memory/scripts/plan-capture-smoke.sh           # writes + verifies + deletes a synthetic plan-mcp-smoke-*.md
+./memory/scripts/plan-capture-smoke.sh --keep    # leaves the smoke doc in place for visual inspection
+```
+
+Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot isn't bound, or `MCP_CONTAINER_NAME` isn't set in `memory/.env`. Use this once after install (or after any upgrade that touches the hook) to prove the full pipeline works against your tenant.
+
 ## Repository layout (cloned `./memory/`)
 
 ```text
@@ -518,6 +570,8 @@ memory/
 │   ├── agents/                       # rendered to <project>/.agents/
 │   ├── claude/settings.json          # rendered to <project>/.claude/
 │   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
+│   ├── skills/plan-capture.md        # rendered to .claude/skills/ AND .agents/rules/
+│   ├── skills/investigation-capture.md # rendered to .claude/skills/ AND .agents/rules/
 │   └── gitignore.append              # appended to <project>/.gitignore
 └── vendor/dify/                # cloned at first dify-bootstrap
 

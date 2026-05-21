@@ -9,11 +9,16 @@ import assert from "node:assert/strict";
 import {
   buildDatasetMap,
   buildMetadataCondition,
+  canonicalFilterKey,
   resolveDatasetId,
   requireDifyWriteConfig,
   sanitizeHeaderValue,
   getConfig,
+  pickDuplicatesToDelete,
+  enableDocument,
+  disableDocument,
 } from "../mcp-server/src/dify.js";
+import { withFetchStub } from "./lib/fetch-stub.mjs";
 
 // ---------- buildDatasetMap ----------
 
@@ -125,6 +130,40 @@ test("buildMetadataCondition: respects containsFields override", () => {
     { containsFields: ["custom"] },
   );
   assert.equal(cond.conditions[0].comparison_operator, "contains");
+});
+
+// ---------- canonicalFilterKey ----------
+
+test("canonicalFilterKey: equivalent filter sets with different key order hash identically", () => {
+  // Locks the recall_lessons ladder dedup contract. V8 preserves insertion
+  // order today, so JSON.stringify alone would produce different strings
+  // for `{a:1,b:2}` vs `{b:2,a:1}` and the ladder would run the same Dify
+  // query twice. canonicalFilterKey sorts keys first.
+  const a = { atom_type: "self-improvement-lesson", project_module: "auth", language: "go" };
+  const b = { language: "go", project_module: "auth", atom_type: "self-improvement-lesson" };
+  assert.equal(canonicalFilterKey(a), canonicalFilterKey(b));
+});
+
+test("canonicalFilterKey: different filters hash differently", () => {
+  const a = { atom_type: "x" };
+  const b = { atom_type: "y" };
+  assert.notEqual(canonicalFilterKey(a), canonicalFilterKey(b));
+});
+
+test("canonicalFilterKey: non-object inputs ALWAYS return a string (never undefined)", () => {
+  // The dedup-key contract requires a string. JSON.stringify(undefined)
+  // is the value undefined (not a string); the helper must coerce so a
+  // Set key is never the literal undefined.
+  assert.equal(canonicalFilterKey(null), "null");
+  assert.equal(canonicalFilterKey(undefined), "undefined");
+  assert.equal(typeof canonicalFilterKey(undefined), "string");
+  assert.equal(typeof canonicalFilterKey(null), "string");
+  assert.equal(canonicalFilterKey(42), "42");
+  assert.equal(typeof canonicalFilterKey(() => {}), "string");
+});
+
+test("canonicalFilterKey: empty object is stable", () => {
+  assert.equal(canonicalFilterKey({}), "{}");
 });
 
 // ---------- resolveDatasetId ----------
@@ -268,4 +307,319 @@ test("getConfig: apiKey + apiUrl arrive sanitised even when env contains CRLF", 
   });
   assert.equal(cfg.apiKey, "dataset-secret-pasted-with-newline");
   assert.equal(cfg.apiUrl, "http://api:5001/v1");
+});
+
+// ---------- pickDuplicatesToDelete (upsertDocumentByName helper) ----------
+//
+// Locks the round-23 re-list-and-delete-duplicates contract: same-name
+// docs are reduced to one on every upsert, with the freshly-created doc
+// always preserved. The helper is exported from dify.js purely so this
+// test can run without spawning HTTP / Dify.
+
+test("pickDuplicatesToDelete: keeps the new doc, deletes other same-name", () => {
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" }, // the freshly-created one
+    { id: "old-2", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map((d) => d.id).sort(), ["old-1", "old-2"]);
+});
+
+test("pickDuplicatesToDelete: skips docs whose name only PARTIALLY matches", () => {
+  // Dify's `keyword` filter is substring; the exact-match guard is what
+  // stops us from deleting unrelated plan-foo-bar.md when we just wrote
+  // plan-foo.md. Regression test for that guard.
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "neighbour", name: "plan-foo-bar.md" }, // substring match
+    { id: "new-x", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.deepEqual(out.map((d) => d.id), ["old-1"]);
+});
+
+test("pickDuplicatesToDelete: no duplicates -> empty list", () => {
+  const docs = [{ id: "new-x", name: "plan-foo.md" }];
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", "new-x"), []);
+});
+
+test("pickDuplicatesToDelete: skips docs with missing id", () => {
+  const docs = [
+    { name: "plan-foo.md" }, // missing id
+    { id: null, name: "plan-foo.md" },
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" },
+  ];
+  const out = pickDuplicatesToDelete(docs, "plan-foo.md", "new-x");
+  assert.deepEqual(out.map((d) => d.id), ["old-1"]);
+});
+
+test("pickDuplicatesToDelete: non-array input -> empty list (defensive)", () => {
+  assert.deepEqual(pickDuplicatesToDelete(null, "x", "y"), []);
+  assert.deepEqual(pickDuplicatesToDelete(undefined, "x", "y"), []);
+  assert.deepEqual(pickDuplicatesToDelete("not an array", "x", "y"), []);
+});
+
+test("pickDuplicatesToDelete: null newDocId -> empty list (NEVER nuke the freshly created doc)", () => {
+  // Critical: if the create-by-text response was malformed and the
+  // caller passed newDocId === null, the predicate d.id !== null would
+  // match EVERY doc, including the one we just created. Bail out so we
+  // leave duplicates instead of destroying the new write.
+  const docs = [
+    { id: "old-1", name: "plan-foo.md" },
+    { id: "new-x", name: "plan-foo.md" }, // we DON'T know which one this is
+  ];
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", null), []);
+  assert.deepEqual(pickDuplicatesToDelete(docs, "plan-foo.md", undefined), []);
+});
+
+// ---------- enableDocument / disableDocument (URL + body shape) ----------
+//
+// Round-26 added enable_document as the symmetric counterpart to
+// disable_document. Both PATCH /datasets/<id>/documents/status/<verb>
+// with body { document_ids: [id] }. We use the shared withFetchStub
+// helper (imported at top) to swap globalThis.fetch for each test.
+
+const STUB_CONFIG = {
+  apiKey: "test-key",
+  apiUrl: "https://dify.test/v1",
+  timeoutMs: 5000,
+  datasetMap: new Map([["plans", { id: "ds-uuid-plans" }]]),
+};
+
+test("enableDocument: PATCHes /documents/status/enable with document_ids body", async () => {
+  await withFetchStub(async (calls) => {
+    await enableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-abc" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "PATCH");
+    assert.equal(calls[0].url, "https://dify.test/v1/datasets/ds-uuid-plans/documents/status/enable");
+    assert.deepEqual(JSON.parse(calls[0].body), { document_ids: ["doc-abc"] });
+  });
+});
+
+test("disableDocument: PATCHes /documents/status/disable with document_ids body", async () => {
+  await withFetchStub(async (calls) => {
+    await disableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-abc" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, "PATCH");
+    assert.equal(calls[0].url, "https://dify.test/v1/datasets/ds-uuid-plans/documents/status/disable");
+    assert.deepEqual(JSON.parse(calls[0].body), { document_ids: ["doc-abc"] });
+  });
+});
+
+test("enableDocument / disableDocument: symmetric URL pattern (only verb differs)", async () => {
+  await withFetchStub(async (calls) => {
+    await disableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-z" });
+    await enableDocument(STUB_CONFIG, { datasetId: "plans", documentId: "doc-z" });
+    assert.equal(calls[0].url.replace("/disable", "/<VERB>"), calls[1].url.replace("/enable", "/<VERB>"));
+  });
+});
+
+test("enableDocument: missing documentId -> throws", async () => {
+  await assert.rejects(
+    enableDocument(STUB_CONFIG, { datasetId: "plans" }),
+    /enableDocument requires documentId/,
+  );
+});
+
+// ---------- workspace.js shared constants ----------
+//
+// Round-33 extracted WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES into a
+// shared module to eliminate the silent dup between index.js and
+// memory-cli.js. Lock the defaults and the env-var override contract.
+
+test("workspace.js: WORKSPACE_MOUNT + ABSORB_MAX_FILE_BYTES export the expected defaults", async () => {
+  // Read via dynamic import so any side-effects of module load happen
+  // here, and so we can later compare against a re-imported instance
+  // with a different env (skipping that for now — module load happens
+  // once per node process anyway).
+  const ws = await import("../mcp-server/src/workspace.js");
+  assert.equal(typeof ws.WORKSPACE_MOUNT, "string");
+  assert.ok(ws.WORKSPACE_MOUNT.length > 0, "WORKSPACE_MOUNT must be a non-empty string");
+  assert.equal(typeof ws.ABSORB_MAX_FILE_BYTES, "number");
+  assert.ok(ws.ABSORB_MAX_FILE_BYTES > 0, "ABSORB_MAX_FILE_BYTES must be a positive number");
+  // The default when neither env var is set. In CI / test env neither
+  // is set, so we should see the defaults verbatim. If the test runner
+  // runs under a non-default env, this still locks "value is sane."
+  if (!process.env.WORKSPACE_MOUNT) {
+    assert.equal(ws.WORKSPACE_MOUNT, "/workspace");
+  }
+  if (!process.env.ABSORB_MAX_FILE_BYTES) {
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000);
+  }
+});
+
+async function importWorkspaceFresh() {
+  return import(`../mcp-server/src/workspace.js?cacheBust=${Date.now()}-${Math.random()}`);
+}
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES falls back to default on invalid env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    for (const v of ["-1", "0", "not-a-number"]) {
+      process.env.ABSORB_MAX_FILE_BYTES = v;
+      const ws = await importWorkspaceFresh();
+      assert.equal(ws.ABSORB_MAX_FILE_BYTES, 500_000, `value=${v} should fallback to default`);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
+});
+
+test("workspace.js: ABSORB_MAX_FILE_BYTES honors positive env values", async () => {
+  const prev = process.env.ABSORB_MAX_FILE_BYTES;
+  try {
+    process.env.ABSORB_MAX_FILE_BYTES = "1234";
+    const ws = await importWorkspaceFresh();
+    assert.equal(ws.ABSORB_MAX_FILE_BYTES, 1234);
+  } finally {
+    if (prev === undefined) delete process.env.ABSORB_MAX_FILE_BYTES;
+    else process.env.ABSORB_MAX_FILE_BYTES = prev;
+  }
+});
+
+test("workspace.js: inferDefaultProjectModule precedence — explicit override wins", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.inferDefaultProjectModule({
+    MEMORY_DEFAULT_PROJECT_MODULE: "  Auth  ",
+    COMPOSE_PROJECT_NAME: "myproject",
+  });
+  assert.equal(out, "auth");
+});
+
+test("workspace.js: inferDefaultProjectModule falls back to COMPOSE_PROJECT_NAME", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.inferDefaultProjectModule({
+    COMPOSE_PROJECT_NAME: "MyProject-Memory",
+  });
+  assert.equal(out, "myproject-memory");
+});
+
+test("workspace.js: inferDefaultProjectModule returns empty string when nothing set", async () => {
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule({}), "");
+});
+
+test("workspace.js: inferDefaultProjectModule handles explicit null/undefined env defensively", async () => {
+  // Round-38 defensive guard: a caller may pass `null` explicitly instead
+  // of letting the default kick in. Must not throw on
+  // `null.MEMORY_DEFAULT_PROJECT_MODULE`.
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule(null), "");
+  assert.equal(ws.inferDefaultProjectModule(undefined), "");
+  assert.equal(ws.inferDefaultProjectModule("not-an-object"), "");
+  assert.equal(ws.inferDefaultProjectModule(42), "");
+});
+
+// ---------- computeInjectedFilters ----------
+// Locks the transparency contract surfaced by recall_lessons +
+// search_memory: when the bridge auto-injects project_module the
+// response carries an `injectedFilters` field so the LLM/agent can
+// diagnose cross-install migration mismatches.
+
+test("computeInjectedFilters: recall mode injects when caller omits project_module AND default is bound", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: undefined,
+    effectiveProjectModule: "myproject",
+  });
+  assert.deepEqual(out, { project_module: "myproject" });
+});
+
+test("computeInjectedFilters: recall mode returns null when caller passed project_module explicitly", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: "explicit-module",
+    effectiveProjectModule: "explicit-module",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: recall mode returns null when no default is bound", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: undefined,
+    effectiveProjectModule: "",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: search mode injects when caller passed filters{} without project_module", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: { atom_type: "decision" },
+    effectiveProjectModule: "myproject",
+  });
+  assert.deepEqual(out, { project_module: "myproject" });
+});
+
+test("computeInjectedFilters: search mode returns null when caller passed project_module explicitly", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: { atom_type: "decision", project_module: "explicit" },
+    effectiveProjectModule: "myproject",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: search mode returns null when caller passed no filters (cross-project intent)", async () => {
+  // Documented contract: search_memory with no `filters` argument means
+  // "search every project's content". Even if a default is bound, we
+  // must NOT inject it — the caller's intent is explicit.
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: undefined,
+    effectiveProjectModule: "myproject",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: unknown mode returns null defensively", async () => {
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.computeInjectedFilters({ mode: "bogus" }), null);
+  assert.equal(ws.computeInjectedFilters({}), null);
+});
+
+test("workspace.js: inferDefaultProjectModule rejects unrendered bootstrap placeholder", async () => {
+  // If bootstrap.sh is interrupted mid-render, the literal
+  // __COMPOSE_PROJECT_NAME__ may persist in memory/.env and forward into
+  // the bridge container. We must NOT scope recall to that fake module
+  // name — that would silently cross-leak between every broken install.
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "__COMPOSE_PROJECT_NAME__" }), "");
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "__placeholder__" }), "");
+  // Sanity: a real value that just HAPPENS to start with an underscore but
+  // doesn't have the __...__ shape is preserved.
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "_partial" }), "_partial");
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "my_real_project" }), "my_real_project");
+});
+
+test("workspace.js: DEFAULT_PROJECT_MODULE is the resolved snapshot at module load", async () => {
+  // DEFAULT_PROJECT_MODULE is computed once at module load (the bridge
+  // process reads env at startup; values don't change mid-run). The
+  // function inferDefaultProjectModule is what tests should exercise
+  // for varying env. The constant must be a string (possibly empty)
+  // for callers' simple `value || undefined` injection guard.
+  const prevA = process.env.MEMORY_DEFAULT_PROJECT_MODULE;
+  const prevB = process.env.COMPOSE_PROJECT_NAME;
+  try {
+    process.env.MEMORY_DEFAULT_PROJECT_MODULE = "billing";
+    delete process.env.COMPOSE_PROJECT_NAME;
+    const ws = await importWorkspaceFresh();
+    assert.equal(ws.DEFAULT_PROJECT_MODULE, "billing");
+  } finally {
+    if (prevA === undefined) delete process.env.MEMORY_DEFAULT_PROJECT_MODULE;
+    else process.env.MEMORY_DEFAULT_PROJECT_MODULE = prevA;
+    if (prevB === undefined) delete process.env.COMPOSE_PROJECT_NAME;
+    else process.env.COMPOSE_PROJECT_NAME = prevB;
+  }
 });

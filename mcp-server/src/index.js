@@ -6,12 +6,16 @@ import path from "node:path";
 import {
   buildDatasetMap,
   buildMetadataCondition,
+  canonicalFilterKey,
   createDataset,
+  createDatasetMetadataField,
   createDocumentByText,
   deleteDocument,
   disableDocument,
+  enableDocument,
   getConfig,
   listAllDatasets,
+  listAllDocuments,
   maskSecret,
   requireDifyWriteConfig,
   resolveDatasetId,
@@ -20,9 +24,14 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
-
-const WORKSPACE_MOUNT = process.env.WORKSPACE_MOUNT || "/workspace";
-const ABSORB_MAX_FILE_BYTES = Number.parseInt(process.env.ABSORB_MAX_FILE_BYTES || "", 10) || 500_000;
+import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
+import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } from "./workspace.js";
+import {
+  findStalePlans,
+  findMissingMetadata,
+  findStaleProjectLore,
+  findDuplicateErrorPatternLessons,
+} from "./audit.js";
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
@@ -133,7 +142,7 @@ server.registerTool(
   {
     title: "Search project memory",
     description:
-      "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot.",
+      "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot. If you pass `filters` without `project_module`, the bridge auto-injects the host workspace identifier (`COMPOSE_PROJECT_NAME` or `MEMORY_DEFAULT_PROJECT_MODULE` override) so two installs sharing a Dify don't cross-leak. Pass `filters: {project_module: 'foo'}` explicitly to scope elsewhere; pass NO `filters` at all to search every project's content (e.g. for a cross-project pattern check).",
     inputSchema: {
       query: z.string().trim().min(1).max(1000),
       datasets: z.array(z.string().trim().min(1)).optional(),
@@ -162,7 +171,15 @@ server.registerTool(
         );
       }
 
-      const metadataCondition = filters ? buildMetadataCondition(filters) : null;
+      // Auto-inject project_module from the workspace identifier when
+      // caller omits one. Same contract as recall_lessons — caller's
+      // explicit value wins, otherwise default to the install's slice
+      // so cross-project results don't leak. Skip injection when caller
+      // passed no filters at all (treats "any project" as the intent).
+      const effectiveFilters = filters
+        ? (filters.project_module ? filters : { ...filters, ...(DEFAULT_PROJECT_MODULE ? { project_module: DEFAULT_PROJECT_MODULE } : {}) })
+        : null;
+      const metadataCondition = effectiveFilters ? buildMetadataCondition(effectiveFilters) : null;
 
       const limit = maxResults || config.maxResults;
       const settled = await Promise.allSettled(
@@ -194,10 +211,24 @@ server.registerTool(
 
       records.sort((left, right) => (right.score ?? -1) - (left.score ?? -1));
 
+      // Transparency: when the bridge auto-injected project_module
+      // (because caller passed filters but omitted project_module), the
+      // LLM/agent should see what was applied. Without this, a user who
+      // migrated their docs from project_module="myproject" to a bridge
+      // with COMPOSE_PROJECT_NAME="myproject-memory" would see zero hits
+      // and no clue that an auto-filter is filtering them out.
+      // computeInjectedFilters in workspace.js encapsulates the rule.
+      const injectedFilters = computeInjectedFilters({
+        mode: "search",
+        callerFilters: filters,
+        effectiveProjectModule: effectiveFilters?.project_module || null,
+      });
+
       return jsonToolResponse({
         query,
         datasetsSearched: selectedDatasetIds,
         filters: filters || null,
+        injectedFilters,
         scoreThreshold: scoreThreshold ?? null,
         errors,
         totalRecords: records.length,
@@ -328,12 +359,15 @@ server.registerTool(
   },
 );
 
+// Per-document metadata fields installed on every dataset created via
+// create_dataset come from sibling schema.js (top-level import below).
+
 server.registerTool(
   "create_dataset",
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default). Returns the new dataset id; the user (or dify-setup.sh) must then bind it to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in memory/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -343,7 +377,221 @@ server.registerTool(
     try {
       const config = getConfig();
       const created = await createDataset(config, { name, description });
-      return jsonToolResponse({ ok: true, dataset: created });
+      const datasetId = created?.id || created?.dataset?.id;
+      // Best-effort schema install. Per-field failures are aggregated
+      // and returned; they do NOT abort dataset creation since the
+      // user can re-run dify-setup.sh to install missing fields later.
+      const fieldResults = [];
+      const fieldErrors = [];
+      if (datasetId) {
+        for (const fieldName of PER_DOC_METADATA_FIELDS) {
+          try {
+            const r = await createDatasetMetadataField(config, { datasetId, name: fieldName, type: "string" });
+            fieldResults.push({ name: fieldName, ok: true, id: r?.id });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            fieldErrors.push({ name: fieldName, error: msg });
+          }
+        }
+      }
+      // Split semantics: `ok` reports DATASET creation success (the
+      // primary operation); `metadataSchema.complete` separately reports
+      // whether ALL six per-doc fields installed cleanly. A caller seeing
+      // `ok:true, metadataSchema.complete:false` should treat the dataset
+      // as usable but unfilterable until the missing fields are added
+      // (re-run dify-setup.sh, or call create_metadata_field directly).
+      return jsonToolResponse({
+        ok: !!datasetId,
+        dataset: created,
+        metadataSchema: {
+          installed: fieldResults,
+          failed: fieldErrors,
+          complete: fieldErrors.length === 0 && fieldResults.length === PER_DOC_METADATA_FIELDS.length,
+        },
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "delete_document",
+  {
+    title: "Delete a document from a dataset (PERMANENT)",
+    description:
+      "PERMANENT delete of a single document by its Dify document id. Accepts ANY slot — including auto-managed ones (`daily`, `knowledge`, `self_improvement`). Be careful: deleting a `self_improvement` lesson destroys it irrecoverably. Primary safe use: clean up a stale `plan-<old-slug>.md` after a title change. Also valid for retracting any auto-captured / absorbed doc you no longer want indexed. For lessons or compile-managed docs, prefer `disable_document` (reversible) unless you are sure. Find the documentId via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await deleteDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "disable_document",
+  {
+    title: "Disable a document (hide from search) without deleting",
+    description:
+      "Soft-delete: mark a document as disabled so search_memory / recall_lessons stop returning it, but keep it in the Dify UI for audit. Reversible via `enable_document` (or via the Dify UI). Use this when you want to retract a captured plan or lesson without losing the historical record.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await disableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+server.registerTool(
+  "enable_document",
+  {
+    title: "Re-enable a previously disabled document",
+    description:
+      "Symmetric counterpart to `disable_document`: brings a disabled doc back into search_memory / recall_lessons results. No-op (returns success) if the doc is already enabled. Use when you change your mind about a soft-delete.",
+    inputSchema: {
+      dataset: z.string().trim().min(1),
+      documentId: z.string().trim().min(1),
+    },
+  },
+  async ({ dataset, documentId }) => {
+    try {
+      const config = getConfig();
+      const datasetId = resolveDatasetId(config, dataset);
+      const result = await enableDocument(config, { datasetId, documentId });
+      return jsonToolResponse({ ok: true, datasetId, documentId, result });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+const AUDIT_CLASSES = z.enum([
+  "stale-plans",
+  "missing-metadata",
+  "stale-project-lore",
+  "duplicate-error-pattern",
+]);
+
+server.registerTool(
+  "audit_memory",
+  {
+    title: "Audit memory for stale or low-quality documents (list-only)",
+    description:
+      "Walk the bound dataset slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes, each with a targeted slot walk: `stale-plans` walks ONLY the `plans` slot (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames); `missing-metadata` walks `knowledge`, `self_improvement`, and (if bound) the legacy `default` slot (atom_type-specific required fields absent — un-filterable in future recall); `stale-project-lore` walks ONLY `knowledge` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days; project-lore is documented as decaying fast); `duplicate-error-pattern` walks ONLY `self_improvement` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via the deterministic same-error_pattern dedup compile.mjs enforces going forward). Partial success: if a per-slot list call fails OR hits the 10000-doc pagination ceiling, the error/warning is surfaced in the response's `errors[]` array and the audit continues with the remaining slots. Always check `errors[]` to understand how complete the result is.",
+    inputSchema: {
+      classes: z.array(AUDIT_CLASSES).optional(),
+      staleLoreDays: z.number().int().min(1).max(3650).optional(),
+    },
+  },
+  async ({ classes, staleLoreDays }) => {
+    try {
+      const config = getConfig();
+      const requested = Array.isArray(classes) && classes.length > 0
+        ? new Set(classes)
+        : new Set(["stale-plans", "missing-metadata", "stale-project-lore", "duplicate-error-pattern"]);
+
+      const days = staleLoreDays
+        || Number.parseInt(process.env.MEMORY_AUDIT_LORE_STALE_DAYS || "", 10)
+        || 90;
+
+      const findings = [];
+      const errors = [];
+
+      // Slots-to-walk is the union of slots each requested class needs.
+      // missing-metadata only inspects atom_types that appear in
+      // REQUIRED_METADATA_BY_TYPE (self-improvement-lesson, bug-root-cause),
+      // which live in `self_improvement` and `knowledge` plus the legacy
+      // `default` slot used by installs that set DIFY_WRITE_DATASET_ID
+      // before the typed-slot rollout. The `plans` slot is intentionally
+      // excluded for missing-metadata — `atom_type: plan` has no required
+      // metadata fields, so walking plans would be a no-op cost.
+      // stale-project-lore similarly only inspects `project-lore` atoms,
+      // which live in `knowledge` (+ `default` for legacy installs).
+      const slotsToWalk = new Set();
+      if (requested.has("stale-plans")) slotsToWalk.add("plans");
+      if (requested.has("missing-metadata")) {
+        slotsToWalk.add("knowledge");
+        slotsToWalk.add("self_improvement");
+        if (config.datasetMap.has("default")) slotsToWalk.add("default");
+      }
+      if (requested.has("stale-project-lore")) {
+        slotsToWalk.add("knowledge");
+        if (config.datasetMap.has("default")) slotsToWalk.add("default");
+      }
+      if (requested.has("duplicate-error-pattern")) slotsToWalk.add("self_improvement");
+
+      const docsBySlot = {};
+      // listAllDocuments paginates 100 docs/page up to 100 pages = 10000
+      // docs/slot ceiling. A slot that returns EXACTLY 10000 docs is
+      // almost certainly truncated; surface a warning so the audit
+      // doesn't silently miss the tail. Real installs have <1k docs/slot.
+      const LIST_ALL_CEILING = 10_000;
+      for (const slot of slotsToWalk) {
+        const entry = config.datasetMap.get(slot);
+        if (!entry?.id) continue;
+        try {
+          const docs = await listAllDocuments(config, { datasetId: entry.id });
+          docsBySlot[slot] = docs;
+          if (docs.length >= LIST_ALL_CEILING) {
+            errors.push({
+              slot,
+              error: `listAllDocuments hit the ${LIST_ALL_CEILING}-doc pagination ceiling; audit may be incomplete. Consider filtering by keyword or splitting the dataset.`,
+              kind: "warning",
+            });
+          }
+        } catch (err) {
+          errors.push({ slot, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      if (requested.has("stale-plans") && docsBySlot.plans) {
+        findings.push(...findStalePlans(docsBySlot.plans));
+      }
+      if (requested.has("missing-metadata")) {
+        if (docsBySlot.knowledge) findings.push(...findMissingMetadata(docsBySlot.knowledge, "knowledge"));
+        if (docsBySlot.self_improvement) findings.push(...findMissingMetadata(docsBySlot.self_improvement, "self_improvement"));
+        if (docsBySlot.default) findings.push(...findMissingMetadata(docsBySlot.default, "default"));
+      }
+      if (requested.has("stale-project-lore")) {
+        if (docsBySlot.knowledge) findings.push(...findStaleProjectLore(docsBySlot.knowledge, "knowledge", days));
+        if (docsBySlot.default) findings.push(...findStaleProjectLore(docsBySlot.default, "default", days));
+      }
+      if (requested.has("duplicate-error-pattern") && docsBySlot.self_improvement) {
+        findings.push(...findDuplicateErrorPatternLessons(docsBySlot.self_improvement, "self_improvement"));
+      }
+
+      const summary = {
+        totalFindings: findings.length,
+        byClass: findings.reduce((acc, f) => {
+          acc[f.class] = (acc[f.class] || 0) + 1;
+          return acc;
+        }, {}),
+        bySlot: findings.reduce((acc, f) => {
+          acc[f.slot] = (acc[f.slot] || 0) + 1;
+          return acc;
+        }, {}),
+        staleLoreDaysUsed: days,
+      };
+      return jsonToolResponse({ ok: true, findings, summary, errors });
     } catch (error) {
       return errorToolResponse(error);
     }
@@ -446,7 +694,7 @@ server.registerTool(
 
       // Build the per-document metadata map; OMIT empty fields so Dify
       // treats them as absent rather than `is ""` matchable.
-      const fullMetadata = { atom_type: "self-improvement-lesson" };
+      const fullMetadata = { atom_type: LESSON_ATOM_TYPE };
       if (tagList.length > 0) fullMetadata.tags = tagList.join(",");
       if (metadata.project_module) fullMetadata.project_module = metadata.project_module;
       if (metadata.language) fullMetadata.language = metadata.language;
@@ -484,7 +732,7 @@ server.registerTool(
   {
     title: "Recall relevant self-improvement lessons before related work",
     description:
-      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons).",
+      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons). If you OMIT `project_module`, the bridge auto-injects the host workspace identifier (from `COMPOSE_PROJECT_NAME`, or `MEMORY_DEFAULT_PROJECT_MODULE` if set) so two installs on different host projects don't see each other's lessons. Your explicit value always wins; OMIT `project_module` entirely to get the auto-inferred default (the input schema requires a non-empty string, so there is no empty-string sentinel — just leave the field out).",
     inputSchema: {
       query: z.string().trim().min(1).max(1000),
       project_module: z.string().trim().min(1).optional(),
@@ -510,9 +758,16 @@ server.registerTool(
       const threshold = scoreThreshold ?? 0.55;
       const lessonDatasetId = resolveDatasetId(config, lessonSlot);
 
+      // Default project_module to the workspace identifier when caller
+      // omits one. Two installs of the boilerplate on different host
+      // projects share Dify but should not see each other's lessons by
+      // default — the workspace-derived identifier scopes recall to
+      // this install's slice. Caller's explicit value always wins.
+      const effectiveProjectModule = project_module || DEFAULT_PROJECT_MODULE || undefined;
+
       const baseFilters = {
-        atom_type: "self-improvement-lesson",
-        ...(project_module ? { project_module } : {}),
+        atom_type: LESSON_ATOM_TYPE,
+        ...(effectiveProjectModule ? { project_module: effectiveProjectModule } : {}),
         ...(language ? { language } : {}),
         ...(task_type ? { task_type } : {}),
         ...(error_pattern ? { error_pattern } : {}),
@@ -539,11 +794,13 @@ server.registerTool(
         ladderRaw.push(next);
       }
       // Dedup adjacent identical filter sets so we don't run the same
-      // Dify call twice when the caller skipped a field.
+      // Dify call twice when the caller skipped a field. canonicalFilterKey
+      // sorts keys before stringifying so two filter sets with the same
+      // content but different insertion order hash identically.
       const ladder = [];
       let prevKey = null;
       for (const f of ladderRaw) {
-        const key = JSON.stringify(f);
+        const key = canonicalFilterKey(f);
         if (key !== prevKey) ladder.push(f);
         prevKey = key;
       }
@@ -597,15 +854,15 @@ server.registerTool(
       });
 
       const supplementary = [];
-      if (includeKnowledge !== false && project_module) {
+      if (includeKnowledge !== false && effectiveProjectModule) {
         const knowledgeSlot = config.datasetMap.get("knowledge")?.id ? "knowledge" : null;
         if (knowledgeSlot) {
           const knowledgeId = resolveDatasetId(config, knowledgeSlot);
-          for (const t of ["bug-root-cause", "feedback-rule"]) {
+          for (const t of KNOWLEDGE_CROSSREF_ATOM_TYPES) {
             const records = await retrieveChunks(config, {
               datasetId: knowledgeId,
               query,
-              metadataCondition: buildMetadataCondition({ atom_type: t, project_module }),
+              metadataCondition: buildMetadataCondition({ atom_type: t, project_module: effectiveProjectModule }),
               scoreThreshold: threshold,
             });
             for (const r of records.slice(0, 1)) {
@@ -626,10 +883,24 @@ server.registerTool(
       // whenever lessonHits.length >= limit.
       const all = [...lessonHits.slice(0, limit), ...supplementary];
 
+      // Transparency: when the bridge auto-injected project_module
+      // (because caller omitted it and DEFAULT_PROJECT_MODULE is bound),
+      // surface that in the response so the LLM/agent can spot a
+      // cross-install migration mismatch (docs written with one project
+      // module, recall scoped to a different one returns empty results
+      // without any other clue). computeInjectedFilters in workspace.js
+      // encapsulates the rule for both this tool and search_memory.
+      const injectedFilters = computeInjectedFilters({
+        mode: "recall",
+        callerProjectModule: project_module,
+        effectiveProjectModule,
+      });
+
       return jsonToolResponse({
         query,
         lessonDataset: lessonSlot,
         ladderUsed: rungAttribution,
+        injectedFilters,
         scoreThreshold: threshold,
         lessonHits: lessonHits.length,
         supplementaryHits: supplementary.length,

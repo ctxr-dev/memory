@@ -1,7 +1,7 @@
 const PATTERNS = [
   [/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]"],
   [/(api[_-]?key|secret|token|password)(["'\s:=]+)[^"'\s]+/gi, "$1$2[REDACTED]"],
-  [/\bsk-[A-Za-z0-9_-]{16,}\b/g, "sk-[REDACTED]"],
+  [/\bsk-(?!ant-)[A-Za-z0-9_-]{16,}\b/g, "sk-[REDACTED]"],
   [/\bctx7sk-[A-Za-z0-9_-]{16,}\b/g, "ctx7sk-[REDACTED]"],
   [/\bghp_[A-Za-z0-9]{20,}\b/g, "ghp_[REDACTED]"],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "github_pat_[REDACTED]"],
@@ -27,6 +27,24 @@ const PATTERNS = [
   // newlines inside the block don't terminate the match. Covers
   // RSA/EC/DSA/OPENSSH/'ENCRYPTED' variants via [A-Z ]*.
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED-PRIVATE-KEY]"],
+  // Anthropic keys (sk-ant-...).
+  [/\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, "sk-ant-[REDACTED]"],
+  // Database connection URLs with credentials in the userinfo segment:
+  //   postgres://user:pw@host/db, postgresql://, mysql://, mongodb://,
+  //   mongodb+srv://, redis://, amqp://. Replaces the userinfo only,
+  //   leaves the routing visible (host/db) so the message still tells
+  //   the reader WHICH DB.
+  [/\b((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|rediss):\/\/)[^\s:@\/]+:[^\s@\/]+@/gi, "$1[REDACTED]:[REDACTED]@"],
+  // Azure Storage account keys (AccountKey=...; in connection strings).
+  // The key is base64 + padding, ~80 chars; the connection string itself
+  // is semicolon-separated key=value pairs.
+  [/\bAccountKey=([A-Za-z0-9+/=]{20,})/g, "AccountKey=[REDACTED]"],
+  // Azure SAS tokens (sig=... in URLs). The signature is the part that
+  // grants access; the rest of the URL is routing.
+  [/([?&]sig=)[A-Za-z0-9%/+=_-]{20,}/gi, "$1[REDACTED]"],
+  // npm authToken from .npmrc-style config:
+  //   //registry.npmjs.org/:_authToken=...
+  [/(\/\/[^/\s]+\/:_authToken=)[A-Za-z0-9_=-]+/g, "$1[REDACTED]"],
 ];
 
 export function redact(text) {

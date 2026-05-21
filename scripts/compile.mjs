@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue } from "./lib/env.mjs";
+import { pathToFileURL } from "node:url";
+import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue, atomBodyMaxChars } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
@@ -25,6 +26,12 @@ const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
 const SEARCH_LIMIT = envInt("MEMORY_COMPILE_SEARCH_LIMIT", 5);
 const METADATA_RETRY_LIMIT = envInt("MEMORY_COMPILE_METADATA_RETRY_LIMIT", 3);
+// When true, atoms failing scoreAtomQuality are dropped before promotion.
+// Default false: log the verdict but keep the existing conservative
+// behaviour so the v0.1.0 cut doesn't silently change what makes it into
+// the knowledge store. Opt in via MEMORY_COMPILE_QUALITY_STRICT=true once
+// the rubric is tuned.
+const QUALITY_STRICT = String(envValue("MEMORY_COMPILE_QUALITY_STRICT", "")).toLowerCase() === "true";
 
 function defaultState() {
   return {
@@ -66,7 +73,7 @@ function todayUtcDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function parseAtomsFromMarkdown(text) {
+export function parseAtomsFromMarkdown(text) {
   const atoms = [];
   const blocks = text.split(/\n(?=### Atom )/);
   for (const block of blocks) {
@@ -98,16 +105,35 @@ function parseAtomsFromMarkdown(text) {
           tags = inner ? inner.split(",").map((t) => t.trim()).filter(Boolean) : [];
           break;
         }
-        case "metadata":
-          try { metadata = JSON.parse(rest.trim()) || {}; } catch { metadata = {}; }
+        case "metadata": {
+          try {
+            const parsed = JSON.parse(rest.trim());
+            metadata = (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+          } catch {
+            metadata = {};
+          }
           break;
+        }
         case "body":
           if (rest.trim() === "|") inBody = true;
           else body = rest.trim();
           break;
-        case "evidence":
-          try { evidence = JSON.parse(rest.trim()); } catch { evidence = rest.trim(); }
+        case "evidence": {
+          // flush.mjs always JSON.stringifies the evidence string, so a
+          // valid daily produces a JSON-encoded one-liner here (newlines
+          // and embedded quotes are escape-encoded). Hand-edited dailies
+          // may carry a raw string, so fall back to the trimmed literal
+          // on parse failure. Guard the unusual case where parse succeeds
+          // but yields a non-string (e.g. evidence: null) — coerce.
+          const raw = rest.trim();
+          try {
+            const parsed = JSON.parse(raw);
+            evidence = typeof parsed === "string" ? parsed : raw;
+          } catch {
+            evidence = raw;
+          }
           break;
+        }
         default: break;
       }
     }
@@ -125,7 +151,9 @@ function parseAtomsFromMarkdown(text) {
 }
 
 function loadPrompt() {
-  return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8");
+  const cap = atomBodyMaxChars();
+  return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8")
+    .replace(/\{\{ATOM_BODY_MAX_CHARS\}\}/g, String(cap));
 }
 
 function targetDatasetForAtom(atom) {
@@ -195,7 +223,89 @@ function buildPromotedDocText(atom, mergedTextOverride) {
   return lines.join("\n").concat("\n");
 }
 
+// Deterministic short-circuit for self-improvement-lessons that share an
+// error_pattern with an existing candidate. compileFilters already filters
+// candidates by `error_pattern` server-side when the atom has one set, so
+// any returned candidate is by definition a same-pattern match. Lessons
+// must converge into ONE canonical doc per error pattern (this is the
+// documented contract in prompts/flush.md + prompts/compile.md), so the
+// only sane action is `update` against the top candidate. Skipping the
+// LLM here keeps the rule from drifting on prompt edits and saves a
+// round-trip per same-pattern lesson.
+//
+// IMPORTANT: this is a REPLACE, not a true merge. The prompt contract
+// for `update` says "Preserves the WHY and HOW-TO-APPLY lines from BOTH
+// atoms" — but that merge requires the LLM. Here we set
+// `merged_text = atom.body` (the new atom only). The deliberate trade:
+// (a) the new atom is the most recent ground truth on the failure
+//     mode, per prompts/compile.md's "the new one wins" rule for
+//     contradictions;
+// (b) cost: we lose any evidence the OLD doc had that the new one
+//     doesn't repeat. In practice the old doc is itself a prior
+//     compile-merged lesson, so losing one round of merged context
+//     is a one-time cost, not cumulative;
+// (c) benefit: zero LLM tokens per same-pattern lesson, and no risk
+//     of the LLM hallucinating a wrong documentId (the long-standing
+//     LLMOutputInvalid failure mode in executeAction's update path).
+// If you need a real merge here someday, swap `atom.body` for an
+// LLM-merged string but keep the bypass when the LLM is unavailable.
+// Heuristic quality rubric for `create` actions. Cheap (no LLM, just
+// inspections) signals that an atom is high-signal-density and worth
+// persisting. Returns { ok: boolean, reasons: string[] }. Reasons are
+// human-readable strings safe to log. Used by compile.mjs when
+// MEMORY_COMPILE_QUALITY_STRICT=true to drop low-signal atoms before
+// they pollute retrieval. Default lax mode (env-var unset/false) only
+// surfaces the verdict for forensics; the atom is still promoted.
+//
+// Rubric (every rule must pass):
+// 1. `body` length >= 80 chars — under that, the atom is usually a
+//    one-liner that adds no context beyond the title.
+// 2. At least one tag — recall surfaces atoms via tags and content; an
+//    untagged atom only matches on the title/body embedding.
+// 3. `evidence` present OR body contains a "Why:" or "How to apply:"
+//    line — structured atoms ("Why" + "How to apply") are the
+//    documented format in prompts/flush.md; an unstructured wall of
+//    text is usually narrative leaking through.
+// 4. For `self-improvement-lesson` and `bug-root-cause`:
+//    `metadata.project_module` is set — these atoms are the most
+//    metadata-dependent in retrieval (recall_lessons filters by
+//    project_module by default). An atom without one is invisible to
+//    the scoped recall path.
+export function scoreAtomQuality(atom) {
+  const reasons = [];
+  const body = String(atom?.body || "");
+  if (body.length < 80) reasons.push("body too short (<80 chars)");
+  const tags = Array.isArray(atom?.tags) ? atom.tags.filter(Boolean) : [];
+  if (tags.length === 0) reasons.push("no tags");
+  const hasEvidence = Boolean(String(atom?.evidence || "").trim());
+  const hasWhyOrHowTo = /(^|\n)\s*(why|how to apply)\s*:/i.test(body);
+  if (!hasEvidence && !hasWhyOrHowTo) reasons.push("no evidence and no 'Why:' / 'How to apply:' lines");
+  const metadataDependentTypes = new Set(["self-improvement-lesson", "bug-root-cause"]);
+  if (metadataDependentTypes.has(atom?.type) && !atom?.metadata?.project_module) {
+    reasons.push(`type='${atom.type}' requires metadata.project_module`);
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+export function forcedLessonUpdate(atom, candidates) {
+  if (!atom || typeof atom !== "object") return null;
+  if (atom.type !== "self-improvement-lesson") return null;
+  if (!atom.metadata?.error_pattern) return null;
+  if (!candidates || candidates.length === 0) return null;
+  const top = candidates[0];
+  if (!top?.documentId) return null;
+  return {
+    action: "update",
+    supersedes: top.documentId,
+    merged_text: atom.body,
+    merged_name: atom.title,
+    reason: `forced update: same error_pattern='${atom.metadata.error_pattern}' as candidate ${top.documentId}`,
+  };
+}
+
 async function decideAction(atom, candidates, systemPrompt) {
+  const forced = forcedLessonUpdate(atom, candidates);
+  if (forced) return forced;
   const userPrompt = [
     "NEW ATOM:",
     JSON.stringify(atom, null, 2),
@@ -363,6 +473,48 @@ async function main() {
 
     let allOk = true;
     for (const atom of atoms) {
+      // Defence in depth: `plan` is in ATOM_TYPES so the schema-level
+      // routing table accepts it, but plans are produced exclusively by
+      // the ExitPlanMode hook (upsert-by-name into the `plans` slot).
+      // flush.mjs already drops `type:plan` atoms before write, but a
+      // hand-edited daily could still slip one through and produce a
+      // `knowledge-*.md`-named doc inside the plans slot. Drop it here
+      // too so promotion can never leak.
+      if (atom.type === "plan") {
+        console.error(
+          `compile.mjs: dropping atom with type='plan' (source='${daily.name}', title='${String(atom.title).slice(0, 40)}'); plans are written only by the ExitPlanMode hook`,
+        );
+        appendCompileLog({ event: "atom-skip-plan", source: daily.name, atomTitle: atom.title });
+        continue;
+      }
+      // Quality rubric: in strict mode (MEMORY_COMPILE_QUALITY_STRICT=true)
+      // atoms failing the heuristic checks are dropped before any LLM
+      // round-trip. In lax mode (default) we still surface the verdict in
+      // the compile log so the user can decide whether to tighten the
+      // signal-density floor. The rubric is intentionally conservative:
+      // false negatives here are atoms that should never have been kept.
+      const quality = scoreAtomQuality(atom);
+      if (!quality.ok) {
+        if (QUALITY_STRICT) {
+          console.error(
+            `compile.mjs: dropping low-quality atom (source='${daily.name}', title='${String(atom.title).slice(0, 40)}'): ${quality.reasons.join("; ")}`,
+          );
+          appendCompileLog({
+            event: "atom-skip-low-quality",
+            source: daily.name,
+            atomTitle: atom.title,
+            reasons: quality.reasons,
+            strict: true,
+          });
+          continue;
+        }
+        appendCompileLog({
+          event: "atom-low-quality-warn",
+          source: daily.name,
+          atomTitle: atom.title,
+          reasons: quality.reasons,
+        });
+      }
       const targetDataset = targetDatasetForAtom(atom);
       try {
         const candidates = await dedupCandidates(atom, targetDataset);
@@ -393,6 +545,16 @@ async function main() {
           );
         }
 
+        // Explicit 3-state log: "ok" (clean write), "warning" (schema missing
+        // on dataset; doc is un-filterable but no retry — config issue),
+        // "failed" (transient/bridge error; daily kept enabled for retry).
+        // undefined when no metadata was attempted (no fields to write).
+        let metadataApplied;
+        if (!metadataResult) metadataApplied = undefined;
+        else if (metadataResult.ok === true && !metadataResult.warning) metadataApplied = "ok";
+        else if (metadataResult.ok === true && metadataResult.warning) metadataApplied = "warning";
+        else metadataApplied = "failed";
+
         appendCompileLog({
           event: "atom",
           source: daily.name,
@@ -401,7 +563,7 @@ async function main() {
           action: decision.action,
           supersedes: decision.supersedes,
           dryRun: DRY_RUN,
-          metadataApplied: metadataResult?.ok === true && !metadataResult?.warning ? true : (metadataResult ? false : undefined),
+          metadataApplied,
           metadataWarning: metadataWarning || undefined,
           metadataError: metadataResult?.error || metadataResult?.reason,
         });
@@ -497,4 +659,26 @@ async function main() {
   );
 }
 
-await main();
+// Run main() only when invoked as a script, not when imported by tests.
+// Mirrors the hardened isMainModule idiom in scripts/hooks/exit-plan-mode.mjs:
+//   - `!process.argv[1]` guards REPL / `node -e '...'` / piped stdin where
+//     argv[1] is undefined (pathToFileURL(undefined) would throw).
+//   - `path.resolve(process.argv[1])` normalises a relative argv[1]
+//     (`node scripts/compile.mjs`) to an absolute path before comparison,
+//     so it matches the absolute `import.meta.url` regardless of how the
+//     launcher passed the path.
+//   - try/catch makes the guard fail closed (no main()) if pathToFileURL
+//     ever throws on an exotic argv[1] shape, rather than crashing import.
+// pathToFileURL handles Windows drive letters / UNC paths / percent-encoding.
+const invokedAsCli = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedAsCli) {
+  await main();
+}
