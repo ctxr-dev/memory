@@ -121,6 +121,8 @@ optional). Re-created on every successful setup/up run.
 EOF
 then
   echo "warning: could not write README.txt into the snapshot." >&2
+else
+  snapped+=("README.txt")
 fi
 
 # Only claim a snapshot when something was actually captured.

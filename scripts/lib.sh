@@ -26,9 +26,13 @@ MEMORY_ENV="$MEMORY_DIR/.env"
 # $HOME and the resolved form of $HOME. On Linux it is common for $HOME to
 # itself be a symlink (e.g. /home/foo -> /mnt/data/foo); without resolving,
 # the string comparison would miss and the guard would silently fail.
-home_resolved="$(cd "$HOME" 2>/dev/null && pwd -P 2>/dev/null || echo "$HOME")"
+# ${HOME:-} throughout: this file runs under `set -u` and HOME can be unset
+# in minimal environments (env -i, some CI/cron). When HOME is empty the
+# home-equality arms simply never match (an empty WORKSPACE_DIR is impossible
+# here, it is pwd -P-resolved), and the / and /root arms still guard root.
+home_resolved="$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P 2>/dev/null || echo "${HOME:-}")"
 case "$WORKSPACE_DIR" in
-  "$HOME"|"$home_resolved"|/|/root)
+  "${HOME:-/nonexistent-home}"|"${home_resolved:-/nonexistent-home}"|/|/root)
     echo "FATAL: WORKSPACE_DIR resolves to '$WORKSPACE_DIR', which is your home or root." >&2
     echo "  Clone the boilerplate INTO a project subdirectory:" >&2
     echo "    cd ~/your-project && git clone <repo> ./memory" >&2
@@ -53,11 +57,14 @@ resolve_docker_bin() {
   # CI/cron). Referencing them bare would abort before the caller's
   # canonical require_cmd error. HOME-based candidates are skipped when HOME
   # is empty so we never probe "/.rd/bin/docker".
+  # `local` keeps the temporaries out of the SOURCING shell (lib.sh is sourced,
+  # not executed, so bare assignments would leak / collide with caller vars).
+  local _dkr_dir candidate candidates
   # Explicit override wins.
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
     _dkr_dir="$(dirname "$DOCKER_BIN")"
     if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
-    export PATH; unset _dkr_dir
+    export PATH
     return 0
   fi
 
@@ -82,7 +89,7 @@ $candidates"
       export DOCKER_BIN="$candidate"
       _dkr_dir="$(dirname "$candidate")"
       if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
-      export PATH; unset _dkr_dir
+      export PATH
       # Quiet by default (lib.sh is sourced by scripts that emit machine-
       # readable output, e.g. mcp-config.sh). Set MEMORY_DEBUG=1 to surface.
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "lib.sh: using docker from $candidate" >&2; fi
