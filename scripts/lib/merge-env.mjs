@@ -49,16 +49,16 @@ export function mergeEnvTemplate(templateText, targetText, { now = new Date() } 
   if (addedKeys.length === 0) return { merged: targetText, addedKeys };
 
   const stamp = now.toISOString().slice(0, 10);
-  // Ensure exactly one blank line before the appended block.
-  const base = targetText.replace(/\s*$/, "");
-  const block = [
-    "",
-    "",
-    `# ---- New keys merged from .env.example on ${stamp} ----`,
-    ...addLines,
-    "",
-  ].join("\n");
-  return { merged: base + block, addedKeys };
+  // Strictly append-only: preserve the target's existing bytes exactly, and
+  // pick a separator so the block starts after exactly one blank line.
+  let sep;
+  if (targetText === "" || targetText.endsWith("\n\n")) sep = "";
+  else if (targetText.endsWith("\n")) sep = "\n";
+  else sep = "\n\n";
+  const block =
+    sep +
+    [`# ---- New keys merged from .env.example on ${stamp} ----`, ...addLines, ""].join("\n");
+  return { merged: targetText + block, addedKeys };
 }
 
 // CLI: node merge-env.mjs <template> <target>

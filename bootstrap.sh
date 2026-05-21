@@ -478,7 +478,8 @@ set_env_unique() {
     echo "FATAL: $file is not readable; refusing to rewrite it (would drop your key/bindings). Fix its ownership/permissions and re-run." >&2
     exit 1
   fi
-  tmp="$(mktemp)"
+  # Explicit template: portable across GNU and BSD/macOS mktemp.
+  tmp="$(mktemp "${TMPDIR:-/tmp}/memory-env.XXXXXX")"
   if [ -f "$file" ]; then
     # grep exit 1 (no surviving lines, e.g. the file held only this key) is
     # fine; exit >=2 is a real read error, so abort instead of truncating.
