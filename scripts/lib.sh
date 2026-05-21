@@ -84,6 +84,12 @@ $HOME/.colima/default/bin/docker
 $candidates"
   fi
   while IFS= read -r candidate; do
+    # Defensively strip leading/trailing whitespace so a future edit that
+    # accidentally indents an entry in the heredoc above can never bake a
+    # leading space into the probed path. Internal spaces (the Rancher app
+    # bundle path) are preserved. bash-3.2 portable.
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%"${candidate##*[![:space:]]}"}"
     [ -n "$candidate" ] || continue
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
