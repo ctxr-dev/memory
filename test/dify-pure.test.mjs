@@ -507,6 +507,81 @@ test("workspace.js: inferDefaultProjectModule handles explicit null/undefined en
   assert.equal(ws.inferDefaultProjectModule(42), "");
 });
 
+// ---------- computeInjectedFilters ----------
+// Locks the transparency contract surfaced by recall_lessons +
+// search_memory: when the bridge auto-injects project_module the
+// response carries an `injectedFilters` field so the LLM/agent can
+// diagnose cross-install migration mismatches.
+
+test("computeInjectedFilters: recall mode injects when caller omits project_module AND default is bound", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: undefined,
+    effectiveProjectModule: "myproject",
+  });
+  assert.deepEqual(out, { project_module: "myproject" });
+});
+
+test("computeInjectedFilters: recall mode returns null when caller passed project_module explicitly", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: "explicit-module",
+    effectiveProjectModule: "explicit-module",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: recall mode returns null when no default is bound", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "recall",
+    callerProjectModule: undefined,
+    effectiveProjectModule: "",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: search mode injects when caller passed filters{} without project_module", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: { atom_type: "decision" },
+    effectiveProjectModule: "myproject",
+  });
+  assert.deepEqual(out, { project_module: "myproject" });
+});
+
+test("computeInjectedFilters: search mode returns null when caller passed project_module explicitly", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: { atom_type: "decision", project_module: "explicit" },
+    effectiveProjectModule: "myproject",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: search mode returns null when caller passed no filters (cross-project intent)", async () => {
+  // Documented contract: search_memory with no `filters` argument means
+  // "search every project's content". Even if a default is bound, we
+  // must NOT inject it — the caller's intent is explicit.
+  const ws = await importWorkspaceFresh();
+  const out = ws.computeInjectedFilters({
+    mode: "search",
+    callerFilters: undefined,
+    effectiveProjectModule: "myproject",
+  });
+  assert.equal(out, null);
+});
+
+test("computeInjectedFilters: unknown mode returns null defensively", async () => {
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.computeInjectedFilters({ mode: "bogus" }), null);
+  assert.equal(ws.computeInjectedFilters({}), null);
+});
+
 test("workspace.js: inferDefaultProjectModule rejects unrendered bootstrap placeholder", async () => {
   // If bootstrap.sh is interrupted mid-render, the literal
   // __COMPOSE_PROJECT_NAME__ may persist in memory/.env and forward into

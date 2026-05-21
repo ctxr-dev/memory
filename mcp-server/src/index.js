@@ -25,7 +25,7 @@ import {
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
 import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
-import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE } from "./workspace.js";
+import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } from "./workspace.js";
 import {
   findStalePlans,
   findMissingMetadata,
@@ -217,9 +217,12 @@ server.registerTool(
       // migrated their docs from project_module="myproject" to a bridge
       // with COMPOSE_PROJECT_NAME="myproject-memory" would see zero hits
       // and no clue that an auto-filter is filtering them out.
-      const injectedFilters = (effectiveFilters && filters && !filters.project_module && effectiveFilters.project_module)
-        ? { project_module: effectiveFilters.project_module }
-        : null;
+      // computeInjectedFilters in workspace.js encapsulates the rule.
+      const injectedFilters = computeInjectedFilters({
+        mode: "search",
+        callerFilters: filters,
+        effectiveProjectModule: effectiveFilters?.project_module || null,
+      });
 
       return jsonToolResponse({
         query,
@@ -885,10 +888,13 @@ server.registerTool(
       // surface that in the response so the LLM/agent can spot a
       // cross-install migration mismatch (docs written with one project
       // module, recall scoped to a different one returns empty results
-      // without any other clue).
-      const injectedFilters = (!project_module && effectiveProjectModule)
-        ? { project_module: effectiveProjectModule }
-        : null;
+      // without any other clue). computeInjectedFilters in workspace.js
+      // encapsulates the rule for both this tool and search_memory.
+      const injectedFilters = computeInjectedFilters({
+        mode: "recall",
+        callerProjectModule: project_module,
+        effectiveProjectModule,
+      });
 
       return jsonToolResponse({
         query,

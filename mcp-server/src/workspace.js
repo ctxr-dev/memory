@@ -53,3 +53,33 @@ export function inferDefaultProjectModule(env = process.env) {
 }
 
 export const DEFAULT_PROJECT_MODULE = inferDefaultProjectModule();
+
+// Compute the `injectedFilters` envelope field surfaced by recall_lessons
+// + search_memory. Returns null when no filter was auto-injected; returns
+// `{ project_module: <value> }` when the bridge applied the workspace
+// identifier because the caller omitted project_module.
+//
+// Used by both recall_lessons (which always injects if caller omitted
+// project_module and DEFAULT is bound) and search_memory (which injects
+// only when caller passed a filters object without project_module —
+// passing no filters at all is treated as "search every project").
+//
+// The `mode` parameter distinguishes the two: "recall" matches recall_lessons
+// semantics (inject when caller omits project_module); "search" matches
+// search_memory semantics (inject only when caller passed filters but
+// omitted project_module).
+export function computeInjectedFilters({ mode, callerProjectModule, callerFilters, effectiveProjectModule }) {
+  if (mode === "recall") {
+    if (!callerProjectModule && effectiveProjectModule) {
+      return { project_module: effectiveProjectModule };
+    }
+    return null;
+  }
+  if (mode === "search") {
+    if (callerFilters && !callerFilters.project_module && effectiveProjectModule) {
+      return { project_module: effectiveProjectModule };
+    }
+    return null;
+  }
+  return null;
+}

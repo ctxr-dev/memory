@@ -49,7 +49,13 @@ export async function withFetchStub(fn, { responseFn = DEFAULT_RESPONSE } = {}) 
   const calls = [];
   const original = globalThis.fetch;
   const stub = async (url, opts) => {
-    const call = { url: String(url), method: opts?.method, body: opts?.body };
+    // Capture headers in addition to method + body so tests can lock
+    // contract-critical request shape (e.g. Bearer auth on the Dify
+    // create-by-text endpoint, Content-Type alignment). Headers are
+    // copied (not referenced) so test-side mutation of the captured
+    // object cannot accidentally influence subsequent calls.
+    const headers = opts?.headers ? { ...opts.headers } : {};
+    const call = { url: String(url), method: opts?.method, body: opts?.body, headers };
     calls.push(call);
     return responseFn(call);
   };

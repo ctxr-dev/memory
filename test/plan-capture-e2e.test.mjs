@@ -84,7 +84,12 @@ test("plan-capture E2E: omits process_rule when sessionProcessRule is undefined"
   });
 });
 
-test("plan-capture E2E: Bearer auth header is set correctly", async () => {
+test("plan-capture E2E: Bearer auth header carries the configured apiKey", async () => {
+  // Locks the wire-level auth contract for plan capture. A regression
+  // in createDocumentByText that dropped or mis-named the Authorization
+  // header would otherwise only surface as a Dify 401 at user runtime;
+  // round-38's withFetchStub upgrade now captures headers so we can
+  // assert directly.
   await withFetchStub(async (calls) => {
     const config = planConfig();
     await createDocumentByText(config, {
@@ -92,15 +97,17 @@ test("plan-capture E2E: Bearer auth header is set correctly", async () => {
       name: "plan-x.md",
       text: "body",
     });
-    // The fetch-stub captures method + body + url; we need to peek at
-    // headers too. Update the call inspection: headers are passed
-    // through to fetch as opts.headers, which the stub doesn't yet
-    // expose. Verify by inspecting the request via a second stub that
-    // captures opts.
-    // (This is a placeholder test that documents the contract; the
-    // stub helper doesn't surface headers today. If headers regress,
-    // the live mcp-smoke.sh catches the auth failure as a 401.)
     assert.equal(calls.length, 1);
+    assert.equal(
+      calls[0].headers.Authorization,
+      "Bearer dify-test-key",
+      "createDocumentByText must send `Authorization: Bearer <apiKey>` header",
+    );
+    assert.equal(
+      calls[0].headers["Content-Type"],
+      "application/json",
+      "request body is JSON; Content-Type must match",
+    );
   });
 });
 
