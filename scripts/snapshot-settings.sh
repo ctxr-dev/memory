@@ -63,39 +63,28 @@ if [ -f "$MEMORY_DIR/.dify-version" ]; then
 fi
 
 # --- best-effort embedding-model record ---
+# Record the SINGLE effective embedding model the bridge actually uses (the
+# Dify tenant's System Default), not the full list of available models: the
+# whole point of the record is to tell a re-clone the ONE model to keep set
+# as the System Default so the restored vector data stays consistent. The
+# bridge resolves this via `get-embedding-default` (provider + model + source).
 ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
 container="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 embed_model=""
 if [ -n "$container" ] && command -v docker >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
   # `node` (host) is used to parse the JSON below; guard it so a missing
   # node doesn't leak "command not found" even in this best-effort path.
-  embed_json="$(docker exec -i "$container" node src/memory-cli.js list-embedding-models 2>/dev/null || true)"
+  embed_json="$(docker exec -i "$container" node src/memory-cli.js get-embedding-default 2>/dev/null || true)"
   if [ -n "$embed_json" ]; then
     embed_model="$(printf '%s' "$embed_json" | node -e '
       try {
         const o = JSON.parse(require("fs").readFileSync(0, "utf8"));
-        const out = [];
-        const providers = o && Array.isArray(o.providers) ? o.providers : [];
-        for (const p of providers) {
-          const prov = p && (p.provider || p.name) ? (p.provider || p.name) : "";
-          // The CLI returns `modelNames` (array of plain strings). Fall
-          // back to `models` (array of objects) for forward-compat.
-          const names = p && Array.isArray(p.modelNames) ? p.modelNames
-            : (p && Array.isArray(p.models) ? p.models : []);
-          if (names.length) {
-            for (const m of names) {
-              const id = typeof m === "string" ? m
-                : (m && (m.model || m.name || m.id) ? (m.model || m.name || m.id) : "");
-              if (id) out.push(prov ? prov + "/" + id : id);
-            }
-          } else if (prov) {
-            out.push(prov);
-          }
-        }
-        if (!out.length && o && (o.model || o.provider)) {
-          out.push((o.provider ? o.provider + "/" : "") + (o.model || ""));
-        }
-        process.stdout.write(out.join(", "));
+        // Only treat a real tenant default as known; tenant_empty /
+        // probe_failed leave embed_model empty so the record says "unknown".
+        const model = typeof o.model === "string" ? o.model : "";
+        const prov = typeof o.provider === "string" ? o.provider : "";
+        if (model) process.stdout.write(prov ? prov + "/" + model : model);
+        else process.stdout.write("");
       } catch { process.stdout.write(""); }
     ' 2>/dev/null || true)"
   fi

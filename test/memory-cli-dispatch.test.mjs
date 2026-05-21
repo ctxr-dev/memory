@@ -42,6 +42,7 @@ const EXPECTED_SUBCOMMANDS = [
   "create-dataset",
   "get-config",
   "list-embedding-models",
+  "get-embedding-default",
   "find-by-name",
   "scan",
   "absorb",
