@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Renders project-root files (.agents/, .claude/settings.json, .gitignore block,
-# memory/.env) from templates inside the cloned boilerplate. Idempotent: safe to
-# re-run after `cd memory && git pull`. Never overwrites memory/.env.
+# Renders project-root files (.agents/, .claude/settings.json, .gitignore block)
+# from templates inside the cloned boilerplate, and creates the canonical env
+# at ./.memory/settings/.env from memory/.env.example. Idempotent: safe to
+# re-run after `cd memory && git pull` (existing settings/.env values are
+# preserved; new template keys are merged in).
 
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
@@ -222,7 +224,7 @@ if [ "$llm_provider" = "ask" ]; then
   done
   if [ "${#available[@]}" -eq 0 ]; then
     echo "Note: no LLM provider detected (no claude/codex CLI on PATH; no API keys in env)." >&2
-    echo "      Defaulting to MEMORY_LLM_PROVIDER=claude. Edit memory/.env to change." >&2
+    echo "      Defaulting to MEMORY_LLM_PROVIDER=claude. Edit ./.memory/settings/.env to change." >&2
     llm_provider="claude"
   elif [ "${#available[@]}" -eq 1 ]; then
     llm_provider="${available[0]}"
@@ -451,108 +453,84 @@ if ! grep -qxF "$marker" "$gitignore"; then
   cat "$TEMPLATES_DIR/gitignore.append" >> "$gitignore"
 fi
 
-# ---------- memory/.env (only if missing) ----------
-# Substitute placeholders inline using `render` (the same sed-pipeline
-# that processes templates/agents/*). Pre-round-14 this used `cp` then
-# `printf >> .env`, which left the literal __PLACEHOLDER__ lines AT THE
-# TOP of the file with the real values appended at the BOTTOM. lib.sh's
-# read_env_value uses `tail -n 1` so the real value won and the file
-# worked, but the duplication was confusing and brittle: anyone editing
-# the top of .env to e.g. fix a typo would silently re-introduce the
-# placeholder. Inline substitution gives a clean .env with each key
-# appearing exactly once.
-env_file="$MEMORY_DIR/.env"
-# A prior install snapshots memory/.env into ./.memory/settings/ so it
-# survives removing/re-cloning ./memory. On a fresh bootstrap (no
-# memory/.env yet) prefer restoring that snapshot over rendering a blank
-# template: it already carries the provider, API key and dataset
-# bindings, so re-running dify-setup.sh becomes optional. Use the DEFAULT
-# data dir here: at first bootstrap there is no memory/.env to read a
-# custom MEMORY_DATA_DIR from.
-# Resolve the settings dir from MEMORY_DATA_DIR (honor an exported override;
-# at first bootstrap there's no memory/.env yet to read it from) so a user
-# with a non-default data dir still gets their snapshot restored. Reused
-# below for the embedding-model reminder.
+# ---------- canonical env: ./.memory/settings/.env ----------
+# The single user env file lives in the durable, gitignored data dir, NOT in
+# ./memory, so it survives removing/re-cloning ./memory and there is exactly
+# ONE .env. memory/.env.example is the only template. Resolve the settings dir
+# from an exported MEMORY_DATA_DIR or the default (at first bootstrap there is
+# no env file yet to read a custom data dir from; export it to relocate).
 settings_data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
-settings_env="$settings_data_dir/settings/.env"
+settings_dir="$settings_data_dir/settings"
+env_file="$settings_dir/.env"
+legacy_env="$MEMORY_DIR/.env"   # pre-0.3.0 canonical location
+mkdir -p "$settings_dir"
+
+# Migrate a pre-0.3.0 install: if the new settings/.env does not exist yet but
+# a legacy memory/.env does, move its contents across (keeps the user's key +
+# bindings). If BOTH exist they may diverge; settings/.env is the new canonical
+# and wins, but warn so the user can reconcile. The legacy file is removed at
+# the end either way, so there is exactly one .env.
+migrated=0
+if [ ! -f "$env_file" ] && [ -f "$legacy_env" ]; then
+  if cp "$legacy_env" "$env_file" 2>/dev/null; then migrated=1; fi
+elif [ -f "$env_file" ] && [ -f "$legacy_env" ] && ! cmp -s "$env_file" "$legacy_env"; then
+  echo "warning: both memory/.env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
+fi
+
 if [ ! -f "$env_file" ]; then
-  # Restore the snapshot only if the copy actually succeeds. Guarding the
-  # cp in the `if` condition (errexit is suspended there) means a present-
-  # but-unreadable/corrupt snapshot does NOT abort bootstrap, so we warn and
-  # fall through to rendering a fresh .env so install always completes.
-  if [ -f "$settings_env" ] && cp "$settings_env" "$env_file" 2>/dev/null; then
-    chmod 600 "$env_file" 2>/dev/null || \
-      echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
-    env_action="restored from $settings_data_dir/settings/"
-    echo "Restored prior settings (.env) from $settings_data_dir/settings/. API key + dataset bindings reattached; running dify-setup.sh is optional."
-    # The snapshot carries the PRIOR install's identity (COMPOSE_PROJECT_NAME,
-    # MCP_CONTAINER_NAME, MCP_IMAGE_NAME), all derived from the slug that wrote
-    # it. If this bootstrap was invoked with a different --slug, those fields
-    # would silently point the stack at the OLD slug's compose project / image
-    # / container while every other artefact (.mcp.json, agents, summary) uses
-    # the new slug. Re-derive the identity from the CURRENT slug so the
-    # restored .env (key + dataset bindings) stays, but the identity matches
-    # this invocation. set-or-append each key (BSD/GNU-portable sed -i.bak).
-    restored_project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$env_file" | tail -n 1 | sed 's/^COMPOSE_PROJECT_NAME=//' || true)"
-    if [ -n "$restored_project_name" ] && [ "$restored_project_name" != "$compose_project_name" ]; then
-      echo "warning: restored snapshot was written under a different slug (its COMPOSE_PROJECT_NAME was '$restored_project_name'); re-deriving identity fields for the requested slug '$slug'. Dataset bindings and API key are kept." >&2
-    fi
-    for kv in \
-      "COMPOSE_PROJECT_NAME=$compose_project_name" \
-      "MCP_CONTAINER_NAME=$memory_server_name" \
-      "MCP_IMAGE_NAME=$mcp_image_name"; do
-      k="${kv%%=*}"
-      if grep -qE "^$k=" "$env_file"; then
-        sed -i.bak "s|^$k=.*|$kv|" "$env_file"
-        rm -f "$env_file.bak"
-      else
-        printf '%s\n' "$kv" >> "$env_file"
-      fi
-    done
-    # Reconcile MEMORY_LLM_PROVIDER so the restored .env and the summary
-    # agree. If the user passed --llm-provider explicitly, that wins (write it
-    # into the restored .env, same precedence as the identity fields above).
-    # Otherwise the restored value is authoritative: adopt it into
-    # $llm_provider so the summary reflects the EFFECTIVE config, not the
-    # auto-detected default.
-    if [ "$provider_explicit" -eq 1 ]; then
-      if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
-        sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
-        rm -f "$env_file.bak"
-      else
-        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider" >> "$env_file"
-      fi
-    else
-      restored_provider="$(grep -E '^MEMORY_LLM_PROVIDER=' "$env_file" | tail -n 1 | sed 's/^MEMORY_LLM_PROVIDER=//' || true)"
-      if [ -n "$restored_provider" ]; then llm_provider="$restored_provider"; fi
-    fi
+  # Fresh install: render the template (substitutes the identity placeholders).
+  render "$MEMORY_DIR/.env.example" > "$env_file"
+  env_action="created"
+else
+  # Existing settings/.env: merge any keys added to .env.example upstream so a
+  # `git pull` upgrade surfaces new knobs without a hand-diff. Append-only.
+  node "$MEMORY_DIR/scripts/lib/merge-env.mjs" "$MEMORY_DIR/.env.example" "$env_file" || true
+  if [ "$migrated" -eq 1 ]; then env_action="migrated from memory/.env"; else env_action="updated"; fi
+fi
+
+# Reconcile identity fields from the CURRENT --slug. On a fresh render they are
+# already correct (render substitutes them); on migrate/upgrade they may carry
+# a prior slug, so set-or-append each (BSD/GNU-portable sed -i.bak).
+existing_project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$env_file" | tail -n 1 | sed 's/^COMPOSE_PROJECT_NAME=//' || true)"
+if [ -n "$existing_project_name" ] && [ "$existing_project_name" != "$compose_project_name" ]; then
+  echo "warning: env was written under a different slug (COMPOSE_PROJECT_NAME was '$existing_project_name'); re-deriving identity fields for '$slug'. Dataset bindings and API key are kept." >&2
+fi
+for kv in \
+  "COMPOSE_PROJECT_NAME=$compose_project_name" \
+  "MCP_CONTAINER_NAME=$memory_server_name" \
+  "MCP_IMAGE_NAME=$mcp_image_name"; do
+  k="${kv%%=*}"
+  if grep -qE "^$k=" "$env_file"; then
+    sed -i.bak "s|^$k=.*|$kv|" "$env_file"
+    rm -f "$env_file.bak"
   else
-    if [ -f "$settings_env" ]; then
-      echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2
-    fi
-    render "$MEMORY_DIR/.env.example" > "$env_file"
-    # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
-    # the example has it set to a default value).
-    if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
-      # Replace the existing default with the user's chosen provider.
-      # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
-      sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
-      rm -f "$env_file.bak"
-    else
-      {
-        printf '\n# Auto-injected by bootstrap.sh\n'
-        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
-      } >> "$env_file"
-    fi
-    # The freshly-rendered .env will hold the Dify API key once dify-setup.sh
-    # runs; tighten perms now (parity with the restore path) so it never sits
-    # at a umask-dependent 0644. Warn (don't fail) if chmod is unsupported.
-    chmod 600 "$env_file" 2>/dev/null || \
-      echo "warning: could not chmod 600 $env_file; it will carry the API key and may be readable by others." >&2
-    env_action="created"
+    printf '%s\n' "$kv" >> "$env_file"
+  fi
+done
+
+# Reconcile MEMORY_LLM_PROVIDER: an explicit --llm-provider wins (write it in);
+# otherwise adopt the value already in the file so the summary reflects the
+# effective config, not the auto-detected default.
+if [ "$provider_explicit" -eq 1 ]; then
+  if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+    sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+    rm -f "$env_file.bak"
+  else
+    printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider" >> "$env_file"
   fi
 else
-  env_action="left untouched"
+  existing_provider="$(grep -E '^MEMORY_LLM_PROVIDER=' "$env_file" | tail -n 1 | sed 's/^MEMORY_LLM_PROVIDER=//' || true)"
+  if [ -n "$existing_provider" ]; then llm_provider="$existing_provider"; fi
+fi
+
+# Tighten perms (the file carries the Dify API key once dify-setup.sh runs).
+chmod 600 "$env_file" 2>/dev/null || \
+  echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
+
+# Exactly one canonical .env: remove any legacy memory/.env now that
+# settings/.env owns it.
+if [ -f "$legacy_env" ]; then
+  rm -f "$legacy_env" && echo "Removed legacy memory/.env; the canonical env is now $env_file."
 fi
 
 # ---------- ensure host data dir placeholder ----------
@@ -586,7 +564,12 @@ Bootstrap complete.
   Memory MCP server:   $memory_server_name
   LLM provider:        $llm_provider
   Hooks installed:     $([ "$install_hooks" -eq 1 ] && printf 'yes' || printf 'no')
-  memory/.env:         $env_action
+  settings/.env:       $env_action ($env_file)
+
+Your config (API key, dataset bindings, env knobs) lives in:
+  $env_file
+Edit THAT file, not memory/.env (which no longer exists). The template is
+memory/.env.example; new keys added there are merged in on the next bootstrap.
 
 Next steps:
   1) ./memory/scripts/up.sh                     # start the Dify stack
@@ -602,8 +585,8 @@ Next steps:
        - System Model Settings: set as the DEFAULT Embedding Model
          (text-embedding-3-small for OpenAI, bge-m3 for Ollama)
      Then Knowledge -> Service API -> create a Knowledge API key.
-     (Do NOT paste the key into memory/.env by hand; the next step's
-      wizard will prompt for it and write it for you.)
+     (Do NOT paste the key by hand; the next step's wizard prompts for it
+      and writes it into ./.memory/settings/.env for you.)
   4) ./memory/scripts/dify-setup.sh              # paste the Knowledge API key
                                                   when prompted; auto-create
                                                   the configured dataset slots
@@ -611,7 +594,7 @@ Next steps:
                                                   plans, investigations,
                                                   self_improvement; add more by
                                                   appending DIFY_DATASET_<NAME>_ID=
-                                                  to memory/.env), install per-
+                                                  to ./.memory/settings/.env), install per-
                                                   doc metadata schema, restart
                                                   the bridge to pick up the new
                                                   env, optionally absorb existing
@@ -631,13 +614,14 @@ Plan-mode integration (Claude Code only; other clients can ignore):
   upserts plan-<slug>.md into the 'plans' dataset slot automatically
   (no LLM, multiple bridge round-trips, typically ~1-2s). Same plan
   title overwrites in place. Set MEMORY_HOOK_EXITPLANMODE_DISABLE=true
-  in memory/.env to opt out. See templates/skills/plan-capture.md
+  in ./.memory/settings/.env to opt out. See templates/skills/plan-capture.md
   for the agent contract.
 
 The boilerplate ships with its own .git so you can update it later:
   cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug
 
-Re-running bootstrap is idempotent. memory/.env is preserved across upgrades.
+Re-running bootstrap is idempotent. Your ./.memory/settings/.env is preserved
+across upgrades (new template keys are merged in, existing values untouched).
 EOF
 
 # If a prior install recorded an embedding model, remind the user to
