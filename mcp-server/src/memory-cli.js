@@ -12,6 +12,7 @@ import {
   fetchJsonWithTimeout,
   findDocumentByExactName,
   getConfig,
+  getDefaultEmbeddingModel,
   getDocumentText,
   listAllDatasets,
   listAllDocuments,
@@ -247,6 +248,22 @@ async function listEmbeddingModelsCmd(config) {
   };
 }
 
+// Resolve the SINGLE effective embedding model the bridge would use for
+// hybrid_search (the Dify tenant's System Default, alphabetical-first when
+// several providers are configured). Distinct from `list-embedding-models`,
+// which enumerates every AVAILABLE provider/model. The settings snapshot
+// records this single value so a re-clone can be told the one model to keep
+// as the System Default.
+async function getEmbeddingDefaultCmd(config) {
+  const resolved = await getDefaultEmbeddingModel(config);
+  return {
+    provider: resolved.provider || "",
+    model: resolved.model || "",
+    source: resolved.source || "",
+    ...(resolved.error ? { error: resolved.error } : {}),
+  };
+}
+
 async function createMetadataFieldCmd(config, { datasetId, name, type }) {
   if (!name) throw new Error("--name <field-name> is required");
   return createDatasetMetadataField(config, {
@@ -400,6 +417,7 @@ try {
     case "create-dataset": result = await createDatasetCmd(config, args); break;
     case "get-config": result = await getConfigCmd(config); break;
     case "list-embedding-models": result = await listEmbeddingModelsCmd(config); break;
+    case "get-embedding-default": result = await getEmbeddingDefaultCmd(config); break;
     case "find-by-name": result = await findByNameCmd(config, args); break;
     case "scan": result = await scanCmd(config, args); break;
     case "absorb": result = await absorbCmd(config, args); break;
@@ -410,7 +428,7 @@ try {
     default:
       console.error(`Unknown subcommand: ${sub || "(none)"}`);
       console.error(
-        "Usage: memory-cli.js <search|write|save|list|read|disable|enable|delete|list-datasets|create-dataset|get-config|list-embedding-models|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
+        "Usage: memory-cli.js <search|write|save|list|read|disable|enable|delete|list-datasets|create-dataset|get-config|list-embedding-models|get-embedding-default|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
       );
       process.exit(2);
   }

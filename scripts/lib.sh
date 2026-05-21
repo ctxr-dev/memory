@@ -26,9 +26,13 @@ MEMORY_ENV="$MEMORY_DIR/.env"
 # $HOME and the resolved form of $HOME. On Linux it is common for $HOME to
 # itself be a symlink (e.g. /home/foo -> /mnt/data/foo); without resolving,
 # the string comparison would miss and the guard would silently fail.
-home_resolved="$(cd "$HOME" 2>/dev/null && pwd -P 2>/dev/null || echo "$HOME")"
+# ${HOME:-} throughout: this file runs under `set -u` and HOME can be unset
+# in minimal environments (env -i, some CI/cron). When HOME is empty the
+# home-equality arms simply never match (an empty WORKSPACE_DIR is impossible
+# here, it is pwd -P-resolved), and the / and /root arms still guard root.
+home_resolved="$(cd "${HOME:-/nonexistent}" 2>/dev/null && pwd -P 2>/dev/null || echo "${HOME:-}")"
 case "$WORKSPACE_DIR" in
-  "$HOME"|"$home_resolved"|/|/root)
+  "${HOME:-/nonexistent-home}"|"${home_resolved:-/nonexistent-home}"|/|/root)
     echo "FATAL: WORKSPACE_DIR resolves to '$WORKSPACE_DIR', which is your home or root." >&2
     echo "  Clone the boilerplate INTO a project subdirectory:" >&2
     echo "    cd ~/your-project && git clone <repo> ./memory" >&2
@@ -37,6 +41,73 @@ case "$WORKSPACE_DIR" in
     ;;
 esac
 unset home_resolved
+
+# resolve_docker_bin: make `docker` callable even when it lives outside the
+# non-interactive PATH. Rancher Desktop installs its shim at ~/.rd/bin/docker
+# and only adds it to PATH via an interactive shell profile, so scripts run
+# from cron/CI/agents (or a bare `bash script.sh`) see "docker missing" even
+# though Docker works fine in the user's terminal. Colima and the in-app
+# Rancher binary have the same problem. This resolver ONLY ADDS locations to
+# PATH; it never blocks: if nothing is found it returns 0 so the caller's
+# existing `require_cmd docker` / `command -v` check still emits the canonical
+# install-guidance error. POSIX/bash-3.2 portable (macOS default bash).
+resolve_docker_bin() {
+  # ${PATH:-} / ${HOME:-} throughout: this runs under `set -u`, and PATH or
+  # HOME can be unset in minimal environments (`env -i bash ...`, some
+  # CI/cron). Referencing them bare would abort before the caller's
+  # canonical require_cmd error. HOME-based candidates are skipped when HOME
+  # is empty so we never probe "/.rd/bin/docker".
+  # `local` keeps the temporaries out of the SOURCING shell (lib.sh is sourced,
+  # not executed, so bare assignments would leak / collide with caller vars).
+  local _dkr_dir candidate candidates
+  # Explicit override wins.
+  if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
+    _dkr_dir="$(dirname "$DOCKER_BIN")"
+    if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+    export PATH
+    return 0
+  fi
+
+  # Already on PATH (the common case): do nothing.
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Probe common non-PATH locations; first executable wins. HOME-based
+  # entries are only added when HOME is set.
+  candidates="/usr/local/bin/docker
+/opt/homebrew/bin/docker
+/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"
+  if [ -n "${HOME:-}" ]; then
+    candidates="$HOME/.rd/bin/docker
+$HOME/.colima/default/bin/docker
+$candidates"
+  fi
+  while IFS= read -r candidate; do
+    # Defensively strip leading/trailing whitespace so a future edit that
+    # accidentally indents an entry in the heredoc above can never bake a
+    # leading space into the probed path. Internal spaces (the Rancher app
+    # bundle path) are preserved. bash-3.2 portable.
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%"${candidate##*[![:space:]]}"}"
+    [ -n "$candidate" ] || continue
+    if [ -x "$candidate" ]; then
+      export DOCKER_BIN="$candidate"
+      _dkr_dir="$(dirname "$candidate")"
+      if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+      export PATH
+      # Quiet by default (lib.sh is sourced by scripts that emit machine-
+      # readable output, e.g. mcp-config.sh). Set MEMORY_DEBUG=1 to surface.
+      if [ -n "${MEMORY_DEBUG:-}" ]; then echo "lib.sh: using docker from $candidate" >&2; fi
+      return 0
+    fi
+  done <<EOF
+$candidates
+EOF
+
+  # Nothing found: let the caller's require_cmd emit the canonical error.
+  return 0
+}
 
 read_env_value() {
   local key="$1"
@@ -93,3 +164,8 @@ docker_compose() {
     -f "$MEMORY_DIR/compose.mcp.yaml" \
     "$@"
 }
+
+# Resolve docker at sourcing time (once) so every script that sources lib.sh
+# benefits before its prereq checks run. Guarded so re-sourcing is a no-op.
+# Safe when sourced: side effects are limited to PATH/DOCKER_BIN; never exits.
+[ -n "${_DOCKER_RESOLVED:-}" ] || { resolve_docker_bin; _DOCKER_RESOLVED=1; }

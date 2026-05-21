@@ -34,6 +34,7 @@ USAGE
 slug=""
 title=""
 llm_provider="ask"
+provider_explicit=0   # set when the user passes --llm-provider explicitly
 install_hooks=1
 register_codex=0
 interactive=1
@@ -50,7 +51,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --slug) require_value "$1" "${2-}"; slug="$2"; shift 2 ;;
     --title) require_value "$1" "${2-}"; title="$2"; shift 2 ;;
-    --llm-provider) require_value "$1" "${2-}"; llm_provider="$2"; shift 2 ;;
+    --llm-provider) require_value "$1" "${2-}"; llm_provider="$2"; provider_explicit=1; shift 2 ;;
     --install-hooks) install_hooks=1; shift ;;
     --no-hooks) install_hooks=0; shift ;;
     --register-codex) register_codex=1; shift ;;
@@ -68,6 +69,61 @@ require_cmd() {
     exit 1
   fi
 }
+
+# bootstrap.sh is intentionally standalone (it must run before lib.sh is
+# usable / before any clone), so we INLINE a minimal copy of lib.sh's
+# resolve_docker_bin here. Rationale: Rancher Desktop's shim at ~/.rd/bin is
+# only added to PATH by an interactive shell profile, so a non-interactive
+# `./memory/bootstrap.sh` falsely reports "docker missing". Colima and the
+# in-app Rancher binary have the same problem. This ONLY ADDS locations to
+# PATH; if nothing is found it returns without error so the require_cmd below
+# still emits the canonical install-guidance message.
+# ${PATH:-} / ${HOME:-} throughout: bootstrap runs under `set -u` and either
+# can be unset in minimal environments (`env -i`, some automation). Bare refs
+# would abort before the require_cmd docker message. HOME-based candidates are
+# skipped when HOME is empty.
+resolve_docker_bin() {
+  # `local` keeps the temporaries out of the script's global scope (parity
+  # with the lib.sh copy) so they can't collide with later vars.
+  local _dkr_dir candidate candidates
+  if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
+    _dkr_dir="$(dirname "$DOCKER_BIN")"
+    if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+    export PATH
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  candidates="/usr/local/bin/docker
+/opt/homebrew/bin/docker
+/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"
+  if [ -n "${HOME:-}" ]; then
+    candidates="$HOME/.rd/bin/docker
+$HOME/.colima/default/bin/docker
+$candidates"
+  fi
+  while IFS= read -r candidate; do
+    # Defensively trim leading/trailing whitespace so an accidental indent in
+    # the heredoc can never bake a leading space into the probed path; the
+    # Rancher app bundle's internal spaces are preserved. bash-3.2 portable.
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%"${candidate##*[![:space:]]}"}"
+    [ -n "$candidate" ] || continue
+    if [ -x "$candidate" ]; then
+      export DOCKER_BIN="$candidate"
+      _dkr_dir="$(dirname "$candidate")"
+      if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+      export PATH
+      if [ -n "${MEMORY_DEBUG:-}" ]; then echo "bootstrap.sh: using docker from $candidate" >&2; fi
+      return 0
+    fi
+  done <<EOF
+$candidates
+EOF
+  return 0
+}
+resolve_docker_bin
 
 require_cmd docker "install Docker Desktop or docker engine"
 require_cmd node "install Node.js 20+"
@@ -406,22 +462,95 @@ fi
 # placeholder. Inline substitution gives a clean .env with each key
 # appearing exactly once.
 env_file="$MEMORY_DIR/.env"
+# A prior install snapshots memory/.env into ./.memory/settings/ so it
+# survives removing/re-cloning ./memory. On a fresh bootstrap (no
+# memory/.env yet) prefer restoring that snapshot over rendering a blank
+# template: it already carries the provider, API key and dataset
+# bindings, so re-running dify-setup.sh becomes optional. Use the DEFAULT
+# data dir here: at first bootstrap there is no memory/.env to read a
+# custom MEMORY_DATA_DIR from.
+# Resolve the settings dir from MEMORY_DATA_DIR (honor an exported override;
+# at first bootstrap there's no memory/.env yet to read it from) so a user
+# with a non-default data dir still gets their snapshot restored. Reused
+# below for the embedding-model reminder.
+settings_data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
+settings_env="$settings_data_dir/settings/.env"
 if [ ! -f "$env_file" ]; then
-  render "$MEMORY_DIR/.env.example" > "$env_file"
-  # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
-  # the example has it set to a default value).
-  if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
-    # Replace the existing default with the user's chosen provider.
-    # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
-    sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
-    rm -f "$env_file.bak"
+  # Restore the snapshot only if the copy actually succeeds. Guarding the
+  # cp in the `if` condition (errexit is suspended there) means a present-
+  # but-unreadable/corrupt snapshot does NOT abort bootstrap, so we warn and
+  # fall through to rendering a fresh .env so install always completes.
+  if [ -f "$settings_env" ] && cp "$settings_env" "$env_file" 2>/dev/null; then
+    chmod 600 "$env_file" 2>/dev/null || \
+      echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
+    env_action="restored from $settings_data_dir/settings/"
+    echo "Restored prior settings (.env) from $settings_data_dir/settings/. API key + dataset bindings reattached; running dify-setup.sh is optional."
+    # The snapshot carries the PRIOR install's identity (COMPOSE_PROJECT_NAME,
+    # MCP_CONTAINER_NAME, MCP_IMAGE_NAME), all derived from the slug that wrote
+    # it. If this bootstrap was invoked with a different --slug, those fields
+    # would silently point the stack at the OLD slug's compose project / image
+    # / container while every other artefact (.mcp.json, agents, summary) uses
+    # the new slug. Re-derive the identity from the CURRENT slug so the
+    # restored .env (key + dataset bindings) stays, but the identity matches
+    # this invocation. set-or-append each key (BSD/GNU-portable sed -i.bak).
+    restored_project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$env_file" | tail -n 1 | sed 's/^COMPOSE_PROJECT_NAME=//' || true)"
+    if [ -n "$restored_project_name" ] && [ "$restored_project_name" != "$compose_project_name" ]; then
+      echo "warning: restored snapshot was written under a different slug (its COMPOSE_PROJECT_NAME was '$restored_project_name'); re-deriving identity fields for the requested slug '$slug'. Dataset bindings and API key are kept." >&2
+    fi
+    for kv in \
+      "COMPOSE_PROJECT_NAME=$compose_project_name" \
+      "MCP_CONTAINER_NAME=$memory_server_name" \
+      "MCP_IMAGE_NAME=$mcp_image_name"; do
+      k="${kv%%=*}"
+      if grep -qE "^$k=" "$env_file"; then
+        sed -i.bak "s|^$k=.*|$kv|" "$env_file"
+        rm -f "$env_file.bak"
+      else
+        printf '%s\n' "$kv" >> "$env_file"
+      fi
+    done
+    # Reconcile MEMORY_LLM_PROVIDER so the restored .env and the summary
+    # agree. If the user passed --llm-provider explicitly, that wins (write it
+    # into the restored .env, same precedence as the identity fields above).
+    # Otherwise the restored value is authoritative: adopt it into
+    # $llm_provider so the summary reflects the EFFECTIVE config, not the
+    # auto-detected default.
+    if [ "$provider_explicit" -eq 1 ]; then
+      if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+        sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+        rm -f "$env_file.bak"
+      else
+        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider" >> "$env_file"
+      fi
+    else
+      restored_provider="$(grep -E '^MEMORY_LLM_PROVIDER=' "$env_file" | tail -n 1 | sed 's/^MEMORY_LLM_PROVIDER=//' || true)"
+      if [ -n "$restored_provider" ]; then llm_provider="$restored_provider"; fi
+    fi
   else
-    {
-      printf '\n# Auto-injected by bootstrap.sh\n'
-      printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
-    } >> "$env_file"
+    if [ -f "$settings_env" ]; then
+      echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2
+    fi
+    render "$MEMORY_DIR/.env.example" > "$env_file"
+    # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
+    # the example has it set to a default value).
+    if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+      # Replace the existing default with the user's chosen provider.
+      # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
+      sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+      rm -f "$env_file.bak"
+    else
+      {
+        printf '\n# Auto-injected by bootstrap.sh\n'
+        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
+      } >> "$env_file"
+    fi
+    # The freshly-rendered .env will hold the Dify API key once dify-setup.sh
+    # runs; tighten perms now (parity with the restore path) so it never sits
+    # at a umask-dependent 0644. Warn (don't fail) if chmod is unsupported.
+    chmod 600 "$env_file" 2>/dev/null || \
+      echo "warning: could not chmod 600 $env_file; it will carry the API key and may be readable by others." >&2
+    env_action="created"
   fi
-  env_action="created"
 else
   env_action="left untouched"
 fi
@@ -510,3 +639,14 @@ The boilerplate ships with its own .git so you can update it later:
 
 Re-running bootstrap is idempotent. memory/.env is preserved across upgrades.
 EOF
+
+# If a prior install recorded an embedding model, remind the user to
+# configure the SAME one in the Dify UI so retrieval stays consistent.
+# Non-fatal if absent.
+settings_embed="${settings_data_dir:-$WORKSPACE_DIR/.memory}/settings/embedding-model.txt"
+if [ -f "$settings_embed" ]; then
+  echo
+  echo "Recorded embedding model from your prior install ($settings_embed):"
+  sed 's/^/  /' "$settings_embed"
+  echo "  -> set the SAME embedding model as the System Default in the Dify UI."
+fi
