@@ -557,6 +557,11 @@ done
 echo
 echo "memory/.env updated. Re-run any time to add slots or re-absorb."
 
+# Snapshot user settings (.env, .dify-version, embedding model) into
+# ./.memory/settings/ so they survive removing/re-cloning ./memory.
+# Non-fatal: a snapshot failure must never break setup.
+"$SCRIPT_DIR/snapshot-settings.sh" || echo "warning: settings snapshot failed (non-fatal)" >&2
+
 # Per-slot create failures collected during the bind loop. Exit non-zero
 # so a CI/scripted user can detect partial-failure (previously the script
 # logged errors then exited 0).

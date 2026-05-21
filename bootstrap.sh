@@ -69,6 +69,39 @@ require_cmd() {
   fi
 }
 
+# bootstrap.sh is intentionally standalone (it must run before lib.sh is
+# usable / before any clone), so we INLINE a minimal copy of lib.sh's
+# resolve_docker_bin here. Rationale: Rancher Desktop's shim at ~/.rd/bin is
+# only added to PATH by an interactive shell profile, so a non-interactive
+# `./memory/bootstrap.sh` falsely reports "docker missing". Colima and the
+# in-app Rancher binary have the same problem. This ONLY ADDS locations to
+# PATH; if nothing is found it returns without error so the require_cmd below
+# still emits the canonical install-guidance message.
+resolve_docker_bin() {
+  if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
+    PATH="$(dirname "$DOCKER_BIN"):$PATH"; export PATH
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+  for candidate in \
+    "$HOME/.rd/bin/docker" \
+    "/usr/local/bin/docker" \
+    "/opt/homebrew/bin/docker" \
+    "$HOME/.colima/default/bin/docker" \
+    "/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"; do
+    if [ -x "$candidate" ]; then
+      export DOCKER_BIN="$candidate"
+      PATH="$(dirname "$candidate"):$PATH"; export PATH
+      echo "bootstrap.sh: using docker from $candidate" >&2
+      return 0
+    fi
+  done
+  return 0
+}
+resolve_docker_bin
+
 require_cmd docker "install Docker Desktop or docker engine"
 require_cmd node "install Node.js 20+"
 
@@ -406,22 +439,36 @@ fi
 # placeholder. Inline substitution gives a clean .env with each key
 # appearing exactly once.
 env_file="$MEMORY_DIR/.env"
+# A prior install snapshots memory/.env into ./.memory/settings/ so it
+# survives removing/re-cloning ./memory. On a fresh bootstrap (no
+# memory/.env yet) prefer restoring that snapshot over rendering a blank
+# template — it already carries the provider, API key and dataset
+# bindings, so re-running dify-setup.sh becomes optional. Use the DEFAULT
+# data dir here: at first bootstrap there is no memory/.env to read a
+# custom MEMORY_DATA_DIR from.
+settings_env="$WORKSPACE_DIR/.memory/settings/.env"
 if [ ! -f "$env_file" ]; then
-  render "$MEMORY_DIR/.env.example" > "$env_file"
-  # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
-  # the example has it set to a default value).
-  if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
-    # Replace the existing default with the user's chosen provider.
-    # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
-    sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
-    rm -f "$env_file.bak"
+  if [ -f "$settings_env" ]; then
+    cp "$settings_env" "$env_file"
+    env_action="restored from ./.memory/settings/"
+    echo "Restored prior settings (.env) from ./.memory/settings/ — API key + dataset bindings reattached; running dify-setup.sh is optional."
   else
-    {
-      printf '\n# Auto-injected by bootstrap.sh\n'
-      printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
-    } >> "$env_file"
+    render "$MEMORY_DIR/.env.example" > "$env_file"
+    # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
+    # the example has it set to a default value).
+    if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+      # Replace the existing default with the user's chosen provider.
+      # BSD/GNU-portable sed -i: use the .bak form then remove the backup.
+      sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+      rm -f "$env_file.bak"
+    else
+      {
+        printf '\n# Auto-injected by bootstrap.sh\n'
+        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
+      } >> "$env_file"
+    fi
+    env_action="created"
   fi
-  env_action="created"
 else
   env_action="left untouched"
 fi
@@ -510,3 +557,14 @@ The boilerplate ships with its own .git so you can update it later:
 
 Re-running bootstrap is idempotent. memory/.env is preserved across upgrades.
 EOF
+
+# If a prior install recorded an embedding model, remind the user to
+# configure the SAME one in the Dify UI so retrieval stays consistent.
+# Non-fatal if absent.
+settings_embed="$WORKSPACE_DIR/.memory/settings/embedding-model.txt"
+if [ -f "$settings_embed" ]; then
+  echo
+  echo "Recorded embedding model from your prior install (.memory/settings/embedding-model.txt):"
+  sed 's/^/  /' "$settings_embed"
+  echo "  -> set the SAME embedding model as the System Default in the Dify UI."
+fi

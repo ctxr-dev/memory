@@ -38,6 +38,46 @@ case "$WORKSPACE_DIR" in
 esac
 unset home_resolved
 
+# resolve_docker_bin: make `docker` callable even when it lives outside the
+# non-interactive PATH. Rancher Desktop installs its shim at ~/.rd/bin/docker
+# and only adds it to PATH via an interactive shell profile, so scripts run
+# from cron/CI/agents (or a bare `bash script.sh`) see "docker missing" even
+# though Docker works fine in the user's terminal. Colima and the in-app
+# Rancher binary have the same problem. This resolver ONLY ADDS locations to
+# PATH; it never blocks — if nothing is found it returns 0 so the caller's
+# existing `require_cmd docker` / `command -v` check still emits the canonical
+# install-guidance error. POSIX/bash-3.2 portable (macOS default bash).
+resolve_docker_bin() {
+  # Explicit override wins.
+  if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
+    PATH="$(dirname "$DOCKER_BIN"):$PATH"; export PATH
+    return 0
+  fi
+
+  # Already on PATH (the common case) — do nothing.
+  if command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # Probe common non-PATH locations; first executable wins.
+  for candidate in \
+    "$HOME/.rd/bin/docker" \
+    "/usr/local/bin/docker" \
+    "/opt/homebrew/bin/docker" \
+    "$HOME/.colima/default/bin/docker" \
+    "/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"; do
+    if [ -x "$candidate" ]; then
+      export DOCKER_BIN="$candidate"
+      PATH="$(dirname "$candidate"):$PATH"; export PATH
+      echo "lib.sh: using docker from $candidate" >&2
+      return 0
+    fi
+  done
+
+  # Nothing found — let the caller's require_cmd emit the canonical error.
+  return 0
+}
+
 read_env_value() {
   local key="$1"
   local file="${2:-$MEMORY_ENV}"
@@ -93,3 +133,8 @@ docker_compose() {
     -f "$MEMORY_DIR/compose.mcp.yaml" \
     "$@"
 }
+
+# Resolve docker at sourcing time (once) so every script that sources lib.sh
+# benefits before its prereq checks run. Guarded so re-sourcing is a no-op.
+# Safe when sourced: side effects are limited to PATH/DOCKER_BIN; never exits.
+[ -n "${_DOCKER_RESOLVED:-}" ] || { resolve_docker_bin; _DOCKER_RESOLVED=1; }

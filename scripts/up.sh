@@ -46,3 +46,8 @@ else
   docker_compose up -d --build "$@"
 fi
 "$SCRIPT_DIR/ui-url.sh"
+
+# Snapshot user settings (.env, .dify-version, embedding model) into
+# ./.memory/settings/ so they survive removing/re-cloning ./memory.
+# Non-fatal: a snapshot failure must never break the stack bring-up.
+"$SCRIPT_DIR/snapshot-settings.sh" || echo "warning: settings snapshot failed (non-fatal)" >&2
