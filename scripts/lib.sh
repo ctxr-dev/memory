@@ -20,7 +20,7 @@ DIFY_DOCKER_DIR="$DIFY_DIR/docker"
 # (./.memory/settings/.env), NOT inside ./memory, so it survives removing or
 # re-cloning ./memory and there is exactly ONE .env. memory/.env.example is
 # the template. The data dir is resolved from an EXPORTED MEMORY_DATA_DIR or
-# the default; it canNOT be read from inside the env file to locate the env
+# the default; it cannot be read from inside the env file to locate the env
 # file (chicken-and-egg), so relocating the data dir requires exporting
 # MEMORY_DATA_DIR before running any script.
 MEMORY_DATA_DIR_DEFAULT="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
