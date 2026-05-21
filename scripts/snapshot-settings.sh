@@ -30,21 +30,36 @@ data_dir="${MEMORY_DATA_DIR:-$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/d
 data_dir="${data_dir:-$WORKSPACE_DIR/.memory}"
 settings_dir="$data_dir/settings"
 
-mkdir -p "$settings_dir"
+# Create + verify the settings dir is writable. If we can't write it
+# (permissions, full disk, read-only mount), warn to stderr and exit 0
+# WITHOUT claiming a snapshot happened — best-effort, never fatal.
+mkdir -p "$settings_dir" 2>/dev/null || true
+if [ ! -d "$settings_dir" ] || [ ! -w "$settings_dir" ]; then
+  echo "warning: settings dir '$settings_dir' is not writable; skipped snapshot." >&2
+  exit 0
+fi
 
 snapped=()
 
 # --- .env (carries the API key; least-privilege perms) ---
+# Gate the summary entry on the copy actually succeeding so we never
+# claim a file was captured when the write failed.
 if [ -f "$MEMORY_DIR/.env" ]; then
-  cp "$MEMORY_DIR/.env" "$settings_dir/.env"
-  chmod 600 "$settings_dir/.env" 2>/dev/null || true
-  snapped+=(".env")
+  if cp "$MEMORY_DIR/.env" "$settings_dir/.env" 2>/dev/null; then
+    chmod 600 "$settings_dir/.env" 2>/dev/null || true
+    snapped+=(".env")
+  else
+    echo "warning: could not copy .env into the snapshot." >&2
+  fi
 fi
 
 # --- .dify-version ---
 if [ -f "$MEMORY_DIR/.dify-version" ]; then
-  cp "$MEMORY_DIR/.dify-version" "$settings_dir/.dify-version"
-  snapped+=(".dify-version")
+  if cp "$MEMORY_DIR/.dify-version" "$settings_dir/.dify-version" 2>/dev/null; then
+    snapped+=(".dify-version")
+  else
+    echo "warning: could not copy .dify-version into the snapshot." >&2
+  fi
 fi
 
 # --- best-effort embedding-model record ---
@@ -111,11 +126,14 @@ automatically (the .env is copied back, so re-running dify-setup.sh is
 optional). Re-created on every successful setup/up run.
 EOF
 
-echo "Settings snapshot written to: $settings_dir"
+# Only claim a snapshot when something was actually captured.
 if [ "${#snapped[@]}" -gt 0 ]; then
+  echo "Settings snapshot written to: $settings_dir"
   for item in "${snapped[@]}"; do
     echo "  - $item"
   done
+else
+  echo "warning: nothing captured into $settings_dir (no memory/.env and all writes failed)." >&2
 fi
 
 exit 0

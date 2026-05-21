@@ -49,5 +49,7 @@ fi
 
 # Snapshot user settings (.env, .dify-version, embedding model) into
 # ./.memory/settings/ so they survive removing/re-cloning ./memory.
-# Non-fatal: a snapshot failure must never break the stack bring-up.
-"$SCRIPT_DIR/snapshot-settings.sh" || echo "warning: settings snapshot failed (non-fatal)" >&2
+# snapshot-settings.sh is best-effort (always exits 0, prints its own
+# warnings), so call it unconditionally — a `|| echo` here would be dead
+# code and a non-zero exit can't break this script.
+"$SCRIPT_DIR/snapshot-settings.sh"
