@@ -470,9 +470,28 @@ mkdir -p "$settings_dir"
 # guarantees the last/effective value (read_env_value uses `tail -n 1`) is the
 # reconciled one regardless of duplicates.
 set_env_unique() {
-  local key="$1" value="$2" file="$3" tmp
+  local key="$1" value="$2" file="$3" tmp rc
+  # Fail fast if the file exists but can't be read: rewriting from an empty
+  # grep would otherwise truncate it and silently drop secrets (the API key,
+  # dataset bindings). Better to abort and let the user fix ownership/perms.
+  if [ -e "$file" ] && [ ! -r "$file" ]; then
+    echo "FATAL: $file is not readable; refusing to rewrite it (would drop your key/bindings). Fix its ownership/permissions and re-run." >&2
+    exit 1
+  fi
   tmp="$(mktemp)"
-  grep -vE "^${key}=" "$file" > "$tmp" 2>/dev/null || true
+  if [ -f "$file" ]; then
+    # grep exit 1 (no surviving lines, e.g. the file held only this key) is
+    # fine; exit >=2 is a real read error, so abort instead of truncating.
+    set +e
+    grep -vE "^${key}=" "$file" > "$tmp"
+    rc=$?
+    set -e
+    if [ "$rc" -ge 2 ]; then
+      echo "FATAL: failed to read $file while updating $key; aborting to avoid data loss." >&2
+      rm -f "$tmp"
+      exit 1
+    fi
+  fi
   printf '%s=%s\n' "$key" "$value" >> "$tmp"
   mv "$tmp" "$file"
 }
