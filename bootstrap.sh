@@ -461,6 +461,30 @@ if [ ! -f "$env_file" ]; then
     chmod 600 "$env_file" 2>/dev/null || true   # carries the API key
     env_action="restored from $settings_data_dir/settings/"
     echo "Restored prior settings (.env) from $settings_data_dir/settings/. API key + dataset bindings reattached; running dify-setup.sh is optional."
+    # The snapshot carries the PRIOR install's identity (COMPOSE_PROJECT_NAME,
+    # MCP_CONTAINER_NAME, MCP_IMAGE_NAME), all derived from the slug that wrote
+    # it. If this bootstrap was invoked with a different --slug, those fields
+    # would silently point the stack at the OLD slug's compose project / image
+    # / container while every other artefact (.mcp.json, agents, summary) uses
+    # the new slug. Re-derive the identity from the CURRENT slug so the
+    # restored .env (key + dataset bindings) stays, but the identity matches
+    # this invocation. set-or-append each key (BSD/GNU-portable sed -i.bak).
+    restored_project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$env_file" | tail -n 1 | sed 's/^COMPOSE_PROJECT_NAME=//' || true)"
+    if [ -n "$restored_project_name" ] && [ "$restored_project_name" != "$compose_project_name" ]; then
+      echo "warning: restored snapshot was written under a different slug (its COMPOSE_PROJECT_NAME was '$restored_project_name'); re-deriving identity fields for the requested slug '$slug'. Dataset bindings and API key are kept." >&2
+    fi
+    for kv in \
+      "COMPOSE_PROJECT_NAME=$compose_project_name" \
+      "MCP_CONTAINER_NAME=$memory_server_name" \
+      "MCP_IMAGE_NAME=$mcp_image_name"; do
+      k="${kv%%=*}"
+      if grep -qE "^$k=" "$env_file"; then
+        sed -i.bak "s|^$k=.*|$kv|" "$env_file"
+        rm -f "$env_file.bak"
+      else
+        printf '%s\n' "$kv" >> "$env_file"
+      fi
+    done
   else
     if [ -f "$settings_env" ]; then
       echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2
