@@ -19,7 +19,7 @@ const MAX_BUFFER_BYTES = 1_048_576;
 function containerName() {
   const name = envValue("MCP_CONTAINER_NAME");
   if (!name) {
-    throw new DifyBridgeUnavailable("MCP_CONTAINER_NAME not set in ./.memory/settings/.env");
+    throw new DifyBridgeUnavailable("MCP_CONTAINER_NAME not set in the canonical settings/.env");
   }
   return name;
 }

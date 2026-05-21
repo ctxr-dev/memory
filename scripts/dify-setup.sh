@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Interactive wizard: bind named Dify datasets (daily, knowledge, plans,
-# investigations, ...) into ./.memory/settings/.env and optionally absorb existing
+# investigations, ...) into the canonical settings/.env and optionally absorb existing
 # project documentation into a dataset. Re-runnable.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -12,7 +12,7 @@ if [ "${1-}" = "-h" ] || [ "${1-}" = "--help" ]; then
 Usage:
   ./memory/scripts/dify-setup.sh [--non-interactive --auto-create]
 
-Slot model: every DIFY_DATASET_<NAME>_ID line in ./.memory/settings/.env declares
+Slot model: every DIFY_DATASET_<NAME>_ID line in the canonical settings/.env declares
 one slot. Defaults are daily, knowledge, plans, investigations,
 self_improvement; add more by adding lines.
 
@@ -21,7 +21,7 @@ slot (offers auto-create, pick existing, skip), and offers an
 absorb-on-existing-docs pass.
 
 With --non-interactive: requires --auto-create. Auto-creates any
-unbound slot present in ./.memory/settings/.env (or the five defaults if absent),
+unbound slot present in the canonical settings/.env (or the five defaults if absent),
 writes IDs back, and exits without absorb.
 EOF
   exit 0
@@ -32,10 +32,10 @@ fi
 load_memory_env
 
 ENV_FILE="$MEMORY_ENV"
-[ -f "$ENV_FILE" ] || { echo "./.memory/settings/.env missing. Run ./memory/bootstrap.sh first." >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "$ENV_FILE missing. Run ./memory/bootstrap.sh first." >&2; exit 1; }
 
 CONTAINER_NAME="$(read_env_value MCP_CONTAINER_NAME "$ENV_FILE" 2>/dev/null || true)"
-[ -n "$CONTAINER_NAME" ] || { echo "MCP_CONTAINER_NAME not in ./.memory/settings/.env." >&2; exit 1; }
+[ -n "$CONTAINER_NAME" ] || { echo "MCP_CONTAINER_NAME not in $ENV_FILE." >&2; exit 1; }
 
 DEFAULT_DATASETS=("daily" "knowledge" "plans" "investigations" "self_improvement")
 
@@ -49,7 +49,7 @@ unset_env_var() {
   fi
 }
 
-# Discover slot names from ./.memory/settings/.env: every DIFY_DATASET_<NAME>_ID line
+# Discover slot names from the canonical settings/.env: every DIFY_DATASET_<NAME>_ID line
 # declares one slot. Returns lowercase slot names, one per line.
 discover_slots_from_env() {
   awk -F= '
@@ -200,7 +200,7 @@ FATAL: DIFY_KNOWLEDGE_API_KEY not set; cannot continue in --non-interactive mode
 Set it first, then re-run:
   1) Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ./memory/scripts/ui-url.sh>')).
   2) Knowledge -> Service API -> create a Knowledge API key.
-  3) Edit ./.memory/settings/.env: DIFY_KNOWLEDGE_API_KEY=<the-key>
+  3) Edit $ENV_FILE: DIFY_KNOWLEDGE_API_KEY=<the-key>
   4) Recreate the bridge so the new key is loaded:
      ./memory/scripts/up.sh memory_mcp
   5) ./memory/scripts/dify-setup.sh --non-interactive --auto-create
@@ -220,7 +220,7 @@ fi
 
 # ---------- preflight: stale-bridge-env detection ----------
 # The bridge container's env_file is read AT START TIME. If the user added
-# DIFY_KNOWLEDGE_API_KEY to ./.memory/settings/.env AFTER the first up.sh, the running
+# DIFY_KNOWLEDGE_API_KEY to the canonical settings/.env AFTER the first up.sh, the running
 # bridge has an empty key in its env even though the host .env has it set.
 # Without this check, the wizard prints "api key set: yes" (host view) and
 # then every cli call fails with a confusing 401 from Dify.
@@ -234,7 +234,7 @@ bridge_api_key_ok="$(printf '%s' "$bridge_config_json" | node -e '
 ' 2>/dev/null)"
 if [ "$bridge_api_key_ok" != "yes" ]; then
   echo "  bridge sees an EMPTY API key (its env is stale)."
-  echo "  Recreating the bridge to pick up the current ./.memory/settings/.env..."
+  echo "  Recreating the bridge to pick up the current $ENV_FILE..."
   restart_bridge || { echo "FATAL: bridge restart failed; cannot continue." >&2; exit 1; }
   bridge_config_json="$(cli get-config 2>/dev/null || true)"
   bridge_api_key_ok="$(printf '%s' "$bridge_config_json" | node -e '
@@ -246,8 +246,8 @@ if [ "$bridge_api_key_ok" != "yes" ]; then
   if [ "$bridge_api_key_ok" != "yes" ]; then
     cat <<EOF >&2
 FATAL: bridge still does not see DIFY_KNOWLEDGE_API_KEY after restart.
-Check that ./.memory/settings/.env actually contains a non-empty value:
-  grep '^DIFY_KNOWLEDGE_API_KEY=' ./.memory/settings/.env
+Check that $ENV_FILE actually contains a non-empty value:
+  grep '^DIFY_KNOWLEDGE_API_KEY=' "$ENV_FILE"
 EOF
     exit 1
   fi
@@ -290,7 +290,7 @@ Then:
 
 The bridge auto-discovers the model + provider from the Dify tenant on
 first use. The Dify UI is the single source of truth — you do NOT need
-to add anything to ./.memory/settings/.env. If you have multiple embedding
+to add anything to the canonical settings/.env. If you have multiple embedding
 providers configured in the tenant, set the one you want as the System
 Default in the Dify UI (Settings -> Model Provider -> System Model
 Settings); the bridge picks it up automatically.
@@ -319,7 +319,7 @@ list_err="$(printf '%s' "$list_json" | node -e '
 if [ -n "$list_err" ]; then
   echo "FATAL: Dify rejected list-datasets: $list_err" >&2
   echo "  Most common cause: DIFY_KNOWLEDGE_API_KEY is wrong or revoked." >&2
-  echo "  Check ./.memory/settings/.env, then ./memory/scripts/up.sh memory_mcp to refresh the bridge." >&2
+  echo "  Check $ENV_FILE, then ./memory/scripts/up.sh memory_mcp to refresh the bridge." >&2
   exit 1
 fi
 
@@ -339,7 +339,7 @@ if grep -qE '^DIFY_DATASETS=' "$ENV_FILE"; then
   unset_env_var DIFY_DATASETS
 fi
 
-# Slot list = whatever DIFY_DATASET_*_ID lines are in ./.memory/settings/.env, plus any
+# Slot list = whatever DIFY_DATASET_*_ID lines are in the canonical settings/.env, plus any
 # default slot that isn't already declared. Preserves declaration order then
 # appends defaults at the end.
 declared_slots_arr=()
@@ -555,7 +555,7 @@ for slot in $(echo "$declared_slots" | tr ',' '\n' | awk 'NF'); do
   printf '  %-20s %s\n' "$slot" "${current_id:-<unbound>}"
 done
 echo
-echo "./.memory/settings/.env updated. Re-run any time to add slots or re-absorb."
+echo "$ENV_FILE updated. Re-run any time to add slots or re-absorb."
 
 # Snapshot user settings (.env, .dify-version, embedding model) into
 # ./.memory/settings/ so they survive removing/re-cloning ./memory.

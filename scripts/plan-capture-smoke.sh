@@ -47,7 +47,7 @@ load_memory_env
 
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
-  echo "plan-capture-smoke SKIP: MCP_CONTAINER_NAME not set in ./.memory/settings/.env." >&2
+  echo "plan-capture-smoke SKIP: MCP_CONTAINER_NAME not set in $MEMORY_ENV." >&2
   echo "  Run ./memory/bootstrap.sh --slug <project-slug> first." >&2
   exit 0
 fi
@@ -74,7 +74,7 @@ fi
 # treat a missing key as a SKIP (parity with the checks above).
 dify_key="${DIFY_KNOWLEDGE_API_KEY:-$(read_env_value DIFY_KNOWLEDGE_API_KEY "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$dify_key" ]; then
-  echo "plan-capture-smoke SKIP: DIFY_KNOWLEDGE_API_KEY is empty in ./.memory/settings/.env. Run ./memory/scripts/dify-setup.sh to configure Dify access." >&2
+  echo "plan-capture-smoke SKIP: DIFY_KNOWLEDGE_API_KEY is empty in $MEMORY_ENV. Run ./memory/scripts/dify-setup.sh to configure Dify access." >&2
   exit 0
 fi
 

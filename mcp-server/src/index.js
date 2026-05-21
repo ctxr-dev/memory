@@ -94,7 +94,7 @@ function errorToolResponse(error) {
 }
 
 // MCP server identity comes from the container env (compose.mcp.yaml's
-// env_file forwards ./.memory/settings/.env). The literal placeholder is only ever
+// env_file forwards the canonical settings/.env). The literal placeholder is only ever
 // seen if the container was started without the env file — surface that
 // as the tool-name so the misconfig is loud instead of silent.
 const server = new McpServer({
@@ -163,7 +163,7 @@ server.registerTool(
         : config.datasetIds;
 
       if (!config.apiKey) {
-        throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in ./.memory/settings/.env.");
+        throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in the canonical settings/.env.");
       }
       if (selectedDatasetIds.length === 0) {
         throw new Error(
@@ -332,7 +332,7 @@ server.registerTool(
   {
     title: "List Dify datasets",
     description:
-      "List every Dify Knowledge dataset visible to the configured API key, plus the local slot bindings declared by DIFY_DATASET_<NAME>_ID lines in ./.memory/settings/.env (so you can see which named slot points to which dataset id).",
+      "List every Dify Knowledge dataset visible to the configured API key, plus the local slot bindings declared by DIFY_DATASET_<NAME>_ID lines in the canonical settings/.env (so you can see which named slot points to which dataset id).",
     inputSchema: {},
   },
   async () => {
@@ -367,7 +367,7 @@ server.registerTool(
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in ./.memory/settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in the canonical settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -669,7 +669,7 @@ server.registerTool(
       const lessonId = config.datasetMap.get("self_improvement")?.id;
       if (!lessonId) {
         throw new Error(
-          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in ./.memory/settings/.env (or run ./memory/scripts/dify-setup.sh).",
+          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./memory/scripts/dify-setup.sh).",
         );
       }
       const datasetSlot = "self_improvement";
@@ -751,7 +751,7 @@ server.registerTool(
       const lessonSlot = config.datasetMap.get("self_improvement")?.id ? "self_improvement" : null;
       if (!lessonSlot) {
         throw new Error(
-          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in ./.memory/settings/.env (or run ./memory/scripts/dify-setup.sh).",
+          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./memory/scripts/dify-setup.sh).",
         );
       }
       const limit = maxResults || 5;

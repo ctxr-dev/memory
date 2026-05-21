@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 load_memory_env
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
-  echo "MCP smoke failed: MCP_CONTAINER_NAME not set in ./.memory/settings/.env (got '$container_name')." >&2
+  echo "MCP smoke failed: MCP_CONTAINER_NAME not set in $MEMORY_ENV (got '$container_name')." >&2
   echo "  Run ./memory/bootstrap.sh --slug <project-slug> first." >&2
   exit 1
 fi
@@ -102,7 +102,7 @@ function toolText(id) {
 response(1);
 const config = toolText(2);
 if (!config.apiKeyConfigured) {
-  fail("DIFY_KNOWLEDGE_API_KEY is not configured in ./.memory/settings/.env");
+  fail("DIFY_KNOWLEDGE_API_KEY is not configured in the canonical settings/.env");
 }
 if (!Array.isArray(config.datasetIds) || config.datasetIds.length === 0) {
   fail("No datasets configured. Run ./memory/scripts/dify-setup.sh to bind dataset slots (every DIFY_DATASET_<NAME>_ID line declares one).");
