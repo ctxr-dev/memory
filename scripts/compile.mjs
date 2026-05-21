@@ -660,11 +660,25 @@ async function main() {
 }
 
 // Run main() only when invoked as a script, not when imported by tests.
-// `process.argv[1]` is the script path when launched via `node scripts/compile.mjs`.
-// It is `undefined` in edge cases like REPL / `node -e '...'` / piped stdin,
-// where pathToFileURL(undefined) would throw a TypeError. The guard means an
-// edge-case caller still gets a clean no-op import; production launches always
-// have argv[1] set. Windows-safe via pathToFileURL.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Mirrors the hardened isMainModule idiom in scripts/hooks/exit-plan-mode.mjs:
+//   - `!process.argv[1]` guards REPL / `node -e '...'` / piped stdin where
+//     argv[1] is undefined (pathToFileURL(undefined) would throw).
+//   - `path.resolve(process.argv[1])` normalises a relative argv[1]
+//     (`node scripts/compile.mjs`) to an absolute path before comparison,
+//     so it matches the absolute `import.meta.url` regardless of how the
+//     launcher passed the path.
+//   - try/catch makes the guard fail closed (no main()) if pathToFileURL
+//     ever throws on an exotic argv[1] shape, rather than crashing import.
+// pathToFileURL handles Windows drive letters / UNC paths / percent-encoding.
+const invokedAsCli = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedAsCli) {
   await main();
 }
