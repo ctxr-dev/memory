@@ -465,6 +465,18 @@ env_file="$settings_dir/.env"
 legacy_env="$MEMORY_DIR/.env"   # pre-0.3.0 canonical location
 mkdir -p "$settings_dir"
 
+# Set KEY=VALUE as the SINGLE canonical line: delete every existing KEY= line
+# (active or duplicated by a prior install/edit) then append exactly one. This
+# guarantees the last/effective value (read_env_value uses `tail -n 1`) is the
+# reconciled one regardless of duplicates.
+set_env_unique() {
+  local key="$1" value="$2" file="$3" tmp
+  tmp="$(mktemp)"
+  grep -vE "^${key}=" "$file" > "$tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  mv "$tmp" "$file"
+}
+
 # Migrate a pre-0.3.0 install: if the new settings/.env does not exist yet but
 # a legacy memory/.env does, move its contents across (keeps the user's key +
 # bindings). If BOTH exist they may diverge; settings/.env is the new canonical
@@ -472,7 +484,16 @@ mkdir -p "$settings_dir"
 # the end either way, so there is exactly one .env.
 migrated=0
 if [ ! -f "$env_file" ] && [ -f "$legacy_env" ]; then
-  if cp "$legacy_env" "$env_file" 2>/dev/null; then migrated=1; fi
+  if cp "$legacy_env" "$env_file" 2>/dev/null; then
+    migrated=1
+  else
+    # Hard-fail rather than fall through to rendering a blank template, which
+    # would silently drop the user's existing API key + dataset bindings.
+    echo "FATAL: found legacy memory/.env but could not copy it to $env_file." >&2
+    echo "  Refusing to render a blank env over your existing key/bindings." >&2
+    echo "  Fix permissions on $settings_dir (or copy the file manually) and re-run." >&2
+    exit 1
+  fi
 elif [ -f "$env_file" ] && [ -f "$legacy_env" ] && ! cmp -s "$env_file" "$legacy_env"; then
   echo "warning: both memory/.env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
 fi
@@ -490,34 +511,20 @@ fi
 
 # Reconcile identity fields from the CURRENT --slug. On a fresh render they are
 # already correct (render substitutes them); on migrate/upgrade they may carry
-# a prior slug, so set-or-append each (BSD/GNU-portable sed -i.bak).
+# a prior slug. set_env_unique guarantees one canonical line per key.
 existing_project_name="$(grep -E '^COMPOSE_PROJECT_NAME=' "$env_file" | tail -n 1 | sed 's/^COMPOSE_PROJECT_NAME=//' || true)"
 if [ -n "$existing_project_name" ] && [ "$existing_project_name" != "$compose_project_name" ]; then
   echo "warning: env was written under a different slug (COMPOSE_PROJECT_NAME was '$existing_project_name'); re-deriving identity fields for '$slug'. Dataset bindings and API key are kept." >&2
 fi
-for kv in \
-  "COMPOSE_PROJECT_NAME=$compose_project_name" \
-  "MCP_CONTAINER_NAME=$memory_server_name" \
-  "MCP_IMAGE_NAME=$mcp_image_name"; do
-  k="${kv%%=*}"
-  if grep -qE "^$k=" "$env_file"; then
-    sed -i.bak "s|^$k=.*|$kv|" "$env_file"
-    rm -f "$env_file.bak"
-  else
-    printf '%s\n' "$kv" >> "$env_file"
-  fi
-done
+set_env_unique COMPOSE_PROJECT_NAME "$compose_project_name" "$env_file"
+set_env_unique MCP_CONTAINER_NAME "$memory_server_name" "$env_file"
+set_env_unique MCP_IMAGE_NAME "$mcp_image_name" "$env_file"
 
 # Reconcile MEMORY_LLM_PROVIDER: an explicit --llm-provider wins (write it in);
 # otherwise adopt the value already in the file so the summary reflects the
 # effective config, not the auto-detected default.
 if [ "$provider_explicit" -eq 1 ]; then
-  if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
-    sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
-    rm -f "$env_file.bak"
-  else
-    printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider" >> "$env_file"
-  fi
+  set_env_unique MEMORY_LLM_PROVIDER "$llm_provider" "$env_file"
 else
   existing_provider="$(grep -E '^MEMORY_LLM_PROVIDER=' "$env_file" | tail -n 1 | sed 's/^MEMORY_LLM_PROVIDER=//' || true)"
   if [ -n "$existing_provider" ]; then llm_provider="$existing_provider"; fi
