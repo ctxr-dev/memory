@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { slotEnvKey, envValue, envInt } from "../scripts/lib/env.mjs";
+import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT } from "../scripts/lib/env.mjs";
 
 test("slotEnvKey: lowercase slot -> DIFY_DATASET_<UPPER>_ID", () => {
   assert.equal(slotEnvKey("plans"), "DIFY_DATASET_PLANS_ID");
@@ -97,4 +97,36 @@ test("envInt: zero / negative / NaN / unset all fall back", (t) => {
   }
   delete process.env[key];
   assert.equal(envInt(key, 99), 99);
+});
+
+test("atomBodyMaxChars: default is 700 chars", () => {
+  // Locked: both flush.mjs:validateAtoms (post-LLM truncation) and the
+  // compile prompt (template substitution) read this value. A change
+  // here cascades to retrieval recall AND prompt token budget — keep
+  // intentional.
+  const prev = process.env.MEMORY_ATOM_BODY_MAX_CHARS;
+  delete process.env.MEMORY_ATOM_BODY_MAX_CHARS;
+  try {
+    assert.equal(ATOM_BODY_MAX_CHARS_DEFAULT, 700);
+    assert.equal(atomBodyMaxChars(), 700);
+  } finally {
+    if (prev !== undefined) process.env.MEMORY_ATOM_BODY_MAX_CHARS = prev;
+  }
+});
+
+test("atomBodyMaxChars: env override wins; invalid override falls back to default", (t) => {
+  const key = "MEMORY_ATOM_BODY_MAX_CHARS";
+  const prev = process.env[key];
+  t.after(() => {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  });
+  process.env[key] = "500";
+  assert.equal(atomBodyMaxChars(), 500);
+  process.env[key] = "1200";
+  assert.equal(atomBodyMaxChars(), 1200);
+  for (const bad of ["0", "-3", "abc"]) {
+    process.env[key] = bad;
+    assert.equal(atomBodyMaxChars(), ATOM_BODY_MAX_CHARS_DEFAULT, `'${bad}' should fall back`);
+  }
 });

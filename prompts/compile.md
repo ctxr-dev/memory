@@ -14,13 +14,13 @@ You receive:
 No existing entry covers this fact. Write the new atom as a new document.
 
 ```json
-{ "action": "update", "supersedes": "<existing_documentId>", "merged_text": "<≤700 chars merged document body>", "merged_name": "<≤180 chars title>", "reason": "<short>" }
+{ "action": "update", "supersedes": "<existing_documentId>", "merged_text": "<≤{{ATOM_BODY_MAX_CHARS}} chars merged document body>", "merged_name": "<≤180 chars title>", "reason": "<short>" }
 ```
 An existing entry covers the same fact. Produce merged text that:
 - Keeps the strongest statement of the rule/fact (lead with it).
 - Preserves the WHY and HOW-TO-APPLY lines from BOTH atoms when they add different evidence.
 - Removes contradictions: if the new atom contradicts the old one, the new one wins (treat the new one as more recent ground truth) and you must note `superseded by: <date>` in the merged_text.
-- Stays under 700 chars.
+- Stays under {{ATOM_BODY_MAX_CHARS}} chars.
 
 ```json
 { "action": "skip", "reason": "<short>" }

@@ -12,7 +12,7 @@ Produce a small set of typed atoms that will be useful to a different agent in a
     {
       "type": "<one of: decision, bug-root-cause, feedback-rule, project-lore, reference, pattern-gotcha, self-improvement-lesson>",
       "title": "imperative summary, ≤ 80 chars",
-      "body": "≤ 500 chars. Lead with the rule/fact. Include 'Why:' and 'How to apply:' lines when applicable.",
+      "body": "≤ {{ATOM_BODY_MAX_CHARS}} chars. Lead with the rule/fact. Include 'Why:' and 'How to apply:' lines when applicable.",
       "tags": ["lowercase-hyphenated", "scope", "or-area"],
       "metadata": {
         "project_module": "auth | billing | infra | frontend | ... (lowercase, hyphen-free)",
@@ -66,7 +66,7 @@ If nothing in the transcript is durable, return exactly: `{"atoms": []}`.
 Each atom must:
 1. Be reusable by a future agent with no access to this transcript.
 2. Lead with the fact, not the narrative ("X over Y because Z", not "we discussed and decided X").
-3. Be ≤ 80 chars title, ≤ 500 chars body.
+3. Be ≤ 80 chars title, ≤ {{ATOM_BODY_MAX_CHARS}} chars body.
 4. Have at least one tag.
 5. For `self-improvement-lesson`: have `metadata.project_module`, `metadata.task_type`, AND `metadata.error_pattern` set.
 

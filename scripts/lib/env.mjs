@@ -35,6 +35,16 @@ export function envInt(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Maximum body length for typed atoms, both at flush-time validation and at
+// compile-time prompt rendering. Configurable via MEMORY_ATOM_BODY_MAX_CHARS;
+// default 700 to fit a structured atom (rule + Why + How to apply) without
+// flooding retrieval. Both flush.mjs:validateAtoms and prompts/compile.md
+// read this value via envInt — keep the two ends in lock-step.
+export const ATOM_BODY_MAX_CHARS_DEFAULT = 700;
+export function atomBodyMaxChars() {
+  return envInt("MEMORY_ATOM_BODY_MAX_CHARS", ATOM_BODY_MAX_CHARS_DEFAULT);
+}
+
 // Canonical env-var name for a dataset slot binding. Mirrors the tokeniser
 // used by dify-setup.sh (lowercase + hyphen -> uppercase + underscore) so a
 // slot called "my-runbooks" maps to DIFY_DATASET_MY_RUNBOOKS_ID, not

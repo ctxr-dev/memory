@@ -775,6 +775,19 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 // Build a Dify metadata_condition from a flat {fieldName: value} map. All
 // conditions are AND-combined. `tags` uses `contains`; everything else uses
 // `is`. Empty values are skipped so callers can pass partial filters.
+// Stable string identity for a filters object. Used as a dedup key so two
+// equivalent filter sets (same keys, same values, different insertion
+// order) hash to the same string. JSON.stringify alone preserves insertion
+// order in V8 today but a future refactor adding conditional keys could
+// silently break dedup. Sort keys before stringifying so the contract
+// survives reorderings.
+export function canonicalFilterKey(filters) {
+  if (!filters || typeof filters !== "object") return JSON.stringify(filters);
+  const sorted = {};
+  for (const key of Object.keys(filters).sort()) sorted[key] = filters[key];
+  return JSON.stringify(sorted);
+}
+
 export function buildMetadataCondition(filters, { logicalOperator = "and", containsFields = ["tags"] } = {}) {
   if (!filters || typeof filters !== "object") return null;
   const conditions = [];

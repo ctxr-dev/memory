@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROMPTS_DIR, envInt, envValue, slotEnvKey } from "../lib/env.mjs";
+import { PROMPTS_DIR, envInt, envValue, slotEnvKey, atomBodyMaxChars } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
 import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
@@ -118,7 +118,8 @@ function loadPrompt() {
   if (!fs.existsSync(file)) {
     throw new Error(`flush prompt missing at ${file}`);
   }
-  return fs.readFileSync(file, "utf8");
+  const cap = atomBodyMaxChars();
+  return fs.readFileSync(file, "utf8").replace(/\{\{ATOM_BODY_MAX_CHARS\}\}/g, String(cap));
 }
 
 function normaliseMetadata(raw) {
@@ -176,7 +177,7 @@ function validateAtoms(parsed) {
     cleaned.push({
       type,
       title: title.slice(0, 80),
-      body: body.slice(0, 500),
+      body: body.slice(0, atomBodyMaxChars()),
       tags,
       metadata,
       evidence: atom.evidence ? String(atom.evidence).slice(0, 240).trim() : undefined,

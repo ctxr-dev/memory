@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   buildDatasetMap,
   buildMetadataCondition,
+  canonicalFilterKey,
   createDataset,
   createDatasetMetadataField,
   createDocumentByText,
@@ -643,11 +644,13 @@ server.registerTool(
         ladderRaw.push(next);
       }
       // Dedup adjacent identical filter sets so we don't run the same
-      // Dify call twice when the caller skipped a field.
+      // Dify call twice when the caller skipped a field. canonicalFilterKey
+      // sorts keys before stringifying so two filter sets with the same
+      // content but different insertion order hash identically.
       const ladder = [];
       let prevKey = null;
       for (const f of ladderRaw) {
-        const key = JSON.stringify(f);
+        const key = canonicalFilterKey(f);
         if (key !== prevKey) ladder.push(f);
         prevKey = key;
       }

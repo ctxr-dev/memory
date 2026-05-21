@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue } from "./lib/env.mjs";
+import { pathToFileURL } from "node:url";
+import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue, atomBodyMaxChars } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
@@ -66,7 +67,7 @@ function todayUtcDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function parseAtomsFromMarkdown(text) {
+export function parseAtomsFromMarkdown(text) {
   const atoms = [];
   const blocks = text.split(/\n(?=### Atom )/);
   for (const block of blocks) {
@@ -98,16 +99,35 @@ function parseAtomsFromMarkdown(text) {
           tags = inner ? inner.split(",").map((t) => t.trim()).filter(Boolean) : [];
           break;
         }
-        case "metadata":
-          try { metadata = JSON.parse(rest.trim()) || {}; } catch { metadata = {}; }
+        case "metadata": {
+          try {
+            const parsed = JSON.parse(rest.trim());
+            metadata = (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+          } catch {
+            metadata = {};
+          }
           break;
+        }
         case "body":
           if (rest.trim() === "|") inBody = true;
           else body = rest.trim();
           break;
-        case "evidence":
-          try { evidence = JSON.parse(rest.trim()); } catch { evidence = rest.trim(); }
+        case "evidence": {
+          // flush.mjs always JSON.stringifies the evidence string, so a
+          // valid daily produces a JSON-encoded one-liner here (newlines
+          // and embedded quotes are escape-encoded). Hand-edited dailies
+          // may carry a raw string, so fall back to the trimmed literal
+          // on parse failure. Guard the unusual case where parse succeeds
+          // but yields a non-string (e.g. evidence: null) — coerce.
+          const raw = rest.trim();
+          try {
+            const parsed = JSON.parse(raw);
+            evidence = typeof parsed === "string" ? parsed : raw;
+          } catch {
+            evidence = raw;
+          }
           break;
+        }
         default: break;
       }
     }
@@ -125,7 +145,9 @@ function parseAtomsFromMarkdown(text) {
 }
 
 function loadPrompt() {
-  return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8");
+  const cap = atomBodyMaxChars();
+  return fs.readFileSync(path.join(PROMPTS_DIR, "compile.md"), "utf8")
+    .replace(/\{\{ATOM_BODY_MAX_CHARS\}\}/g, String(cap));
 }
 
 function targetDatasetForAtom(atom) {
@@ -363,6 +385,20 @@ async function main() {
 
     let allOk = true;
     for (const atom of atoms) {
+      // Defence in depth: `plan` is in ATOM_TYPES so the schema-level
+      // routing table accepts it, but plans are produced exclusively by
+      // the ExitPlanMode hook (upsert-by-name into the `plans` slot).
+      // flush.mjs already drops `type:plan` atoms before write, but a
+      // hand-edited daily could still slip one through and produce a
+      // `knowledge-*.md`-named doc inside the plans slot. Drop it here
+      // too so promotion can never leak.
+      if (atom.type === "plan") {
+        console.error(
+          `compile.mjs: dropping atom with type='plan' (source='${daily.name}', title='${String(atom.title).slice(0, 40)}'); plans are written only by the ExitPlanMode hook`,
+        );
+        appendCompileLog({ event: "atom-skip-plan", source: daily.name, atomTitle: atom.title });
+        continue;
+      }
       const targetDataset = targetDatasetForAtom(atom);
       try {
         const candidates = await dedupCandidates(atom, targetDataset);
@@ -393,6 +429,16 @@ async function main() {
           );
         }
 
+        // Explicit 3-state log: "ok" (clean write), "warning" (schema missing
+        // on dataset; doc is un-filterable but no retry — config issue),
+        // "failed" (transient/bridge error; daily kept enabled for retry).
+        // undefined when no metadata was attempted (no fields to write).
+        let metadataApplied;
+        if (!metadataResult) metadataApplied = undefined;
+        else if (metadataResult.ok === true && !metadataResult.warning) metadataApplied = "ok";
+        else if (metadataResult.ok === true && metadataResult.warning) metadataApplied = "warning";
+        else metadataApplied = "failed";
+
         appendCompileLog({
           event: "atom",
           source: daily.name,
@@ -401,7 +447,7 @@ async function main() {
           action: decision.action,
           supersedes: decision.supersedes,
           dryRun: DRY_RUN,
-          metadataApplied: metadataResult?.ok === true && !metadataResult?.warning ? true : (metadataResult ? false : undefined),
+          metadataApplied,
           metadataWarning: metadataWarning || undefined,
           metadataError: metadataResult?.error || metadataResult?.reason,
         });
@@ -497,4 +543,8 @@ async function main() {
   );
 }
 
-await main();
+// Run main() only when invoked as a script, not when imported by tests.
+// Windows-safe via pathToFileURL.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

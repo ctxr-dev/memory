@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   buildDatasetMap,
   buildMetadataCondition,
+  canonicalFilterKey,
   resolveDatasetId,
   requireDifyWriteConfig,
   sanitizeHeaderValue,
@@ -129,6 +130,33 @@ test("buildMetadataCondition: respects containsFields override", () => {
     { containsFields: ["custom"] },
   );
   assert.equal(cond.conditions[0].comparison_operator, "contains");
+});
+
+// ---------- canonicalFilterKey ----------
+
+test("canonicalFilterKey: equivalent filter sets with different key order hash identically", () => {
+  // Locks the recall_lessons ladder dedup contract. V8 preserves insertion
+  // order today, so JSON.stringify alone would produce different strings
+  // for `{a:1,b:2}` vs `{b:2,a:1}` and the ladder would run the same Dify
+  // query twice. canonicalFilterKey sorts keys first.
+  const a = { atom_type: "self-improvement-lesson", project_module: "auth", language: "go" };
+  const b = { language: "go", project_module: "auth", atom_type: "self-improvement-lesson" };
+  assert.equal(canonicalFilterKey(a), canonicalFilterKey(b));
+});
+
+test("canonicalFilterKey: different filters hash differently", () => {
+  const a = { atom_type: "x" };
+  const b = { atom_type: "y" };
+  assert.notEqual(canonicalFilterKey(a), canonicalFilterKey(b));
+});
+
+test("canonicalFilterKey: null/undefined handled", () => {
+  assert.equal(canonicalFilterKey(null), JSON.stringify(null));
+  assert.equal(canonicalFilterKey(undefined), JSON.stringify(undefined));
+});
+
+test("canonicalFilterKey: empty object is stable", () => {
+  assert.equal(canonicalFilterKey({}), "{}");
 });
 
 // ---------- resolveDatasetId ----------
