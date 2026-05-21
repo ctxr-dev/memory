@@ -55,7 +55,9 @@ resolve_docker_bin() {
   # is empty so we never probe "/.rd/bin/docker".
   # Explicit override wins.
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
-    PATH="$(dirname "$DOCKER_BIN"):${PATH:-}"; export PATH
+    _dkr_dir="$(dirname "$DOCKER_BIN")"
+    if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+    export PATH; unset _dkr_dir
     return 0
   fi
 
@@ -78,7 +80,9 @@ $candidates"
     [ -n "$candidate" ] || continue
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
-      PATH="$(dirname "$candidate"):${PATH:-}"; export PATH
+      _dkr_dir="$(dirname "$candidate")"
+      if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+      export PATH; unset _dkr_dir
       # Quiet by default (lib.sh is sourced by scripts that emit machine-
       # readable output, e.g. mcp-config.sh). Set MEMORY_DEBUG=1 to surface.
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "lib.sh: using docker from $candidate" >&2; fi

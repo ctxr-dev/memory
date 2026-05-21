@@ -83,7 +83,9 @@ require_cmd() {
 # skipped when HOME is empty.
 resolve_docker_bin() {
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
-    PATH="$(dirname "$DOCKER_BIN"):${PATH:-}"; export PATH
+    _dkr_dir="$(dirname "$DOCKER_BIN")"
+    if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+    export PATH; unset _dkr_dir
     return 0
   fi
   if command -v docker >/dev/null 2>&1; then
@@ -101,7 +103,9 @@ $candidates"
     [ -n "$candidate" ] || continue
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
-      PATH="$(dirname "$candidate"):${PATH:-}"; export PATH
+      _dkr_dir="$(dirname "$candidate")"
+      if [ -n "${PATH:-}" ]; then PATH="$_dkr_dir:$PATH"; else PATH="$_dkr_dir"; fi
+      export PATH; unset _dkr_dir
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "bootstrap.sh: using docker from $candidate" >&2; fi
       return 0
     fi
