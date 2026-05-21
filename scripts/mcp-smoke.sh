@@ -26,14 +26,17 @@ if ! docker inspect -f '{{.State.Running}}' "$container_name" >/dev/null 2>&1; t
 fi
 
 # IDs 1-3: existing baseline (initialize, get_memory_config, search_memory).
-# IDs 4-5 (NEW in round-10): exercise the round-7 typed-pipeline tools so a
-# regression in recall_lessons / metadata-filtered search surfaces here
-# instead of in real-user incidents. Both are READ-ONLY (no save_lesson —
-# that would dirty the user's dataset). The ladder for recall_lessons is
-# probed with a deliberately-no-match query so success means "tool works
-# and returns an empty/low-hit response without erroring", which is the
-# regression we want to catch (round-7 tool shape, ladder traversal,
-# topK propagation).
+# IDs 4-5: exercise the typed-pipeline tools so a regression in
+# recall_lessons / metadata-filtered search surfaces here instead of in
+# real-user incidents. Both are READ-ONLY (no save_lesson — that would
+# dirty the user's dataset). The ladder for recall_lessons is probed
+# with a deliberately-no-match query so success means "tool works and
+# returns an empty/low-hit response without erroring".
+# ID 6: audit_memory list-only walk across all slots. Verifies the tool
+# registers, can call listAllDocuments per bound slot, and returns the
+# documented { findings, summary, errors } envelope. Default classes
+# argument exercises every finder pass without filtering, so a
+# regression in any finder helper surfaces here.
 docker exec -i "$container_name" node src/index.js <<'JSON' | tee "$output_file"
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0.1.0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
@@ -41,6 +44,7 @@ docker exec -i "$container_name" node src/index.js <<'JSON' | tee "$output_file"
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"memory smoke validation","maxResults":1}}}
 {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_memory","arguments":{"query":"memory smoke filtered","maxResults":1,"filters":{"atom_type":"self-improvement-lesson"},"scoreThreshold":0.99}}}
 {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"recall_lessons","arguments":{"query":"smoke probe with very specific phrase unlikely to match anything","project_module":"smoke","scoreThreshold":0.99,"maxResults":1,"includeKnowledge":false}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"audit_memory","arguments":{}}}
 JSON
 
 node - "$output_file" <<'NODE'
@@ -155,6 +159,25 @@ if (!Array.isArray(recall.records)) {
   fail(`recall_lessons response missing records array`);
 }
 
-const summary = `MCP smoke OK${warnings > 0 ? ` (with ${warnings} warning${warnings === 1 ? "" : "s"})` : ""}: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'; baseline + filtered search + recall_lessons round-trip clean`;
+// audit_memory list-only walk. The tool returns
+//   { ok: true, findings: [...], summary: {...}, errors: [...] }
+// when at least one slot is bound. Empty findings is fine — what
+// matters is the registered tool surface, the listAllDocuments call
+// per bound slot, and the documented envelope shape didn't regress.
+const audit = toolText(6);
+if (audit.ok !== true) {
+  fail(`audit_memory returned ok=${audit.ok}; expected true`);
+}
+if (!Array.isArray(audit.findings)) {
+  fail(`audit_memory response missing findings[] array`);
+}
+if (!audit.summary || typeof audit.summary !== "object") {
+  fail(`audit_memory response missing summary{} object`);
+}
+if (!Array.isArray(audit.errors)) {
+  fail(`audit_memory response missing errors[] array`);
+}
+
+const summary = `MCP smoke OK${warnings > 0 ? ` (with ${warnings} warning${warnings === 1 ? "" : "s"})` : ""}: ${config.datasetIds.length} dataset(s), flush='${flushSlot}' compile='${compileSlot}'; baseline + filtered search + recall_lessons + audit_memory round-trip clean`;
 console.error(summary);
 NODE

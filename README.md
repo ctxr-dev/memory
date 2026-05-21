@@ -458,7 +458,7 @@ When `--install-hooks` is on (default), `.claude/settings.json` is rendered with
 - `.claude/skills/<name>.md` (only when `--install-hooks`): Claude Code's project skills directory; auto-loaded.
 - `.agents/rules/<name>.md` (always): vendor-neutral. Cursor / Codex / generic clients can import from here.
 
-Today the boilerplate ships two skills: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract) and `plan-capture.md` (how the `ExitPlanMode` auto-capture and manual `save_to_dataset` paths interact for the `plans` slot).
+Today the boilerplate ships three skills: `self-improvement.md` (the `recall_lessons` + `save_lesson` contract), `plan-capture.md` (how the `ExitPlanMode` auto-capture and manual `save_to_dataset` paths interact for the `plans` slot), and `investigation-capture.md` (when and how to save a long debugging session as a durable artefact in the `investigations` slot; agent-side rule, no hook).
 
 ## Hook reference
 
@@ -570,6 +570,7 @@ memory/
 │   ├── claude/settings.json          # rendered to <project>/.claude/
 │   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
 │   ├── skills/plan-capture.md        # rendered to .claude/skills/ AND .agents/rules/
+│   ├── skills/investigation-capture.md # rendered to .claude/skills/ AND .agents/rules/
 │   └── gitignore.append              # appended to <project>/.gitignore
 └── vendor/dify/                # cloned at first dify-bootstrap
 

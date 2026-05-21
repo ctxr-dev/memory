@@ -520,11 +520,24 @@ server.registerTool(
       if (requested.has("duplicate-error-pattern")) slotsToWalk.add("self_improvement");
 
       const docsBySlot = {};
+      // listAllDocuments paginates 100 docs/page up to 100 pages = 10000
+      // docs/slot ceiling. A slot that returns EXACTLY 10000 docs is
+      // almost certainly truncated; surface a warning so the audit
+      // doesn't silently miss the tail. Real installs have <1k docs/slot.
+      const LIST_ALL_CEILING = 10_000;
       for (const slot of slotsToWalk) {
         const entry = config.datasetMap.get(slot);
         if (!entry?.id) continue;
         try {
-          docsBySlot[slot] = await listAllDocuments(config, { datasetId: entry.id });
+          const docs = await listAllDocuments(config, { datasetId: entry.id });
+          docsBySlot[slot] = docs;
+          if (docs.length >= LIST_ALL_CEILING) {
+            errors.push({
+              slot,
+              error: `listAllDocuments hit the ${LIST_ALL_CEILING}-doc pagination ceiling; audit may be incomplete. Consider filtering by keyword or splitting the dataset.`,
+              kind: "warning",
+            });
+          }
         } catch (err) {
           errors.push({ slot, error: err instanceof Error ? err.message : String(err) });
         }
