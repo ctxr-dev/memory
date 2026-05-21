@@ -108,9 +108,10 @@ resolve_dify_version() {
 
   # A prior install snapshots .dify-version into <data_dir>/settings/ so it
   # survives removing/re-cloning ./memory. If the in-clone version file is
-  # gone but the snapshot survives, restore the pinned version from it (and
-  # copy it back to DIFY_VERSION_FILE) so a re-clone reuses the same Dify
-  # tag instead of jumping to GitHub-latest.
+  # gone but the snapshot survives, restore the pinned version from it so a
+  # re-clone reuses the same Dify tag instead of jumping to GitHub-latest.
+  # No cp back to DIFY_VERSION_FILE is needed: the caller writes the resolved
+  # version there unconditionally right after this returns.
   local data_dir
   data_dir="${MEMORY_DATA_DIR:-$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)}"
   data_dir="${data_dir:-$WORKSPACE_DIR/.memory}"
@@ -118,7 +119,6 @@ resolve_dify_version() {
   if [ -f "$settings_version_file" ]; then
     pinned_version="$(sed -n 's/[[:space:]]//g; /^$/d; 1p' "$settings_version_file")"
     if [ -n "$pinned_version" ]; then
-      cp "$settings_version_file" "$DIFY_VERSION_FILE" 2>/dev/null || true
       printf '%s\n' "$pinned_version"
       return
     fi
