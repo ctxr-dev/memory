@@ -34,11 +34,35 @@ export function extractTitle(body) {
   return firstLine ? firstLine.slice(0, 80) : "untitled";
 }
 
+// Neutralise any fence markers the plan body itself contains before we
+// wrap it. Without this, a plan whose body includes a literal
+// `<!-- END UNTRUSTED PLAN BODY -->` (whether authored by a malicious
+// upstream or copy-pasted from another fenced doc) would close the fence
+// early, and a downstream reader would treat everything after that
+// premature END as trusted content OUTSIDE the fence — defeating the
+// prompt-injection mitigation the fence exists for. We defang BOTH the
+// PLAN markers and the sibling INVESTIGATION / MEMORY variants (referenced
+// in the skills) by inserting a zero-width space after the opening `<!--`,
+// which keeps the text human-readable but breaks the exact-match an
+// attacker (or a naive reader-side splitter) would rely on. Idempotent:
+// re-fencing an already-defanged body changes nothing further.
+const ZERO_WIDTH_SPACE = "\u200b";
+function defangFenceMarkers(text) {
+  // Match any "<!-- BEGIN/END UNTRUSTED ... BODY ... -->" comment and
+  // break the leading "<!--" token with a zero-width space (U+200B) so
+  // the marker no longer matches an exact-string fence splitter.
+  return String(text).replace(
+    /<!--(\s*(?:BEGIN|END)\s+UNTRUSTED\b[^>]*?BODY\b[^>]*?-->)/gi,
+    `<!${ZERO_WIDTH_SPACE}--$1`,
+  );
+}
+
 // Wrap raw plan text in the untrusted-content fence + an origin header
-// line so chunked retrieval still carries provenance. Exported so the
+// line so chunked retrieval still carries provenance. Defangs any fence
+// markers in the body first (see defangFenceMarkers). Exported so the
 // fence test can assert directly on the wrapping.
 export function fencePlanBody(text) {
-  return `${FENCE_HEAD}\n\n${text}\n\n${FENCE_FOOT}`;
+  return `${FENCE_HEAD}\n\n${defangFenceMarkers(text)}\n\n${FENCE_FOOT}`;
 }
 
 export function planDocSpec(hookInput, { maxBytes = DEFAULT_MAX_PLAN_BYTES } = {}) {

@@ -17,7 +17,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { createDocumentByText, getConfig } from "../mcp-server/src/dify.js";
+import { createDocumentByText } from "../mcp-server/src/dify.js";
 import { withFetchStub } from "./lib/fetch-stub.mjs";
 
 function planConfig() {

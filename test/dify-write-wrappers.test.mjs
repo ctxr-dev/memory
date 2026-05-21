@@ -7,15 +7,46 @@
 // execCli. A silent rename of either the subcommand name (e.g.
 // "disable" → "disable-document") or a flag key (e.g. "documentId" →
 // "docId") would silently break every host-side call site without
-// any test catching it. These tests lock both contracts by exercising
-// the pure `buildExecCliArgs` exported sibling and by running each
-// wrapper through a mocked child_process.spawn that captures the
-// invocation shape.
+// any test catching it. These tests lock both contracts by (1)
+// source-parsing each wrapper's actual `execCli("<subcommand>"` literal
+// out of dify-write.mjs and asserting it against an expected table, and
+// (2) exercising the pure `buildExecCliArgs` sibling with each wrapper's
+// real flag shape to cover the args-serialization path.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { buildExecCliArgs } from "../scripts/lib/dify-write.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const DIFY_WRITE_SRC = fs.readFileSync(
+  path.resolve(here, "..", "scripts", "lib", "dify-write.mjs"),
+  "utf8",
+);
+
+// Source-parse the ACTUAL subcommand literal each exported wrapper hands
+// to execCli. For wrapper `export function <name>(...)`, find the first
+// `execCli("<literal>"` after the declaration and before the next
+// `export function`. Handles both inline (`return execCli("save", ...)`)
+// and multi-line (`return execCli(\n  "write",`) call shapes.
+// This is what makes the table below a REAL lock: a silent rename of a
+// wrapper's subcommand in dify-write.mjs diverges from the expected
+// table and fails the test (closes the round-39 reviewer finding that
+// the prior version only exercised buildExecCliArgs with hardcoded
+// strings and never inspected the wrappers).
+function extractWrapperSubcommand(name) {
+  const declRe = new RegExp(`export function ${name}\\b`);
+  const declMatch = declRe.exec(DIFY_WRITE_SRC);
+  if (!declMatch) return null;
+  const start = declMatch.index;
+  const nextDecl = DIFY_WRITE_SRC.indexOf("export function ", start + 1);
+  const body = DIFY_WRITE_SRC.slice(start, nextDecl === -1 ? undefined : nextDecl);
+  const callMatch = body.match(/execCli\(\s*"([a-z][a-z0-9-]*)"/);
+  return callMatch ? callMatch[1] : null;
+}
 
 // ---------- buildExecCliArgs (pure) ----------
 
@@ -59,17 +90,17 @@ test("buildExecCliArgs: coerces non-string values via String()", () => {
 // ---------- Wrapper subcommand + flag-shape lock ----------
 //
 // The wrappers in scripts/lib/dify-write.mjs each call execCli with a
-// specific (subcommand, flags) pair. Direct end-to-end testing would
-// require stubbing child_process.spawn, which Node ESM makes awkward
-// (named exports are bindings). Instead we test the WRAPPER CONTRACT
-// indirectly: the parametric table below records every wrapper's
-// expected subcommand name and flag-key set. A wrapper that silently
-// renames its subcommand or a flag key would diverge from the table
-// and a maintainer's first task on a wrapper change is to update the
-// table here — making the contract change explicit in the diff. The
-// table is exercised via buildExecCliArgs (the pure args-builder
-// the wrappers all funnel through), so we ALSO get coverage of the
-// args-serialization path with each wrapper's real flag shape.
+// specific (subcommand, flags) pair. The table below records every
+// wrapper's expected subcommand name and flag-key set. Two complementary
+// assertions per row:
+//   1. SOURCE LOCK: extractWrapperSubcommand source-parses the ACTUAL
+//      `execCli("<literal>"` call in the wrapper's body and asserts it
+//      equals the expected subcommand. This catches a silent rename in
+//      dify-write.mjs (the round-39 reviewer's concern that the prior
+//      version never inspected the wrappers).
+//   2. ARGS LOCK: buildExecCliArgs (the pure builder all wrappers funnel
+//      through) is exercised with the wrapper's real flag shape so the
+//      args-serialization path is covered too.
 
 const WRAPPER_TABLE = [
   { wrapper: "writeMemory",        subcommand: "write", flags: { name: "n", datasetId: "d", supersedes: "s", supersedesAction: "disable" } },
@@ -79,6 +110,7 @@ const WRAPPER_TABLE = [
   { wrapper: "deleteDocument",     subcommand: "delete",  flags: { documentId: "doc1", datasetId: "ds1" } },
   { wrapper: "listDocuments",      subcommand: "list",    flags: { prefix: "plan-", enabled: "true", datasetId: "ds1" } },
   { wrapper: "readDocument",       subcommand: "read",    flags: { documentId: "doc1", datasetId: "ds1" } },
+  { wrapper: "searchMemoryFiltered", subcommand: "search", flags: { query: "q", datasetId: "ds1", limit: "5" } },
   { wrapper: "setBuiltInMetadata", subcommand: "set-built-in-metadata", flags: { datasetId: "ds1", enabled: "true" } },
   { wrapper: "updateDocMetadata",  subcommand: "update-doc-metadata",   flags: { datasetId: "ds1", documentId: "doc1", metadata: '{"a":1}' } },
   { wrapper: "listDatasets",       subcommand: "list-datasets", flags: {} },
@@ -86,6 +118,15 @@ const WRAPPER_TABLE = [
 
 for (const row of WRAPPER_TABLE) {
   test(`${row.wrapper}: subcommand='${row.subcommand}' + flag shape locked`, () => {
+    // 1. Source lock — the wrapper's actual execCli subcommand literal.
+    const sourceSubcommand = extractWrapperSubcommand(row.wrapper);
+    assert.equal(
+      sourceSubcommand,
+      row.subcommand,
+      `${row.wrapper} in scripts/lib/dify-write.mjs calls execCli("${sourceSubcommand}") but the lock table expects "${row.subcommand}". If the rename is intentional, update WRAPPER_TABLE; otherwise it is a silent contract break.`,
+    );
+
+    // 2. Args lock — the pure builder serialization with the real flags.
     const args = buildExecCliArgs(row.subcommand, row.flags, "test-container");
     // Subcommand is at index 5.
     assert.equal(args[5], row.subcommand, `${row.wrapper} must use subcommand '${row.subcommand}'`);
