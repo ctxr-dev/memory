@@ -158,6 +158,17 @@ test("forcedLessonUpdate: returns null when atom has no error_pattern", () => {
   assert.equal(forcedLessonUpdate(atom, [{ documentId: "doc1" }]), null);
 });
 
+test("forcedLessonUpdate: returns null for null / non-object atom (defensive)", () => {
+  // Defensive guard added in round-38: callers may pass through bad
+  // shapes (e.g. a bug in parseAtomsFromMarkdown produces null). Should
+  // not throw; just fall through to LLM decideAction or the caller's
+  // null-handling path.
+  assert.equal(forcedLessonUpdate(null, [{ documentId: "x" }]), null);
+  assert.equal(forcedLessonUpdate(undefined, [{ documentId: "x" }]), null);
+  assert.equal(forcedLessonUpdate("not-an-object", [{ documentId: "x" }]), null);
+  assert.equal(forcedLessonUpdate(42, [{ documentId: "x" }]), null);
+});
+
 test("forcedLessonUpdate: returns null when no candidates (LLM falls through to create)", () => {
   const atom = {
     type: "self-improvement-lesson",

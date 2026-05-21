@@ -211,10 +211,21 @@ server.registerTool(
 
       records.sort((left, right) => (right.score ?? -1) - (left.score ?? -1));
 
+      // Transparency: when the bridge auto-injected project_module
+      // (because caller passed filters but omitted project_module), the
+      // LLM/agent should see what was applied. Without this, a user who
+      // migrated their docs from project_module="myproject" to a bridge
+      // with COMPOSE_PROJECT_NAME="myproject-memory" would see zero hits
+      // and no clue that an auto-filter is filtering them out.
+      const injectedFilters = (effectiveFilters && filters && !filters.project_module && effectiveFilters.project_module)
+        ? { project_module: effectiveFilters.project_module }
+        : null;
+
       return jsonToolResponse({
         query,
         datasetsSearched: selectedDatasetIds,
         filters: filters || null,
+        injectedFilters,
         scoreThreshold: scoreThreshold ?? null,
         errors,
         totalRecords: records.length,
@@ -482,7 +493,7 @@ server.registerTool(
   {
     title: "Audit memory for stale or low-quality documents (list-only)",
     description:
-      "Walk the `plans`, `knowledge`, and `self_improvement` slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes: `stale-plans` (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames), `missing-metadata` (atom_type-specific required fields absent — un-filterable in future recall), `stale-project-lore` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days), `duplicate-error-pattern` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via the deterministic same-error_pattern dedup compile.mjs enforces going forward). Partial success: if a per-slot list call fails, the error is surfaced in the response's `errors[]` array and the audit continues with the remaining slots. Always check `errors[]` to understand how complete the result is.",
+      "Walk the bound dataset slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes, each with a targeted slot walk: `stale-plans` walks ONLY the `plans` slot (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames); `missing-metadata` walks `knowledge`, `self_improvement`, and (if bound) the legacy `default` slot (atom_type-specific required fields absent — un-filterable in future recall); `stale-project-lore` walks ONLY `knowledge` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days; project-lore is documented as decaying fast); `duplicate-error-pattern` walks ONLY `self_improvement` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via the deterministic same-error_pattern dedup compile.mjs enforces going forward). Partial success: if a per-slot list call fails OR hits the 10000-doc pagination ceiling, the error/warning is surfaced in the response's `errors[]` array and the audit continues with the remaining slots. Always check `errors[]` to understand how complete the result is.",
     inputSchema: {
       classes: z.array(AUDIT_CLASSES).optional(),
       staleLoreDays: z.number().int().min(1).max(3650).optional(),
@@ -505,18 +516,24 @@ server.registerTool(
       // Slots-to-walk is the union of slots each requested class needs.
       // missing-metadata only inspects atom_types that appear in
       // REQUIRED_METADATA_BY_TYPE (self-improvement-lesson, bug-root-cause),
-      // which live in `self_improvement` and `knowledge`. The `plans` slot
-      // is intentionally excluded for missing-metadata — `atom_type: plan`
-      // has no required metadata fields, so walking plans would be a
-      // no-op cost. stale-project-lore similarly only inspects
-      // `project-lore` atoms, which live in `knowledge`.
+      // which live in `self_improvement` and `knowledge` plus the legacy
+      // `default` slot used by installs that set DIFY_WRITE_DATASET_ID
+      // before the typed-slot rollout. The `plans` slot is intentionally
+      // excluded for missing-metadata — `atom_type: plan` has no required
+      // metadata fields, so walking plans would be a no-op cost.
+      // stale-project-lore similarly only inspects `project-lore` atoms,
+      // which live in `knowledge` (+ `default` for legacy installs).
       const slotsToWalk = new Set();
       if (requested.has("stale-plans")) slotsToWalk.add("plans");
       if (requested.has("missing-metadata")) {
         slotsToWalk.add("knowledge");
         slotsToWalk.add("self_improvement");
+        if (config.datasetMap.has("default")) slotsToWalk.add("default");
       }
-      if (requested.has("stale-project-lore")) slotsToWalk.add("knowledge");
+      if (requested.has("stale-project-lore")) {
+        slotsToWalk.add("knowledge");
+        if (config.datasetMap.has("default")) slotsToWalk.add("default");
+      }
       if (requested.has("duplicate-error-pattern")) slotsToWalk.add("self_improvement");
 
       const docsBySlot = {};
@@ -549,9 +566,11 @@ server.registerTool(
       if (requested.has("missing-metadata")) {
         if (docsBySlot.knowledge) findings.push(...findMissingMetadata(docsBySlot.knowledge, "knowledge"));
         if (docsBySlot.self_improvement) findings.push(...findMissingMetadata(docsBySlot.self_improvement, "self_improvement"));
+        if (docsBySlot.default) findings.push(...findMissingMetadata(docsBySlot.default, "default"));
       }
-      if (requested.has("stale-project-lore") && docsBySlot.knowledge) {
-        findings.push(...findStaleProjectLore(docsBySlot.knowledge, "knowledge", days));
+      if (requested.has("stale-project-lore")) {
+        if (docsBySlot.knowledge) findings.push(...findStaleProjectLore(docsBySlot.knowledge, "knowledge", days));
+        if (docsBySlot.default) findings.push(...findStaleProjectLore(docsBySlot.default, "default", days));
       }
       if (requested.has("duplicate-error-pattern") && docsBySlot.self_improvement) {
         findings.push(...findDuplicateErrorPatternLessons(docsBySlot.self_improvement, "self_improvement"));
@@ -861,10 +880,21 @@ server.registerTool(
       // whenever lessonHits.length >= limit.
       const all = [...lessonHits.slice(0, limit), ...supplementary];
 
+      // Transparency: when the bridge auto-injected project_module
+      // (because caller omitted it and DEFAULT_PROJECT_MODULE is bound),
+      // surface that in the response so the LLM/agent can spot a
+      // cross-install migration mismatch (docs written with one project
+      // module, recall scoped to a different one returns empty results
+      // without any other clue).
+      const injectedFilters = (!project_module && effectiveProjectModule)
+        ? { project_module: effectiveProjectModule }
+        : null;
+
       return jsonToolResponse({
         query,
         lessonDataset: lessonSlot,
         ladderUsed: rungAttribution,
+        injectedFilters,
         scoreThreshold: threshold,
         lessonHits: lessonHits.length,
         supplementaryHits: supplementary.length,

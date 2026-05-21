@@ -36,6 +36,9 @@ export const ABSORB_MAX_FILE_BYTES =
 // calls are taken verbatim; mismatched normalisation would silently
 // scope the recall to an unrelated module.
 export function inferDefaultProjectModule(env = process.env) {
+  // Defensive: caller may explicitly pass `null` (e.g. in tests) instead
+  // of relying on the default. Treat as "no env" → return empty string.
+  if (!env || typeof env !== "object") return "";
   const explicit = String(env.MEMORY_DEFAULT_PROJECT_MODULE || "").trim().toLowerCase();
   if (explicit) return explicit;
   const compose = String(env.COMPOSE_PROJECT_NAME || "").trim().toLowerCase();

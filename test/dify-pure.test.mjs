@@ -496,6 +496,17 @@ test("workspace.js: inferDefaultProjectModule returns empty string when nothing 
   assert.equal(ws.inferDefaultProjectModule({}), "");
 });
 
+test("workspace.js: inferDefaultProjectModule handles explicit null/undefined env defensively", async () => {
+  // Round-38 defensive guard: a caller may pass `null` explicitly instead
+  // of letting the default kick in. Must not throw on
+  // `null.MEMORY_DEFAULT_PROJECT_MODULE`.
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule(null), "");
+  assert.equal(ws.inferDefaultProjectModule(undefined), "");
+  assert.equal(ws.inferDefaultProjectModule("not-an-object"), "");
+  assert.equal(ws.inferDefaultProjectModule(42), "");
+});
+
 test("workspace.js: inferDefaultProjectModule rejects unrendered bootstrap placeholder", async () => {
   // If bootstrap.sh is interrupted mid-render, the literal
   // __COMPOSE_PROJECT_NAME__ may persist in memory/.env and forward into

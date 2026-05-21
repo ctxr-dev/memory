@@ -288,6 +288,7 @@ export function scoreAtomQuality(atom) {
 }
 
 export function forcedLessonUpdate(atom, candidates) {
+  if (!atom || typeof atom !== "object") return null;
   if (atom.type !== "self-improvement-lesson") return null;
   if (!atom.metadata?.error_pattern) return null;
   if (!candidates || candidates.length === 0) return null;
