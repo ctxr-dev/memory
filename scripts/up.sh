@@ -17,8 +17,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # Redis / Qdrant on every run.
 #
 # Service-name detection: only args that EXACTLY match a Compose service
-# name trigger recreate. This avoids misclassifying option values (e.g.
-# `--profile foo`, `--pull always`, `--project-name X`) as service names.
+# name trigger recreate. This avoids misclassifying option values whose
+# text is NOT a service name (e.g. `--profile foo`, `--pull always`,
+# `--project-name myapp`).
+#
+# Known limitation: if a flag's VALUE is spelled exactly like a real
+# Compose service (e.g. `up.sh --project-name memory_mcp`), it is still
+# treated as a service-name request and triggers --force-recreate. A
+# fully robust fix would require knowing which `docker compose up` flags
+# take a value (an open-ended, version-dependent list) and skipping those
+# values — fragile enough that it would risk breaking legitimate
+# positional usage like `up.sh --build memory_mcp`. The boilerplate only
+# ever invokes this wrapper with a bare positional service name
+# (`up.sh memory_mcp`), so the residual ambiguity is accepted rather than
+# papered over with a brittle parser.
 has_service_arg=0
 services="$(docker_compose config --services 2>/dev/null || true)"
 for arg in "$@"; do
