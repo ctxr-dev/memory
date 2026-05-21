@@ -39,6 +39,13 @@ export function inferDefaultProjectModule(env = process.env) {
   const explicit = String(env.MEMORY_DEFAULT_PROJECT_MODULE || "").trim().toLowerCase();
   if (explicit) return explicit;
   const compose = String(env.COMPOSE_PROJECT_NAME || "").trim().toLowerCase();
+  // bootstrap.sh writes placeholders like `__compose_project_name__` into
+  // memory/.env before substituting real values. If bootstrap was
+  // interrupted (CTRL-C, error mid-script) the literal placeholder may
+  // survive and forward into the container. Treat any `__...__`-shaped
+  // value as "not actually configured" so we don't poison recall scoping
+  // with a fake project_module shared across all broken installs.
+  if (compose.startsWith("__") && compose.endsWith("__")) return "";
   return compose;
 }
 

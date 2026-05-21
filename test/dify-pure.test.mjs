@@ -496,6 +496,20 @@ test("workspace.js: inferDefaultProjectModule returns empty string when nothing 
   assert.equal(ws.inferDefaultProjectModule({}), "");
 });
 
+test("workspace.js: inferDefaultProjectModule rejects unrendered bootstrap placeholder", async () => {
+  // If bootstrap.sh is interrupted mid-render, the literal
+  // __COMPOSE_PROJECT_NAME__ may persist in memory/.env and forward into
+  // the bridge container. We must NOT scope recall to that fake module
+  // name — that would silently cross-leak between every broken install.
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "__COMPOSE_PROJECT_NAME__" }), "");
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "__placeholder__" }), "");
+  // Sanity: a real value that just HAPPENS to start with an underscore but
+  // doesn't have the __...__ shape is preserved.
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "_partial" }), "_partial");
+  assert.equal(ws.inferDefaultProjectModule({ COMPOSE_PROJECT_NAME: "my_real_project" }), "my_real_project");
+});
+
 test("workspace.js: DEFAULT_PROJECT_MODULE is the resolved snapshot at module load", async () => {
   // DEFAULT_PROJECT_MODULE is computed once at module load (the bridge
   // process reads env at startup; values don't change mid-run). The
