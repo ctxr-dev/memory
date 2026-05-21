@@ -442,7 +442,7 @@ env_file="$MEMORY_DIR/.env"
 # A prior install snapshots memory/.env into ./.memory/settings/ so it
 # survives removing/re-cloning ./memory. On a fresh bootstrap (no
 # memory/.env yet) prefer restoring that snapshot over rendering a blank
-# template — it already carries the provider, API key and dataset
+# template: it already carries the provider, API key and dataset
 # bindings, so re-running dify-setup.sh becomes optional. Use the DEFAULT
 # data dir here: at first bootstrap there is no memory/.env to read a
 # custom MEMORY_DATA_DIR from.
@@ -455,12 +455,12 @@ settings_env="$settings_data_dir/settings/.env"
 if [ ! -f "$env_file" ]; then
   # Restore the snapshot only if the copy actually succeeds. Guarding the
   # cp in the `if` condition (errexit is suspended there) means a present-
-  # but-unreadable/corrupt snapshot does NOT abort bootstrap — we warn and
+  # but-unreadable/corrupt snapshot does NOT abort bootstrap, so we warn and
   # fall through to rendering a fresh .env so install always completes.
   if [ -f "$settings_env" ] && cp "$settings_env" "$env_file" 2>/dev/null; then
     chmod 600 "$env_file" 2>/dev/null || true   # carries the API key
     env_action="restored from $settings_data_dir/settings/"
-    echo "Restored prior settings (.env) from $settings_data_dir/settings/ — API key + dataset bindings reattached; running dify-setup.sh is optional."
+    echo "Restored prior settings (.env) from $settings_data_dir/settings/. API key + dataset bindings reattached; running dify-setup.sh is optional."
   else
     if [ -f "$settings_env" ]; then
       echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2

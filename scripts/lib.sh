@@ -44,7 +44,7 @@ unset home_resolved
 # from cron/CI/agents (or a bare `bash script.sh`) see "docker missing" even
 # though Docker works fine in the user's terminal. Colima and the in-app
 # Rancher binary have the same problem. This resolver ONLY ADDS locations to
-# PATH; it never blocks — if nothing is found it returns 0 so the caller's
+# PATH; it never blocks: if nothing is found it returns 0 so the caller's
 # existing `require_cmd docker` / `command -v` check still emits the canonical
 # install-guidance error. POSIX/bash-3.2 portable (macOS default bash).
 resolve_docker_bin() {
@@ -54,7 +54,7 @@ resolve_docker_bin() {
     return 0
   fi
 
-  # Already on PATH (the common case) — do nothing.
+  # Already on PATH (the common case): do nothing.
   if command -v docker >/dev/null 2>&1; then
     return 0
   fi
@@ -76,7 +76,7 @@ resolve_docker_bin() {
     fi
   done
 
-  # Nothing found — let the caller's require_cmd emit the canonical error.
+  # Nothing found: let the caller's require_cmd emit the canonical error.
   return 0
 }
 

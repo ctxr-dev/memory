@@ -32,7 +32,7 @@ settings_dir="$data_dir/settings"
 
 # Create + verify the settings dir is writable. If we can't write it
 # (permissions, full disk, read-only mount), warn to stderr and exit 0
-# WITHOUT claiming a snapshot happened — best-effort, never fatal.
+# WITHOUT claiming a snapshot happened: best-effort, never fatal.
 mkdir -p "$settings_dir" 2>/dev/null || true
 if [ ! -d "$settings_dir" ] || [ ! -w "$settings_dir" ]; then
   echo "warning: settings dir '$settings_dir' is not writable; skipped snapshot." >&2
@@ -108,7 +108,7 @@ if [ -n "$embed_model" ]; then
   embed_body="$embed_model"
   embed_label="embedding-model.txt ($embed_model)"
 else
-  embed_body="(embedding model unknown — bridge not reachable at snapshot time)"
+  embed_body="(embedding model unknown; bridge not reachable at snapshot time)"
   embed_label="embedding-model.txt (unknown)"
 fi
 if { printf '# recorded %s\n' "${ts:-unknown}"; printf '%s\n' "$embed_body"; } > "$settings_dir/embedding-model.txt" 2>/dev/null; then
