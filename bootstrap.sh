@@ -34,6 +34,7 @@ USAGE
 slug=""
 title=""
 llm_provider="ask"
+provider_explicit=0   # set when the user passes --llm-provider explicitly
 install_hooks=1
 register_codex=0
 interactive=1
@@ -50,7 +51,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --slug) require_value "$1" "${2-}"; slug="$2"; shift 2 ;;
     --title) require_value "$1" "${2-}"; title="$2"; shift 2 ;;
-    --llm-provider) require_value "$1" "${2-}"; llm_provider="$2"; shift 2 ;;
+    --llm-provider) require_value "$1" "${2-}"; llm_provider="$2"; provider_explicit=1; shift 2 ;;
     --install-hooks) install_hooks=1; shift ;;
     --no-hooks) install_hooks=0; shift ;;
     --register-codex) register_codex=1; shift ;;
@@ -504,6 +505,23 @@ if [ ! -f "$env_file" ]; then
         printf '%s\n' "$kv" >> "$env_file"
       fi
     done
+    # Reconcile MEMORY_LLM_PROVIDER so the restored .env and the summary
+    # agree. If the user passed --llm-provider explicitly, that wins (write it
+    # into the restored .env, same precedence as the identity fields above).
+    # Otherwise the restored value is authoritative: adopt it into
+    # $llm_provider so the summary reflects the EFFECTIVE config, not the
+    # auto-detected default.
+    if [ "$provider_explicit" -eq 1 ]; then
+      if grep -qE '^MEMORY_LLM_PROVIDER=' "$env_file"; then
+        sed -i.bak "s|^MEMORY_LLM_PROVIDER=.*|MEMORY_LLM_PROVIDER=$llm_provider|" "$env_file"
+        rm -f "$env_file.bak"
+      else
+        printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider" >> "$env_file"
+      fi
+    else
+      restored_provider="$(grep -E '^MEMORY_LLM_PROVIDER=' "$env_file" | tail -n 1 | sed 's/^MEMORY_LLM_PROVIDER=//' || true)"
+      if [ -n "$restored_provider" ]; then llm_provider="$restored_provider"; fi
+    fi
   else
     if [ -f "$settings_env" ]; then
       echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2
