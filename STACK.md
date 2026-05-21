@@ -298,7 +298,7 @@ For Claude Desktop, Cursor, or a generic MCP client, merge this server into the 
 
 Keep the command exactly the same. Do not paste `DIFY_KNOWLEDGE_API_KEY` into any MCP client config.
 
-The bridge exposes fourteen MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
+The bridge exposes fifteen MCP tools (full descriptions in [README MCP tools table](README.md#mcp-tools)):
 
 | Tool | Purpose |
 |---|---|
@@ -314,6 +314,7 @@ The bridge exposes fourteen MCP tools (full descriptions in [README MCP tools ta
 | `delete_document` | Permanent delete of a doc by id. Use to retract a stale `plan-<old-slug>.md` after a title change, or any auto-captured / absorbed doc. |
 | `disable_document` | Soft delete: hide from search but keep in Dify UI for audit. Use to retract a captured plan or lesson without losing the historical record. |
 | `enable_document` | Reverse a `disable_document`: bring a previously hidden doc back into search results. |
+| `audit_memory` | List-only walk of `plans`, `knowledge`, `self_improvement` slots; surfaces stale-plans, missing-metadata, stale-project-lore, duplicate-error-pattern findings. Act via the delete/disable tools. |
 | `scan_documents` | Walk the workspace mount; return matches + suggested doc names. |
 | `absorb_files` | Read selected files; upsert each into the chosen dataset. |
 

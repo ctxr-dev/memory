@@ -482,7 +482,7 @@ server.registerTool(
   {
     title: "Audit memory for stale or low-quality documents (list-only)",
     description:
-      "Walk the `plans`, `knowledge`, and `self_improvement` slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes: `stale-plans` (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames), `missing-metadata` (atom_type-specific required fields absent — un-filterable in future recall), `stale-project-lore` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days), `duplicate-error-pattern` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via Phase-2.1's forcedLessonUpdate going forward).",
+      "Walk the `plans`, `knowledge`, and `self_improvement` slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes: `stale-plans` (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames), `missing-metadata` (atom_type-specific required fields absent — un-filterable in future recall), `stale-project-lore` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days), `duplicate-error-pattern` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via the deterministic same-error_pattern dedup compile.mjs enforces going forward). Partial success: if a per-slot list call fails, the error is surfaced in the response's `errors[]` array and the audit continues with the remaining slots. Always check `errors[]` to understand how complete the result is.",
     inputSchema: {
       classes: z.array(AUDIT_CLASSES).optional(),
       staleLoreDays: z.number().int().min(1).max(3650).optional(),
@@ -502,13 +502,21 @@ server.registerTool(
       const findings = [];
       const errors = [];
 
+      // Slots-to-walk is the union of slots each requested class needs.
+      // missing-metadata only inspects atom_types that appear in
+      // REQUIRED_METADATA_BY_TYPE (self-improvement-lesson, bug-root-cause),
+      // which live in `self_improvement` and `knowledge`. The `plans` slot
+      // is intentionally excluded for missing-metadata — `atom_type: plan`
+      // has no required metadata fields, so walking plans would be a
+      // no-op cost. stale-project-lore similarly only inspects
+      // `project-lore` atoms, which live in `knowledge`.
       const slotsToWalk = new Set();
       if (requested.has("stale-plans")) slotsToWalk.add("plans");
-      if (requested.has("missing-metadata") || requested.has("stale-project-lore")) {
+      if (requested.has("missing-metadata")) {
         slotsToWalk.add("knowledge");
         slotsToWalk.add("self_improvement");
-        slotsToWalk.add("plans");
       }
+      if (requested.has("stale-project-lore")) slotsToWalk.add("knowledge");
       if (requested.has("duplicate-error-pattern")) slotsToWalk.add("self_improvement");
 
       const docsBySlot = {};
@@ -526,14 +534,11 @@ server.registerTool(
         findings.push(...findStalePlans(docsBySlot.plans));
       }
       if (requested.has("missing-metadata")) {
-        for (const [slot, docs] of Object.entries(docsBySlot)) {
-          findings.push(...findMissingMetadata(docs, slot));
-        }
+        if (docsBySlot.knowledge) findings.push(...findMissingMetadata(docsBySlot.knowledge, "knowledge"));
+        if (docsBySlot.self_improvement) findings.push(...findMissingMetadata(docsBySlot.self_improvement, "self_improvement"));
       }
-      if (requested.has("stale-project-lore")) {
-        for (const [slot, docs] of Object.entries(docsBySlot)) {
-          findings.push(...findStaleProjectLore(docs, slot, days));
-        }
+      if (requested.has("stale-project-lore") && docsBySlot.knowledge) {
+        findings.push(...findStaleProjectLore(docsBySlot.knowledge, "knowledge", days));
       }
       if (requested.has("duplicate-error-pattern") && docsBySlot.self_improvement) {
         findings.push(...findDuplicateErrorPatternLessons(docsBySlot.self_improvement, "self_improvement"));

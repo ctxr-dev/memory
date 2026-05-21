@@ -233,12 +233,22 @@ function buildPromotedDocText(atom, mergedTextOverride) {
 // LLM here keeps the rule from drifting on prompt edits and saves a
 // round-trip per same-pattern lesson.
 //
-// `merged_text` is intentionally NOT computed here; executeAction's
-// update branch falls back to atom.body when merged_text is empty, and
-// the new atom is the most recent ground truth on the failure mode.
-// Setting `merged_text` to the new atom's body (not a merge) preserves
-// the latest evidence and follows the prompt-documented rule "the new
-// one wins (treat the new one as more recent ground truth)".
+// IMPORTANT: this is a REPLACE, not a true merge. The prompt contract
+// for `update` says "Preserves the WHY and HOW-TO-APPLY lines from BOTH
+// atoms" — but that merge requires the LLM. Here we set
+// `merged_text = atom.body` (the new atom only). The deliberate trade:
+// (a) the new atom is the most recent ground truth on the failure
+//     mode, per prompts/compile.md's "the new one wins" rule for
+//     contradictions;
+// (b) cost: we lose any evidence the OLD doc had that the new one
+//     doesn't repeat. In practice the old doc is itself a prior
+//     compile-merged lesson, so losing one round of merged context
+//     is a one-time cost, not cumulative;
+// (c) benefit: zero LLM tokens per same-pattern lesson, and no risk
+//     of the LLM hallucinating a wrong documentId (the long-standing
+//     LLMOutputInvalid failure mode in executeAction's update path).
+// If you need a real merge here someday, swap `atom.body` for an
+// LLM-merged string but keep the bypass when the LLM is unavailable.
 // Heuristic quality rubric for `create` actions. Cheap (no LLM, just
 // inspections) signals that an atom is high-signal-density and worth
 // persisting. Returns { ok: boolean, reasons: string[] }. Reasons are
@@ -649,7 +659,11 @@ async function main() {
 }
 
 // Run main() only when invoked as a script, not when imported by tests.
-// Windows-safe via pathToFileURL.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// `process.argv[1]` is the script path when launched via `node scripts/compile.mjs`.
+// It is `undefined` in edge cases like REPL / `node -e '...'` / piped stdin,
+// where pathToFileURL(undefined) would throw a TypeError. The guard means an
+// edge-case caller still gets a clean no-op import; production launches always
+// have argv[1] set. Windows-safe via pathToFileURL.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }

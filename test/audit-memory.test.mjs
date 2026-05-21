@@ -118,6 +118,20 @@ test("findMissingMetadata: untyped (project-lore etc.) docs are not flagged", ()
   assert.equal(findMissingMetadata(docs, "knowledge").length, 0);
 });
 
+test("findMissingMetadata: plan-typed docs in the plans slot are never flagged (no required fields)", () => {
+  // Defensive lock for the slot-walk tightening in audit_memory tool:
+  // plans don't have required metadata fields, so even if we walked them
+  // findMissingMetadata would return zero. The tool excludes the plans
+  // slot from the missing-metadata walk for efficiency, but the helper
+  // contract must remain correct in case a future caller walks plans
+  // anyway.
+  const docs = [
+    mkDoc({ id: "PL1", name: "plan-foo.md", createdAt: 1, metadata: { atom_type: "plan" } }),
+    mkDoc({ id: "PL2", name: "plan-bar.md", createdAt: 1, metadata: {} }),
+  ];
+  assert.equal(findMissingMetadata(docs, "plans").length, 0);
+});
+
 // ---------- findStaleProjectLore ----------
 
 test("findStaleProjectLore: project-lore older than threshold is flagged", () => {
