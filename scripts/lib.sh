@@ -133,16 +133,10 @@ read_env_value() {
 
 load_memory_env() {
   local configured_project_name
-  local configured_memory_data_dir
 
   configured_project_name="${COMPOSE_PROJECT_NAME:-}"
   if [ -z "$configured_project_name" ]; then
     configured_project_name="$(read_env_value COMPOSE_PROJECT_NAME "$MEMORY_ENV" 2>/dev/null || true)"
-  fi
-
-  configured_memory_data_dir="${MEMORY_DATA_DIR:-}"
-  if [ -z "$configured_memory_data_dir" ]; then
-    configured_memory_data_dir="$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)"
   fi
 
   if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
@@ -151,13 +145,19 @@ load_memory_env() {
     exit 1
   fi
 
+  # MEMORY_DATA_DIR comes ONLY from the exported env var or the default (see
+  # MEMORY_DATA_DIR_DEFAULT at the top). We deliberately do NOT read it from
+  # the env file: MEMORY_ENV / MEMORY_SETTINGS_DIR / DIFY_VERSION_FILE_DEFAULT
+  # are computed from it BEFORE this function runs, so letting the file
+  # override it would make those paths disagree with where the file was found.
+  # To relocate the data dir, export MEMORY_DATA_DIR before running scripts.
   export MEMORY_DIR
   export MEMORY_ENV
   export MEMORY_SETTINGS_DIR
   export DIFY_VERSION_FILE_DEFAULT
   export WORKSPACE_DIR
   export DIFY_DOCKER_DIR
-  export MEMORY_DATA_DIR="${configured_memory_data_dir:-$WORKSPACE_DIR/.memory}"
+  export MEMORY_DATA_DIR="$MEMORY_DATA_DIR_DEFAULT"
   export COMPOSE_PROJECT_NAME="$configured_project_name"
 }
 

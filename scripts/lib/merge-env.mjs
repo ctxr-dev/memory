@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Merge newly-added keys from the .env template into an existing canonical
 // settings/.env, so a `git pull` upgrade surfaces new knobs without the user
@@ -90,6 +92,11 @@ function main(argv) {
 }
 
 // Run as CLI only when invoked directly (not when imported by tests).
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Compare resolved file URLs so a relative argv[1] or platform-specific path
+// separators / URL escaping don't make the guard miss.
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
+) {
   main(process.argv.slice(2));
 }
