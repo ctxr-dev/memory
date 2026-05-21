@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 load_memory_env
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
-  echo "FATAL: MCP_CONTAINER_NAME not set in memory/.env (got '$container_name')." >&2
+  echo "FATAL: MCP_CONTAINER_NAME not set in ./.memory/settings/.env (got '$container_name')." >&2
   echo "  Run ./memory/bootstrap.sh --slug <project-slug> first." >&2
   exit 1
 fi

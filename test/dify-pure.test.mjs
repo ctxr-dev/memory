@@ -591,7 +591,7 @@ test("computeInjectedFilters: unknown mode returns null defensively", async () =
 
 test("workspace.js: inferDefaultProjectModule rejects unrendered bootstrap placeholder", async () => {
   // If bootstrap.sh is interrupted mid-render, the literal
-  // __COMPOSE_PROJECT_NAME__ may persist in memory/.env and forward into
+  // __COMPOSE_PROJECT_NAME__ may persist in ./.memory/settings/.env and forward into
   // the bridge container. We must NOT scope recall to that fake module
   // name — that would silently cross-leak between every broken install.
   const ws = await importWorkspaceFresh();

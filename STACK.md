@@ -27,7 +27,7 @@ References:
 ./memory/scripts/up.sh
 ```
 
-On first run, the script resolves the current Dify release, writes it to `memory/.dify-version`, clones that pinned release into `memory/vendor/dify`, creates local env files, starts Dify, builds the MCP bridge, and prints the Dify UI URL. Later restarts reuse `memory/.dify-version` so Dify does not silently upgrade against existing `.memory/dify` database/vector data.
+On first run, the script resolves the current Dify release, writes it to `./.memory/settings/.dify-version`, clones that pinned release into `memory/vendor/dify`, creates local env files, starts Dify, builds the MCP bridge, and prints the Dify UI URL. Later restarts reuse `./.memory/settings/.dify-version` so Dify does not silently upgrade against existing `.memory/dify` database/vector data.
 
 Useful commands:
 
@@ -117,7 +117,7 @@ In Dify:
 3. Copy the Service API endpoint for reference.
 4. Click `API Key`.
 5. Create a new key.
-6. Store the key only in `memory/.env`.
+6. Store the key only in `./.memory/settings/.env`.
 
 Dify's Knowledge API key can access visible knowledge bases under the same account. Treat it like a real secret.
 
@@ -141,9 +141,9 @@ The recommended path is the wizard:
 ./memory/scripts/dify-setup.sh
 ```
 
-It binds named slots to Dify dataset IDs in `memory/.env` and optionally absorbs your existing project documentation. See the [README onboarding section](README.md#onboarding) for the full walkthrough.
+It binds named slots to Dify dataset IDs in `./.memory/settings/.env` and optionally absorbs your existing project documentation. See the [README onboarding section](README.md#onboarding) for the full walkthrough.
 
-If you prefer to edit `memory/.env` by hand, the relevant block is:
+If you prefer to edit `./.memory/settings/.env` by hand, the relevant block is:
 
 ```bash
 DIFY_KNOWLEDGE_API_KEY=...
@@ -442,7 +442,7 @@ What they do (deeper detail in [README](README.md#how-memory-is-built)):
 - `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later routes each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Source dailies are disabled after their atoms are promoted.
 - `PostToolUse` (matcher `ExitPlanMode`): when the user approves a plan, `scripts/hooks/exit-plan-mode.mjs` upserts `plan-<slug>.md` into the `plans` slot (deterministic, no LLM, several bridge round-trips: find + create + metadata + re-list + dedupe-delete; 30s timeout). Skips cleanly (exit 0) with a stderr message on rejection, empty plan body, unbound `plans` slot, or bridge failure. See [README → Saving plans](README.md#saving-plans-investigations-or-other-artefacts-manually) and the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract.
 
-If the LLM provider is unavailable, the MCP bridge container is down, or `memory/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
+If the LLM provider is unavailable, the MCP bridge container is down, or `./.memory/settings/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
 Manual flush test (extracts and writes a `daily-<ts>.md` document to Dify if your LLM provider is configured and the bridge is up):
 
@@ -453,7 +453,7 @@ printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_s
 #   daily-2026-05-09-120530123.md
 ```
 
-Manual compile (after `memory/.env` is configured and the stack is up):
+Manual compile (after `./.memory/settings/.env` is configured and the stack is up):
 
 ```bash
 node ./memory/scripts/compile.mjs              # promote any enabled daily-* docs
@@ -496,7 +496,7 @@ For hook-capable clients, wire lifecycle events to the matching script:
 
 If a client has only a session-end hook, wire only `session-end.sh`. If it has only a summary-after-compaction hook, wire `post-compact.sh` and pass the summary as `compact_summary`. If it cannot pass a transcript path or compact summary, automatic continuous capture is not available for that client; use MCP `write_memory` manually or rely on clients that expose hook payloads.
 
-Do not add secrets to hook JSON. Secrets belong in `memory/.env`.
+Do not add secrets to hook JSON. Secrets belong in `./.memory/settings/.env`.
 
 ## Persistence And Backups
 
@@ -527,7 +527,7 @@ You can push `.memory/dify/` if you really want the full local state in a remote
 ./memory/scripts/down.sh
 ```
 
-For normal durability, back up `.memory/dify/`. Keep `memory/.env` private.
+For normal durability, back up `.memory/dify/`. Keep `./.memory/settings/.env` private.
 
 ## Troubleshooting
 
@@ -543,7 +543,7 @@ Find the current UI port:
 ./memory/scripts/ui-url.sh
 ```
 
-Restart only the MCP bridge after changing `memory/.env`:
+Restart only the MCP bridge after changing `./.memory/settings/.env`:
 
 ```bash
 ./memory/scripts/up.sh memory_mcp
