@@ -58,14 +58,15 @@ services:
     build:
       context: ${MEMORY_DIR:?Set MEMORY_DIR via memory/scripts/up.sh}
       dockerfile: mcp-server/Dockerfile
-    image: ${MCP_IMAGE_NAME:?Set MCP_IMAGE_NAME via memory/.env (bootstrap.sh writes it)}
-    container_name: ${MCP_CONTAINER_NAME:?Set MCP_CONTAINER_NAME via memory/.env (bootstrap.sh writes it)}
+    image: ${MCP_IMAGE_NAME:?Set MCP_IMAGE_NAME via ./.memory/settings/.env (bootstrap.sh writes it)}
+    container_name: ${MCP_CONTAINER_NAME:?Set MCP_CONTAINER_NAME via ./.memory/settings/.env (bootstrap.sh writes it)}
     command: ["sleep", "infinity"]
     restart: unless-stopped
     volumes:
       - ${WORKSPACE_DIR:?Set WORKSPACE_DIR via memory/scripts/lib.sh}:/workspace:ro
-    # env_file forwards every line of memory/.env into the container, so any
-    # DIFY_DATASET_<NAME>_ID line the user adds is auto-propagated. The
+    # env_file forwards every line of ./.memory/settings/.env into the
+    # container, so any DIFY_DATASET_<NAME>_ID line the user adds is
+    # auto-propagated. The
     # `environment:` block below only enumerates entries that need a default
     # or have to be derived from compose-side state.
     env_file:

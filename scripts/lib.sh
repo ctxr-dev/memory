@@ -15,7 +15,18 @@ MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
 DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
-MEMORY_ENV="$MEMORY_DIR/.env"
+
+# The canonical user env file lives under the durable, gitignored data dir
+# (./.memory/settings/.env), NOT inside ./memory, so it survives removing or
+# re-cloning ./memory and there is exactly ONE .env. memory/.env.example is
+# the template. The data dir is resolved from an EXPORTED MEMORY_DATA_DIR or
+# the default; it canNOT be read from inside the env file to locate the env
+# file (chicken-and-egg), so relocating the data dir requires exporting
+# MEMORY_DATA_DIR before running any script.
+MEMORY_DATA_DIR_DEFAULT="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
+MEMORY_SETTINGS_DIR="$MEMORY_DATA_DIR_DEFAULT/settings"
+MEMORY_ENV="$MEMORY_SETTINGS_DIR/.env"
+DIFY_VERSION_FILE_DEFAULT="$MEMORY_SETTINGS_DIR/.dify-version"
 
 # Refuse to run if WORKSPACE_DIR is the user's home directory or root.
 # Happens when the boilerplate was cloned at the repo root (`git clone … .`
@@ -136,12 +147,14 @@ load_memory_env() {
 
   if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
     echo "FATAL: COMPOSE_PROJECT_NAME not configured." >&2
-    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to memory/.env." >&2
+    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
     exit 1
   fi
 
   export MEMORY_DIR
   export MEMORY_ENV
+  export MEMORY_SETTINGS_DIR
+  export DIFY_VERSION_FILE_DEFAULT
   export WORKSPACE_DIR
   export DIFY_DOCKER_DIR
   export MEMORY_DATA_DIR="${configured_memory_data_dir:-$WORKSPACE_DIR/.memory}"
