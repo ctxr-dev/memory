@@ -41,7 +41,7 @@ test("indexDocMetadata: handles missing doc_metadata", () => {
 
 // ---------- findStalePlans ----------
 
-test("findStalePlans: older slug that is a substring of newer slug is flagged", () => {
+test("findStalePlans: older slug that is a hyphen-delimited prefix of a newer slug is flagged", () => {
   const docs = [
     mkDoc({ id: "d1", name: "plan-auth.md", createdAt: 100 }),
     mkDoc({ id: "d2", name: "plan-auth-rewrite.md", createdAt: 200 }),
@@ -67,6 +67,47 @@ test("findStalePlans: unrelated plans are not flagged", () => {
     mkDoc({ id: "d2", name: "plan-billing.md", createdAt: 200 }),
   ];
   assert.equal(findStalePlans(docs).length, 0);
+});
+
+test("findStalePlans: substring-but-not-prefix is NOT flagged (round-40 false-positive guard)", () => {
+  // 'auth' is a substring of 'oauth' — the old bare `includes` check
+  // would wrongly flag plan-auth.md when plan-oauth.md exists. The
+  // delimiter-aware startsWith(slug + '-') check must NOT flag these.
+  const docs = [
+    mkDoc({ id: "d1", name: "plan-auth.md", createdAt: 100 }),
+    mkDoc({ id: "d2", name: "plan-oauth.md", createdAt: 200 }),
+  ];
+  assert.equal(findStalePlans(docs).length, 0);
+});
+
+test("findStalePlans: prefix-without-delimiter is NOT flagged (authz vs auth)", () => {
+  // 'plan-auth.md' should NOT be flagged by 'plan-authz.md' — authz is
+  // not a hyphen-delimited extension of auth. Only 'plan-auth-<x>.md'
+  // counts as a rename leftover.
+  const docs = [
+    mkDoc({ id: "d1", name: "plan-auth.md", createdAt: 100 }),
+    mkDoc({ id: "d2", name: "plan-authz.md", createdAt: 200 }),
+  ];
+  assert.equal(findStalePlans(docs).length, 0);
+});
+
+test("findStalePlans: non-plan-named docs in the slot are ignored", () => {
+  // A hand-added doc not following the plan-<slug>.md convention must
+  // not participate in stale-plan detection (round-40 guard).
+  const docs = [
+    mkDoc({ id: "d1", name: "notes.md", createdAt: 100 }),
+    mkDoc({ id: "d2", name: "notes-extended.md", createdAt: 200 }),
+    mkDoc({ id: "d3", name: "plan-auth.md", createdAt: 300 }),
+  ];
+  assert.equal(findStalePlans(docs).length, 0);
+});
+
+test("indexDocMetadata: non-array doc_metadata is treated as empty (does not throw)", () => {
+  // Round-40 guard: Dify returning a non-array doc_metadata (object,
+  // string) must not abort the audit run via a for..of throw.
+  assert.deepEqual(indexDocMetadata({ doc_metadata: { not: "an-array" } }), {});
+  assert.deepEqual(indexDocMetadata({ doc_metadata: "weird" }), {});
+  assert.deepEqual(indexDocMetadata({ doc_metadata: 42 }), {});
 });
 
 // ---------- findMissingMetadata ----------

@@ -12,22 +12,40 @@
 // inner .find() at every access.
 export function indexDocMetadata(doc) {
   const md = {};
-  for (const f of doc?.doc_metadata || []) {
+  // Guard with Array.isArray: `doc?.doc_metadata || []` only handles
+  // null/undefined. If Dify ever returns a non-array truthy value (an
+  // object, a string), `for..of` would throw and abort the whole audit
+  // run. Treat any non-array shape as "no metadata".
+  const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
+  for (const f of fields) {
     if (f?.name) md[f.name] = f.value;
   }
   return md;
 }
 
-// Stale-plans: in the `plans` slot, find any doc whose name slug is a
-// substring of a NEWER doc's slug. Same-name docs (the upsert-by-name
-// path) are NOT flagged — those are the documented identity-overwrite
-// case, not a rename leftover. We strip the `plan-` prefix and `.md`
-// suffix for comparison so `plan-auth` matches `plan-auth-rewrite` but
-// not `plan-auth.md` upserting `plan-auth.md`.
+// Stale-plans: in the `plans` slot, flag an older `plan-<slug>.md` doc
+// when a NEWER `plan-<slug>-<...>.md` doc extends its slug — the
+// signature of a title rename that left the old slug behind.
+//
+// Two guards keep false positives out (round-40 reviewer findings):
+//   1. Only docs matching the `^plan-.*\.md$` naming convention are
+//      considered. A hand-added non-plan doc in the plans slot is left
+//      alone.
+//   2. The rename signal is DELIMITER-AWARE: `newerSlug.startsWith(
+//      olderSlug + "-")`, not a bare substring. Bare `includes` would
+//      flag `plan-auth.md` as stale just because `plan-oauth.md`
+//      exists ("auth" ⊂ "oauth") — a textbook false positive. Requiring
+//      the older slug to be a hyphen-delimited PREFIX of the newer one
+//      means only `plan-auth.md` → `plan-auth-rewrite.md` matches, not
+//      `plan-auth.md` vs `plan-oauth.md` or `plan-authz.md`.
+// Same-name docs (the upsert-by-name identity-overwrite path) are never
+// flagged: they have equal slugs so the startsWith(... + "-") check is
+// false.
+const PLAN_NAME_RE = /^plan-.*\.md$/;
 export function findStalePlans(docs) {
   const findings = [];
   const sorted = [...(docs || [])]
-    .filter((d) => d?.id && d?.name)
+    .filter((d) => d?.id && d?.name && PLAN_NAME_RE.test(String(d.name)))
     .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
   for (let i = 0; i < sorted.length; i += 1) {
     const older = sorted[i];
@@ -37,13 +55,13 @@ export function findStalePlans(docs) {
       const newer = sorted[j];
       const newerSlug = String(newer.name).replace(/\.md$/, "").replace(/^plan-/, "");
       if (olderSlug === newerSlug) continue;
-      if (newerSlug.includes(olderSlug)) {
+      if (newerSlug.startsWith(`${olderSlug}-`)) {
         findings.push({
           class: "stale-plans",
           slot: "plans",
           documentId: older.id,
           name: older.name,
-          reason: `slug '${olderSlug}' is a substring of newer doc '${newer.name}' (created_at ${older.created_at} -> ${newer.created_at})`,
+          reason: `slug '${olderSlug}' is a hyphen-delimited prefix of newer doc '${newer.name}' (created_at ${older.created_at} -> ${newer.created_at}); likely a title-rename leftover`,
           suggested_action: "delete",
         });
         break;
