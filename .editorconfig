@@ -8,7 +8,8 @@ charset = utf-8
 trim_trailing_whitespace = true
 
 [*.{md,mdx}]
-trim_trailing_whitespace = false  # markdown line breaks rely on trailing spaces
+# markdown line breaks rely on trailing spaces
+trim_trailing_whitespace = false
 
 [*.{js,mjs,cjs,jsx,ts,tsx}]
 indent_style = space

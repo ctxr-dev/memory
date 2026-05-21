@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { slugify } from "../lib/slug.mjs";
 import { saveDocument, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
@@ -191,7 +192,11 @@ async function main() {
 const invokedAsCli = (() => {
   if (!process.argv[1]) return false;
   try {
-    return import.meta.url === pathToFileURL(process.argv[1]).href;
+    // path.resolve normalises a relative argv[1] (`node scripts/hooks/
+    // exit-plan-mode.mjs`) to an absolute path before comparison, so the
+    // guard matches the absolute import.meta.url regardless of how the
+    // launcher passed the path. Same pattern as scripts/compile.mjs.
+    return import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
   } catch {
     return false;
   }
