@@ -48,9 +48,14 @@ unset home_resolved
 # existing `require_cmd docker` / `command -v` check still emits the canonical
 # install-guidance error. POSIX/bash-3.2 portable (macOS default bash).
 resolve_docker_bin() {
+  # ${PATH:-} / ${HOME:-} throughout: this runs under `set -u`, and PATH or
+  # HOME can be unset in minimal environments (`env -i bash ...`, some
+  # CI/cron). Referencing them bare would abort before the caller's
+  # canonical require_cmd error. HOME-based candidates are skipped when HOME
+  # is empty so we never probe "/.rd/bin/docker".
   # Explicit override wins.
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
-    PATH="$(dirname "$DOCKER_BIN"):$PATH"; export PATH
+    PATH="$(dirname "$DOCKER_BIN"):${PATH:-}"; export PATH
     return 0
   fi
 
@@ -59,22 +64,29 @@ resolve_docker_bin() {
     return 0
   fi
 
-  # Probe common non-PATH locations; first executable wins.
-  for candidate in \
-    "$HOME/.rd/bin/docker" \
-    "/usr/local/bin/docker" \
-    "/opt/homebrew/bin/docker" \
-    "$HOME/.colima/default/bin/docker" \
-    "/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"; do
+  # Probe common non-PATH locations; first executable wins. HOME-based
+  # entries are only added when HOME is set.
+  candidates="/usr/local/bin/docker
+/opt/homebrew/bin/docker
+/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"
+  if [ -n "${HOME:-}" ]; then
+    candidates="$HOME/.rd/bin/docker
+$HOME/.colima/default/bin/docker
+$candidates"
+  fi
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
-      PATH="$(dirname "$candidate"):$PATH"; export PATH
+      PATH="$(dirname "$candidate"):${PATH:-}"; export PATH
       # Quiet by default (lib.sh is sourced by scripts that emit machine-
       # readable output, e.g. mcp-config.sh). Set MEMORY_DEBUG=1 to surface.
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "lib.sh: using docker from $candidate" >&2; fi
       return 0
     fi
-  done
+  done <<EOF
+$candidates
+EOF
 
   # Nothing found: let the caller's require_cmd emit the canonical error.
   return 0

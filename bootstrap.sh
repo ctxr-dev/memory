@@ -77,27 +77,37 @@ require_cmd() {
 # in-app Rancher binary have the same problem. This ONLY ADDS locations to
 # PATH; if nothing is found it returns without error so the require_cmd below
 # still emits the canonical install-guidance message.
+# ${PATH:-} / ${HOME:-} throughout: bootstrap runs under `set -u` and either
+# can be unset in minimal environments (`env -i`, some automation). Bare refs
+# would abort before the require_cmd docker message. HOME-based candidates are
+# skipped when HOME is empty.
 resolve_docker_bin() {
   if [ -n "${DOCKER_BIN:-}" ] && [ -x "${DOCKER_BIN}" ]; then
-    PATH="$(dirname "$DOCKER_BIN"):$PATH"; export PATH
+    PATH="$(dirname "$DOCKER_BIN"):${PATH:-}"; export PATH
     return 0
   fi
   if command -v docker >/dev/null 2>&1; then
     return 0
   fi
-  for candidate in \
-    "$HOME/.rd/bin/docker" \
-    "/usr/local/bin/docker" \
-    "/opt/homebrew/bin/docker" \
-    "$HOME/.colima/default/bin/docker" \
-    "/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"; do
+  candidates="/usr/local/bin/docker
+/opt/homebrew/bin/docker
+/Applications/Rancher Desktop.app/Contents/Resources/resources/darwin/bin/docker"
+  if [ -n "${HOME:-}" ]; then
+    candidates="$HOME/.rd/bin/docker
+$HOME/.colima/default/bin/docker
+$candidates"
+  fi
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
     if [ -x "$candidate" ]; then
       export DOCKER_BIN="$candidate"
-      PATH="$(dirname "$candidate"):$PATH"; export PATH
+      PATH="$(dirname "$candidate"):${PATH:-}"; export PATH
       if [ -n "${MEMORY_DEBUG:-}" ]; then echo "bootstrap.sh: using docker from $candidate" >&2; fi
       return 0
     fi
-  done
+  done <<EOF
+$candidates
+EOF
   return 0
 }
 resolve_docker_bin
