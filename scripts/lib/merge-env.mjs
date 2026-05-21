@@ -49,15 +49,19 @@ export function mergeEnvTemplate(templateText, targetText, { now = new Date() } 
   if (addedKeys.length === 0) return { merged: targetText, addedKeys };
 
   const stamp = now.toISOString().slice(0, 10);
+  // Match the target's existing newline style (CRLF on Windows-edited files,
+  // else LF) for both the separator and the appended lines, so we never mix
+  // line endings or miscount the blank-line separator.
+  const eol = /\r\n/.test(targetText) ? "\r\n" : "\n";
   // Strictly append-only: preserve the target's existing bytes exactly, and
   // pick a separator so the block starts after exactly one blank line.
   let sep;
-  if (targetText === "" || targetText.endsWith("\n\n")) sep = "";
-  else if (targetText.endsWith("\n")) sep = "\n";
-  else sep = "\n\n";
+  if (targetText === "" || targetText.endsWith(eol + eol)) sep = "";
+  else if (targetText.endsWith(eol)) sep = eol;
+  else sep = eol + eol;
   const block =
     sep +
-    [`# ---- New keys merged from .env.example on ${stamp} ----`, ...addLines, ""].join("\n");
+    [`# ---- New keys merged from .env.example on ${stamp} ----`, ...addLines, ""].join(eol);
   return { merged: targetText + block, addedKeys };
 }
 

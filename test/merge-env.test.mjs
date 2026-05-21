@@ -65,6 +65,17 @@ test("mergeEnvTemplate: idempotent (second pass over merged output adds nothing)
   assert.equal(second.merged, first.merged);
 });
 
+test("mergeEnvTemplate: CRLF target keeps CRLF and stays append-only", () => {
+  const template = "A=1\nB=2";
+  const target = "A=user\r\n";
+  const { merged, addedKeys } = mergeEnvTemplate(template, target, { now: FIXED });
+  assert.deepEqual(addedKeys, ["B"]);
+  assert.ok(merged.startsWith(target), "original bytes preserved (append-only)");
+  // No lone-LF lines introduced: every newline is part of a CRLF pair.
+  assert.equal(merged.replace(/\r\n/g, "").includes("\n"), false, "no mixed LF among CRLF");
+  assert.match(merged, /B=2\r\n$/);
+});
+
 test("mergeEnvTemplate: template key appearing twice is added once", () => {
   const template = "X=active\n# X=commented-dup\nY=keep";
   const target = "Z=1";
