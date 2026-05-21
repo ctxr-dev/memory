@@ -46,7 +46,10 @@ snapped=()
 # claim a file was captured when the write failed.
 if [ -f "$MEMORY_DIR/.env" ]; then
   if cp "$MEMORY_DIR/.env" "$settings_dir/.env" 2>/dev/null; then
-    chmod 600 "$settings_dir/.env" 2>/dev/null || true
+    # The copy carries the Dify API key. Warn (don't fail) if we can't
+    # tighten perms so the user knows the snapshot may be readable.
+    chmod 600 "$settings_dir/.env" 2>/dev/null || \
+      echo "warning: could not chmod 600 $settings_dir/.env; it carries the API key and may be readable by others." >&2
     snapped+=(".env")
   else
     echo "warning: could not copy .env into the snapshot." >&2

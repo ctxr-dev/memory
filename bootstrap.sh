@@ -481,7 +481,8 @@ if [ ! -f "$env_file" ]; then
   # but-unreadable/corrupt snapshot does NOT abort bootstrap, so we warn and
   # fall through to rendering a fresh .env so install always completes.
   if [ -f "$settings_env" ] && cp "$settings_env" "$env_file" 2>/dev/null; then
-    chmod 600 "$env_file" 2>/dev/null || true   # carries the API key
+    chmod 600 "$env_file" 2>/dev/null || \
+      echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
     env_action="restored from $settings_data_dir/settings/"
     echo "Restored prior settings (.env) from $settings_data_dir/settings/. API key + dataset bindings reattached; running dify-setup.sh is optional."
     # The snapshot carries the PRIOR install's identity (COMPOSE_PROJECT_NAME,
@@ -543,6 +544,11 @@ if [ ! -f "$env_file" ]; then
         printf 'MEMORY_LLM_PROVIDER=%s\n' "$llm_provider"
       } >> "$env_file"
     fi
+    # The freshly-rendered .env will hold the Dify API key once dify-setup.sh
+    # runs; tighten perms now (parity with the restore path) so it never sits
+    # at a umask-dependent 0644. Warn (don't fail) if chmod is unsupported.
+    chmod 600 "$env_file" 2>/dev/null || \
+      echo "warning: could not chmod 600 $env_file; it will carry the API key and may be readable by others." >&2
     env_action="created"
   fi
 else
