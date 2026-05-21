@@ -45,11 +45,13 @@ if [ "$has_service_arg" -eq 1 ]; then
 else
   docker_compose up -d --build "$@"
 fi
-"$SCRIPT_DIR/ui-url.sh"
-
 # Snapshot user settings (.env, .dify-version, embedding model) into
 # ./.memory/settings/ so they survive removing/re-cloning ./memory.
 # snapshot-settings.sh is best-effort (always exits 0, prints its own
 # warnings), so call it unconditionally; a `|| echo` here would be dead
-# code and a non-zero exit can't break this script.
+# code and a non-zero exit can't break this script. Run it BEFORE ui-url.sh
+# so the Dify UI URL stays the FINAL stdout line (copy/paste + automation
+# that greps the last line for the URL keep working).
 "$SCRIPT_DIR/snapshot-settings.sh"
+
+"$SCRIPT_DIR/ui-url.sh"

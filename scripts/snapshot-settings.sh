@@ -107,7 +107,10 @@ else
 fi
 
 # --- README ---
-cat > "$settings_dir/README.txt" <<'EOF'
+# Gate the heredoc write so a failure (disk full / transient FS error after
+# the -w check) emits a warning, matching the header comment and the parity
+# of the .env / .dify-version / embedding-model.txt writes above.
+if ! cat > "$settings_dir/README.txt" <<'EOF'
 This directory is an automatic snapshot of your memory boilerplate user
 settings (memory/.env with the API key + dataset bindings, the pinned
 Dify version, and the configured embedding model). It lives alongside the
@@ -116,6 +119,9 @@ persistent Dify data so it is SAFE TO KEEP when you remove or re-clone
 automatically (the .env is copied back, so re-running dify-setup.sh is
 optional). Re-created on every successful setup/up run.
 EOF
+then
+  echo "warning: could not write README.txt into the snapshot." >&2
+fi
 
 # Only claim a snapshot when something was actually captured.
 if [ "${#snapped[@]}" -gt 0 ]; then
