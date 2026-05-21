@@ -32,7 +32,7 @@ The new atom adds no information beyond the existing entries.
 - Bias toward **update** when the new atom's title and tags overlap with an existing entry's title and content.
 - Bias toward **create** only when the new atom is a clearly distinct fact (different scope, different rule, different gotcha).
 - Bias toward **skip** when the new atom is a near-verbatim restatement.
-- For `self-improvement-lesson`: if the new atom and an existing candidate share the same `error_pattern`, STRONGLY prefer **update**. Lessons should converge into one canonical document per error pattern, not multiply. The candidate set has already been pre-filtered by error_pattern when one was provided, so the same-error_pattern signal is implicit when candidates exist.
+- For `self-improvement-lesson`: if the new atom and an existing candidate share the same `error_pattern`, STRONGLY prefer **update**. Lessons should converge into one canonical document per error pattern, not multiply. The candidate set has already been pre-filtered by error_pattern when one was provided, so the same-error_pattern signal is implicit when candidates exist. **Note:** `compile.mjs` enforces this rule deterministically — when the atom is a `self-improvement-lesson` with an `error_pattern` set AND at least one candidate is returned, the LLM is bypassed and the top candidate is forced-updated. This prompt's lesson-dedup guidance therefore only applies when no `error_pattern` is set (a malformed lesson that flush would already have dropped, or a `bug-root-cause` atom).
 
 # Hard rules
 

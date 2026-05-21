@@ -38,13 +38,19 @@ Use a stable, descriptive slug (`plan-auth-rewrite.md`, not `plan-1.md`). The sl
 
 ### Renaming and cleanup
 
-If the plan TITLE changes between iterations, the next approval writes a NEW Dify doc under the new slug; the old slug stays. Three options:
+If the plan TITLE changes between iterations, the next approval writes a NEW Dify doc under the new slug; the old slug stays. The fastest way to find and clean up the orphaned slugs:
 
-- **Use the `delete_document` MCP tool** (permanent). Find the doc id via `list_datasets` + the Dify UI, or via the bridge's `find-by-name` CLI, then call `delete_document(dataset="plans", documentId="<id>")`. Closes the create-without-undo asymmetry the auto-capture would otherwise leave open.
-- **Use the `disable_document` MCP tool** (soft, reversible). Hides the stale doc from `search_memory` / `recall_lessons` but keeps the audit trail in the Dify UI. Re-enable from the Dify UI if you change your mind.
-- **Tolerate it.** Old plans are ranked below the latest by recency (`upload_date`) and metadata, and `search_memory` with a tight `scoreThreshold` will surface the right one.
+```
+audit_memory({ classes: ["stale-plans"] })
+```
 
-To intentionally supersede a prior version with new content (without renaming), write a NEW `save_to_dataset` call with the OLD slug and the new body. Same name overwrites in place.
+The audit_memory MCP tool walks the `plans` slot and surfaces any doc whose slug is a substring of a newer doc's slug (so `plan-auth` is flagged when `plan-auth-rewrite` exists). Each finding carries `documentId`, `name`, `reason`, and `suggested_action` (`delete` for plain rename leftovers). Then act on each finding with the appropriate tool:
+
+- **`delete_document(dataset="plans", documentId="<id>")`** (permanent). Recommended for the bare-rename case (you renamed `plan-auth` -> `plan-auth-rewrite`; the old slug is just noise). Closes the create-without-undo asymmetry the auto-capture would otherwise leave open.
+- **`disable_document(dataset="plans", documentId="<id>")`** (soft, reversible). Pick this if you want the old slug visible in the Dify UI for audit but excluded from `search_memory` / `recall_lessons`. Reversible via `enable_document`.
+- **Tolerate it.** Old plans are ranked below the latest by recency (`upload_date`) and metadata, and `search_memory` with a tight `scoreThreshold` will surface the right one anyway. Skip cleanup until the dataset feels crowded.
+
+To intentionally supersede a prior version with new content (without renaming), write a NEW `save_to_dataset` call with the OLD slug and the new body. Same name overwrites in place — no cleanup required.
 
 ## Hard rules
 

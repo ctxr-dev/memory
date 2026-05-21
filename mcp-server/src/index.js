@@ -15,6 +15,7 @@ import {
   enableDocument,
   getConfig,
   listAllDatasets,
+  listAllDocuments,
   maskSecret,
   requireDifyWriteConfig,
   resolveDatasetId,
@@ -24,7 +25,13 @@ import {
 import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
 import { lessonDocName } from "./slug.js";
 import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
-import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES } from "./workspace.js";
+import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE } from "./workspace.js";
+import {
+  findStalePlans,
+  findMissingMetadata,
+  findStaleProjectLore,
+  findDuplicateErrorPatternLessons,
+} from "./audit.js";
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
@@ -135,7 +142,7 @@ server.registerTool(
   {
     title: "Search project memory",
     description:
-      "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot.",
+      "Search configured Dify knowledge bases and return scored chunks. Pass `filters` (atom_type, project_module, language, task_type, error_pattern, tags) to apply Dify-side metadata filtering BEFORE embedding rank — this is the precise, context-efficient path that avoids loading every historical record. Pass `scoreThreshold` (0..1) to drop low-similarity hits. `datasets` accepts slot names (e.g. 'self_improvement') OR raw uuids; default searches every configured slot. If you pass `filters` without `project_module`, the bridge auto-injects the host workspace identifier (`COMPOSE_PROJECT_NAME` or `MEMORY_DEFAULT_PROJECT_MODULE` override) so two installs sharing a Dify don't cross-leak. Pass `filters: {project_module: 'foo'}` explicitly to scope elsewhere; pass NO `filters` at all to search every project's content (e.g. for a cross-project pattern check).",
     inputSchema: {
       query: z.string().trim().min(1).max(1000),
       datasets: z.array(z.string().trim().min(1)).optional(),
@@ -164,7 +171,15 @@ server.registerTool(
         );
       }
 
-      const metadataCondition = filters ? buildMetadataCondition(filters) : null;
+      // Auto-inject project_module from the workspace identifier when
+      // caller omits one. Same contract as recall_lessons — caller's
+      // explicit value wins, otherwise default to the install's slice
+      // so cross-project results don't leak. Skip injection when caller
+      // passed no filters at all (treats "any project" as the intent).
+      const effectiveFilters = filters
+        ? (filters.project_module ? filters : { ...filters, ...(DEFAULT_PROJECT_MODULE ? { project_module: DEFAULT_PROJECT_MODULE } : {}) })
+        : null;
+      const metadataCondition = effectiveFilters ? buildMetadataCondition(effectiveFilters) : null;
 
       const limit = maxResults || config.maxResults;
       const settled = await Promise.allSettled(
@@ -455,6 +470,94 @@ server.registerTool(
   },
 );
 
+const AUDIT_CLASSES = z.enum([
+  "stale-plans",
+  "missing-metadata",
+  "stale-project-lore",
+  "duplicate-error-pattern",
+]);
+
+server.registerTool(
+  "audit_memory",
+  {
+    title: "Audit memory for stale or low-quality documents (list-only)",
+    description:
+      "Walk the `plans`, `knowledge`, and `self_improvement` slots looking for documents that are good candidates for cleanup. Returns a list of findings; never deletes or disables anything. Apply individual findings via `delete_document` / `disable_document` (or via the Dify UI). Four issue classes: `stale-plans` (plans-slot docs whose slug is a substring of a newer doc's slug — leftover renames), `missing-metadata` (atom_type-specific required fields absent — un-filterable in future recall), `stale-project-lore` (project-lore docs older than `staleLoreDays`, default `MEMORY_AUDIT_LORE_STALE_DAYS` or 90 days), `duplicate-error-pattern` (groups of lessons sharing the same `error_pattern` — should be merged to the most recent canonical via Phase-2.1's forcedLessonUpdate going forward).",
+    inputSchema: {
+      classes: z.array(AUDIT_CLASSES).optional(),
+      staleLoreDays: z.number().int().min(1).max(3650).optional(),
+    },
+  },
+  async ({ classes, staleLoreDays }) => {
+    try {
+      const config = getConfig();
+      const requested = Array.isArray(classes) && classes.length > 0
+        ? new Set(classes)
+        : new Set(["stale-plans", "missing-metadata", "stale-project-lore", "duplicate-error-pattern"]);
+
+      const days = staleLoreDays
+        || Number.parseInt(process.env.MEMORY_AUDIT_LORE_STALE_DAYS || "", 10)
+        || 90;
+
+      const findings = [];
+      const errors = [];
+
+      const slotsToWalk = new Set();
+      if (requested.has("stale-plans")) slotsToWalk.add("plans");
+      if (requested.has("missing-metadata") || requested.has("stale-project-lore")) {
+        slotsToWalk.add("knowledge");
+        slotsToWalk.add("self_improvement");
+        slotsToWalk.add("plans");
+      }
+      if (requested.has("duplicate-error-pattern")) slotsToWalk.add("self_improvement");
+
+      const docsBySlot = {};
+      for (const slot of slotsToWalk) {
+        const entry = config.datasetMap.get(slot);
+        if (!entry?.id) continue;
+        try {
+          docsBySlot[slot] = await listAllDocuments(config, { datasetId: entry.id });
+        } catch (err) {
+          errors.push({ slot, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      if (requested.has("stale-plans") && docsBySlot.plans) {
+        findings.push(...findStalePlans(docsBySlot.plans));
+      }
+      if (requested.has("missing-metadata")) {
+        for (const [slot, docs] of Object.entries(docsBySlot)) {
+          findings.push(...findMissingMetadata(docs, slot));
+        }
+      }
+      if (requested.has("stale-project-lore")) {
+        for (const [slot, docs] of Object.entries(docsBySlot)) {
+          findings.push(...findStaleProjectLore(docs, slot, days));
+        }
+      }
+      if (requested.has("duplicate-error-pattern") && docsBySlot.self_improvement) {
+        findings.push(...findDuplicateErrorPatternLessons(docsBySlot.self_improvement, "self_improvement"));
+      }
+
+      const summary = {
+        totalFindings: findings.length,
+        byClass: findings.reduce((acc, f) => {
+          acc[f.class] = (acc[f.class] || 0) + 1;
+          return acc;
+        }, {}),
+        bySlot: findings.reduce((acc, f) => {
+          acc[f.slot] = (acc[f.slot] || 0) + 1;
+          return acc;
+        }, {}),
+        staleLoreDaysUsed: days,
+      };
+      return jsonToolResponse({ ok: true, findings, summary, errors });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
 server.registerTool(
   "save_to_dataset",
   {
@@ -589,7 +692,7 @@ server.registerTool(
   {
     title: "Recall relevant self-improvement lessons before related work",
     description:
-      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons).",
+      "BEFORE starting a non-trivial task, call this with the inferred task context (`project_module`, `language`, `task_type`, optional `error_pattern`). Searches the `self_improvement` Dify dataset with metadata filters first; broadens fall-back when fewer than `min(3, maxResults)` hits by dropping `error_pattern`, then `language`, then `task_type`. `project_module` and `tags` are caller-chosen scoping signals and are NEVER dropped. Lessons are sorted strict-rung-first then score DESC, capped at `maxResults` (default 5). When `project_module` is provided AND `includeKnowledge !== false` (default true), up to 2 additional `bug-root-cause`/`feedback-rule` atoms from `knowledge` are appended AFTER the lessons (so the response can carry up to `maxResults + 2` records — supplementary chunks never displace lessons). If you OMIT `project_module`, the bridge auto-injects the host workspace identifier (from `COMPOSE_PROJECT_NAME`, or `MEMORY_DEFAULT_PROJECT_MODULE` if set) so two installs on different host projects don't see each other's lessons. Your explicit value always wins; pass `project_module: \"\"` is treated as missing and falls back to the auto-inferred default.",
     inputSchema: {
       query: z.string().trim().min(1).max(1000),
       project_module: z.string().trim().min(1).optional(),
@@ -615,9 +718,16 @@ server.registerTool(
       const threshold = scoreThreshold ?? 0.55;
       const lessonDatasetId = resolveDatasetId(config, lessonSlot);
 
+      // Default project_module to the workspace identifier when caller
+      // omits one. Two installs of the boilerplate on different host
+      // projects share Dify but should not see each other's lessons by
+      // default — the workspace-derived identifier scopes recall to
+      // this install's slice. Caller's explicit value always wins.
+      const effectiveProjectModule = project_module || DEFAULT_PROJECT_MODULE || undefined;
+
       const baseFilters = {
         atom_type: LESSON_ATOM_TYPE,
-        ...(project_module ? { project_module } : {}),
+        ...(effectiveProjectModule ? { project_module: effectiveProjectModule } : {}),
         ...(language ? { language } : {}),
         ...(task_type ? { task_type } : {}),
         ...(error_pattern ? { error_pattern } : {}),
@@ -704,7 +814,7 @@ server.registerTool(
       });
 
       const supplementary = [];
-      if (includeKnowledge !== false && project_module) {
+      if (includeKnowledge !== false && effectiveProjectModule) {
         const knowledgeSlot = config.datasetMap.get("knowledge")?.id ? "knowledge" : null;
         if (knowledgeSlot) {
           const knowledgeId = resolveDatasetId(config, knowledgeSlot);
@@ -712,7 +822,7 @@ server.registerTool(
             const records = await retrieveChunks(config, {
               datasetId: knowledgeId,
               query,
-              metadataCondition: buildMetadataCondition({ atom_type: t, project_module }),
+              metadataCondition: buildMetadataCondition({ atom_type: t, project_module: effectiveProjectModule }),
               scoreThreshold: threshold,
             });
             for (const r of records.slice(0, 1)) {

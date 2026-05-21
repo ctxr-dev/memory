@@ -473,3 +473,46 @@ test("workspace.js: ABSORB_MAX_FILE_BYTES honors positive env values", async () 
     else process.env.ABSORB_MAX_FILE_BYTES = prev;
   }
 });
+
+test("workspace.js: inferDefaultProjectModule precedence — explicit override wins", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.inferDefaultProjectModule({
+    MEMORY_DEFAULT_PROJECT_MODULE: "  Auth  ",
+    COMPOSE_PROJECT_NAME: "myproject",
+  });
+  assert.equal(out, "auth");
+});
+
+test("workspace.js: inferDefaultProjectModule falls back to COMPOSE_PROJECT_NAME", async () => {
+  const ws = await importWorkspaceFresh();
+  const out = ws.inferDefaultProjectModule({
+    COMPOSE_PROJECT_NAME: "MyProject-Memory",
+  });
+  assert.equal(out, "myproject-memory");
+});
+
+test("workspace.js: inferDefaultProjectModule returns empty string when nothing set", async () => {
+  const ws = await importWorkspaceFresh();
+  assert.equal(ws.inferDefaultProjectModule({}), "");
+});
+
+test("workspace.js: DEFAULT_PROJECT_MODULE is the resolved snapshot at module load", async () => {
+  // DEFAULT_PROJECT_MODULE is computed once at module load (the bridge
+  // process reads env at startup; values don't change mid-run). The
+  // function inferDefaultProjectModule is what tests should exercise
+  // for varying env. The constant must be a string (possibly empty)
+  // for callers' simple `value || undefined` injection guard.
+  const prevA = process.env.MEMORY_DEFAULT_PROJECT_MODULE;
+  const prevB = process.env.COMPOSE_PROJECT_NAME;
+  try {
+    process.env.MEMORY_DEFAULT_PROJECT_MODULE = "billing";
+    delete process.env.COMPOSE_PROJECT_NAME;
+    const ws = await importWorkspaceFresh();
+    assert.equal(ws.DEFAULT_PROJECT_MODULE, "billing");
+  } finally {
+    if (prevA === undefined) delete process.env.MEMORY_DEFAULT_PROJECT_MODULE;
+    else process.env.MEMORY_DEFAULT_PROJECT_MODULE = prevA;
+    if (prevB === undefined) delete process.env.COMPOSE_PROJECT_NAME;
+    else process.env.COMPOSE_PROJECT_NAME = prevB;
+  }
+});
