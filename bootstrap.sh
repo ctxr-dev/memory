@@ -470,7 +470,7 @@ mkdir -p "$settings_dir"
 # guarantees the last/effective value (read_env_value uses `tail -n 1`) is the
 # reconciled one regardless of duplicates.
 set_env_unique() {
-  local key="$1" value="$2" file="$3" tmp rc
+  local key="$1" value="$2" file="$3" tmp rc eol
   # Fail fast if the file exists but can't be read: rewriting from an empty
   # grep would otherwise truncate it and silently drop secrets (the API key,
   # dataset bindings). Better to abort and let the user fix ownership/perms.
@@ -478,6 +478,11 @@ set_env_unique() {
     echo "FATAL: $file is not readable; refusing to rewrite it (would drop your key/bindings). Fix its ownership/permissions and re-run." >&2
     exit 1
   fi
+  # Match the file's existing newline style so a Windows-edited CRLF file
+  # doesn't end up with a lone-LF canonical line (mixed endings). grep keeps
+  # the CR on surviving lines; we only need the right EOL for the appended one.
+  eol=$'\n'
+  if [ -f "$file" ] && grep -q $'\r' "$file" 2>/dev/null; then eol=$'\r\n'; fi
   # Explicit template: portable across GNU and BSD/macOS mktemp.
   tmp="$(mktemp "${TMPDIR:-/tmp}/memory-env.XXXXXX")"
   if [ -f "$file" ]; then
@@ -493,7 +498,7 @@ set_env_unique() {
       exit 1
     fi
   fi
-  printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  printf '%s=%s%s' "$key" "$value" "$eol" >> "$tmp"
   mv "$tmp" "$file"
 }
 
