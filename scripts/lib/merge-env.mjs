@@ -62,7 +62,9 @@ export function mergeEnvTemplate(templateText, targetText, { now = new Date() } 
 }
 
 // CLI: node merge-env.mjs <template> <target>
-// Writes the merged target in place when keys were added; prints the result.
+// Writes the merged target in place when keys were added; prints a one-line
+// status to stdout (which keys were added, or that none were). Does not echo
+// the merged file contents.
 function main(argv) {
   const [templatePath, targetPath] = argv;
   if (!templatePath || !targetPath) {

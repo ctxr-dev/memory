@@ -194,8 +194,13 @@ set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_NGINX_SSL_PORT "127.0.0.1:0"
 set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_PLUGIN_DEBUGGING_HOST "localhost"
 set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_PLUGIN_DEBUGGING_PORT "5003"
 
-# Defensive: bootstrap.sh normally creates settings/.env, but a direct
-# dify-bootstrap.sh run (without bootstrap) should still leave a usable env.
+# Defensive only: bootstrap.sh is what creates settings/.env (with rendered
+# identity values), and load_memory_env above already FATALs unless
+# COMPOSE_PROJECT_NAME is configured, so reaching here normally means the file
+# exists. This recreates a MISSING file from the template just so the run can
+# finish (e.g. COMPOSE_PROJECT_NAME was exported but settings/.env was deleted);
+# the template's identity placeholders are NOT rendered here, so run
+# bootstrap.sh to get a fully configured env.
 if [ ! -f "$MEMORY_ENV" ]; then
   mkdir -p "$MEMORY_SETTINGS_DIR"
   cp "$MEMORY_DIR/.env.example" "$MEMORY_ENV"
