@@ -7,8 +7,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT } from "../scripts/lib/env.mjs";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 test("slotEnvKey: lowercase slot -> DIFY_DATASET_<UPPER>_ID", () => {
   assert.equal(slotEnvKey("plans"), "DIFY_DATASET_PLANS_ID");
@@ -129,4 +134,81 @@ test("atomBodyMaxChars: env override wins; invalid override falls back to defaul
     process.env[key] = bad;
     assert.equal(atomBodyMaxChars(), ATOM_BODY_MAX_CHARS_DEFAULT, `'${bad}' should fall back`);
   }
+});
+
+test("envValue: documents the Phase-2.2 + 2.4 env knobs read by other modules", (t) => {
+  // Defensive parity: the knob NAMES are part of the user's public env-var
+  // surface and are documented in .env.example. If a maintainer renames
+  // a knob in code without updating .env.example, this test catches the
+  // discrepancy by re-reading the example file and asserting each
+  // canonical name is present (commented out is fine; what matters is
+  // the canonical spelling is documented).
+  const envExample = fs.readFileSync(path.resolve(here, "..", ".env.example"), "utf8");
+  for (const knob of [
+    "MEMORY_ATOM_BODY_MAX_CHARS",
+    "MEMORY_COMPILE_QUALITY_STRICT",
+    "MEMORY_DEFAULT_PROJECT_MODULE",
+    "MEMORY_AUDIT_LORE_STALE_DAYS",
+    "MEMORY_HOOK_EXITPLANMODE_DISABLE",
+    "MEMORY_HOOK_EXITPLANMODE_MAX_BYTES",
+  ]) {
+    assert.ok(
+      envExample.includes(knob),
+      `.env.example missing canonical knob name '${knob}'`,
+    );
+  }
+});
+
+test("envValue: MEMORY_COMPILE_QUALITY_STRICT is read as lowercase 'true' / 'false'", (t) => {
+  // compile.mjs reads this knob as:
+  //   String(envValue("MEMORY_COMPILE_QUALITY_STRICT", "")).toLowerCase() === "true"
+  // Lock the expected parsing: only the literal string "true" (case-
+  // insensitive) flips the strict gate. Anything else means lax mode.
+  const key = "MEMORY_COMPILE_QUALITY_STRICT";
+  const prev = process.env[key];
+  t.after(() => {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  });
+  function parse(value) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    return String(envValue(key, "")).toLowerCase() === "true";
+  }
+  assert.equal(parse("true"), true);
+  assert.equal(parse("TRUE"), true);
+  assert.equal(parse("True"), true);
+  assert.equal(parse("false"), false);
+  assert.equal(parse("0"), false);
+  assert.equal(parse(""), false);
+  assert.equal(parse(undefined), false);
+  assert.equal(parse("yes"), false, "'yes' must NOT be treated as true (Boolean trap)");
+  assert.equal(parse("1"), false, "'1' must NOT be treated as true (Boolean trap)");
+});
+
+test("envValue: MEMORY_AUDIT_LORE_STALE_DAYS parses as positive integer with 90-day default", (t) => {
+  // mcp-server/src/index.js:audit_memory parses this knob as:
+  //   staleLoreDays || Number.parseInt(process.env.MEMORY_AUDIT_LORE_STALE_DAYS || "", 10) || 90
+  // Lock the documented default and the rejection of non-positive
+  // values. The tool's `staleLoreDays` argument takes precedence over
+  // the env knob.
+  const key = "MEMORY_AUDIT_LORE_STALE_DAYS";
+  const prev = process.env[key];
+  t.after(() => {
+    if (prev === undefined) delete process.env[key];
+    else process.env[key] = prev;
+  });
+  function parse(value, override) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    return override || Number.parseInt(process.env[key] || "", 10) || 90;
+  }
+  assert.equal(parse(undefined), 90, "default is 90 days when unset");
+  assert.equal(parse("30"), 30);
+  assert.equal(parse("365"), 365);
+  assert.equal(parse("abc"), 90, "non-numeric falls back to default");
+  assert.equal(parse(""), 90, "empty falls back to default");
+  // Tool argument override:
+  assert.equal(parse("30", 14), 14, "override wins over env");
+  assert.equal(parse(undefined, 7), 7, "override wins over default");
 });

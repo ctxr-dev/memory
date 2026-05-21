@@ -24,14 +24,27 @@ function containerName() {
   return name;
 }
 
-async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  const container = containerName();
+// Pure function: build the `docker exec` args array for a given
+// subcommand + flags + container name. Exported for unit tests so each
+// thin wrapper can be parametrically locked on its subcommand name and
+// flag shape without spawning Docker. Flags with value undefined/null/""
+// are dropped (matches the bridge CLI's "absent flag = use default"
+// contract). Flags with value === true are emitted as a bare `--flag`
+// (no value), matching the boolean-switch convention used by the
+// memory-cli enable/disable/etc. subcommands.
+export function buildExecCliArgs(subcommand, flags = {}, container) {
   const args = ["exec", "-i", container, "node", "src/memory-cli.js", subcommand];
   for (const [key, value] of Object.entries(flags)) {
     if (value === undefined || value === null || value === "") continue;
     args.push(`--${key}`);
     if (value !== true) args.push(String(value));
   }
+  return args;
+}
+
+async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const container = containerName();
+  const args = buildExecCliArgs(subcommand, flags, container);
 
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
