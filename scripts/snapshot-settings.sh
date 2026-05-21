@@ -101,18 +101,20 @@ if [ -n "$container" ] && command -v docker >/dev/null 2>&1 && command -v node >
   fi
 fi
 
+# Gate the summary entry on the redirect actually succeeding (parity with
+# the .env/.dify-version copies) so a failed write (disk full / transient
+# FS error after the -w check) is never reported as captured.
 if [ -n "$embed_model" ]; then
-  {
-    printf '# recorded %s\n' "${ts:-unknown}"
-    printf '%s\n' "$embed_model"
-  } > "$settings_dir/embedding-model.txt"
-  snapped+=("embedding-model.txt ($embed_model)")
+  embed_body="$embed_model"
+  embed_label="embedding-model.txt ($embed_model)"
 else
-  {
-    printf '# recorded %s\n' "${ts:-unknown}"
-    printf '(embedding model unknown — bridge not reachable at snapshot time)\n'
-  } > "$settings_dir/embedding-model.txt"
-  snapped+=("embedding-model.txt (unknown)")
+  embed_body="(embedding model unknown — bridge not reachable at snapshot time)"
+  embed_label="embedding-model.txt (unknown)"
+fi
+if { printf '# recorded %s\n' "${ts:-unknown}"; printf '%s\n' "$embed_body"; } > "$settings_dir/embedding-model.txt" 2>/dev/null; then
+  snapped+=("$embed_label")
+else
+  echo "warning: could not write embedding-model.txt into the snapshot." >&2
 fi
 
 # --- README ---

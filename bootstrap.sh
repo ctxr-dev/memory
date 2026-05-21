@@ -453,12 +453,18 @@ env_file="$MEMORY_DIR/.env"
 settings_data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
 settings_env="$settings_data_dir/settings/.env"
 if [ ! -f "$env_file" ]; then
-  if [ -f "$settings_env" ]; then
-    cp "$settings_env" "$env_file"
+  # Restore the snapshot only if the copy actually succeeds. Guarding the
+  # cp in the `if` condition (errexit is suspended there) means a present-
+  # but-unreadable/corrupt snapshot does NOT abort bootstrap — we warn and
+  # fall through to rendering a fresh .env so install always completes.
+  if [ -f "$settings_env" ] && cp "$settings_env" "$env_file" 2>/dev/null; then
     chmod 600 "$env_file" 2>/dev/null || true   # carries the API key
     env_action="restored from $settings_data_dir/settings/"
     echo "Restored prior settings (.env) from $settings_data_dir/settings/ — API key + dataset bindings reattached; running dify-setup.sh is optional."
   else
+    if [ -f "$settings_env" ]; then
+      echo "warning: found $settings_env but could not copy it; rendering a fresh .env instead." >&2
+    fi
     render "$MEMORY_DIR/.env.example" > "$env_file"
     # Append MEMORY_LLM_PROVIDER (no placeholder for it in .env.example;
     # the example has it set to a default value).
