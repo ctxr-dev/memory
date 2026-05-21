@@ -54,7 +54,9 @@ export function mergeEnvTemplate(templateText, targetText, { now = new Date() } 
   // line endings or miscount the blank-line separator.
   const eol = /\r\n/.test(targetText) ? "\r\n" : "\n";
   // Strictly append-only: preserve the target's existing bytes exactly, and
-  // pick a separator so the block starts after exactly one blank line.
+  // pick a separator so the block starts after AT LEAST one blank line (we
+  // never trim the target, so a file already ending in several blank lines
+  // keeps them — the append-only contract takes precedence over exact spacing).
   let sep;
   if (targetText === "" || targetText.endsWith(eol + eol)) sep = "";
   else if (targetText.endsWith(eol)) sep = eol;
