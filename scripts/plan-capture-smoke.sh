@@ -68,6 +68,16 @@ if [ -z "$plans_id" ]; then
   exit 0
 fi
 
+# Preflight the Dify API key too: without it the hook's bridge call
+# returns 401 and the smoke would fail HARD mid-run rather than skip
+# cleanly. The header lists "Dify API key configured" as a prereq, so
+# treat a missing key as a SKIP (parity with the checks above).
+dify_key="${DIFY_KNOWLEDGE_API_KEY:-$(read_env_value DIFY_KNOWLEDGE_API_KEY "$MEMORY_ENV" 2>/dev/null || true)}"
+if [ -z "$dify_key" ]; then
+  echo "plan-capture-smoke SKIP: DIFY_KNOWLEDGE_API_KEY is empty in memory/.env. Run ./memory/scripts/dify-setup.sh to configure Dify access." >&2
+  exit 0
+fi
+
 # Use a unique title so concurrent CI runs don't trample each other; the
 # slugify will fold this to plan-mcp-smoke-<timestamp>-<pid>.md.
 ts="$(date -u +%Y%m%d-%H%M%S)"
