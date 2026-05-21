@@ -115,7 +115,7 @@ function parseJsonMaybe(raw) {
 
 async function main() {
   // Kill switch: users who don't want auto-capture can set
-  // MEMORY_HOOK_EXITPLANMODE_DISABLE=true in memory/.env.
+  // MEMORY_HOOK_EXITPLANMODE_DISABLE=true in ./.memory/settings/.env.
   if (envValue("MEMORY_HOOK_EXITPLANMODE_DISABLE", "") === "true") {
     throw new SkipPlanCapture("disabled via MEMORY_HOOK_EXITPLANMODE_DISABLE=true");
   }
@@ -159,7 +159,7 @@ async function main() {
     if (err instanceof DifyBridgeUnavailable) {
       // Stale-bridge-env: bridge is up but its in-process env doesn't
       // see the slot binding. Wizard restarts the bridge after binding;
-      // a hand-edited memory/.env wouldn't have. Hint the fix.
+      // a hand-edited ./.memory/settings/.env wouldn't have. Hint the fix.
       const msg = err.message || "";
       // Stale-env error shapes the bridge can return (Dify version drift):
       //   "Dataset 'plans' is not configured"

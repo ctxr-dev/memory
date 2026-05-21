@@ -12,7 +12,7 @@ export function intFromEnv(env, name, fallback) {
 
 // Strip CR/LF (and trailing whitespace) from a value that will be
 // interpolated into an HTTP header or URL. Defensive: prevents CRLF
-// injection when a user pastes a key with stray newline into memory/.env.
+// injection when a user pastes a key with stray newline into the canonical settings/.env.
 export function sanitizeHeaderValue(value) {
   if (value == null) return "";
   return String(value).replace(/[\r\n]+/g, "").trim();
@@ -197,13 +197,13 @@ export function resolveDatasetId(config, datasetNameOrId) {
 
 export function requireDifyWriteConfig(config, datasetNameOrId) {
   if (!config.apiKey) {
-    throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in memory/.env.");
+    throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in the canonical settings/.env.");
   }
   if (datasetNameOrId) {
     const resolved = resolveDatasetId(config, datasetNameOrId);
     if (!resolved) {
       throw new Error(
-        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to memory/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
+        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to the canonical settings/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./memory/scripts/dify-setup.sh.`,
       );
     }
     return resolved;
@@ -211,7 +211,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
   const fallback = config.legacyWriteDatasetId || config.datasetIds[0];
   if (!fallback) {
     throw new Error(
-      "No write dataset configured. Run ./memory/scripts/dify-setup.sh, or add a DIFY_DATASET_<NAME>_ID=<dataset-id> line to memory/.env.",
+      "No write dataset configured. Run ./memory/scripts/dify-setup.sh, or add a DIFY_DATASET_<NAME>_ID=<dataset-id> line to the canonical settings/.env.",
     );
   }
   return fallback;

@@ -41,7 +41,7 @@ This is a single-maintainer project, so I cannot guarantee a fixed response time
 - **Findings against a workspace-write attacker.** If an attacker can already write to your repo, they can edit `.claude/settings.json`, the hook scripts, and the bridge source directly. The boilerplate's threat model assumes write access to the workspace is itself a trust boundary.
 - **Local privilege escalation via Docker.** Docker socket access already implies root-equivalent privilege on the host; Docker security is out of scope.
 - **DoS against your own Dify instance via heavy plan-capture traffic.** The hook is per-ExitPlanMode-approval; a runaway agent triggering it in a loop is a Claude Code / Cursor / Codex concurrency-control concern, not a boilerplate one.
-- **Time-of-check vs time-of-use races** in the bridge against the workspace filesystem or `memory/.env`. These are inherent to docker-compose-based file mounts.
+- **Time-of-check vs time-of-use races** in the bridge against the workspace filesystem or `./.memory/settings/.env`. These are inherent to docker-compose-based file mounts.
 - **Side-channel attacks** (timing, cache) on the redact patterns or any other helper. The code is not constant-time; nothing in this project is positioned as a cryptographic primitive.
 
 ## Hardening notes

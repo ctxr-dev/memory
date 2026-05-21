@@ -74,10 +74,10 @@ test("CLI: approved + valid plan + bogus container name -> exit 0, bridge unavai
   // the bridge at a container that doesn't exist so docker exec fails
   // immediately. Pins the test to the bridge-unavailable path regardless
   // of whether the developer's workspace happens to have a real installed
-  // env (where ./memory/.env reachable to envValue would otherwise let
+  // env (where ./.memory/settings/.env reachable to envValue would otherwise let
   // the call SUCCEED and break the assertion). Note: the slot-unbound
   // host-side preflight (`plans slot not bound`) is not directly
-  // exercised by an integration test because env.mjs reads memory/.env
+  // exercised by an integration test because env.mjs reads ./.memory/settings/.env
   // via an absolute path that we can't easily override per test; in a
   // clean env (CI, fresh boilerplate) it is the natural failure mode,
   // but in a fully-installed dev workspace the .env file makes it

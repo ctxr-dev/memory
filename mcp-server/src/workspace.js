@@ -21,7 +21,7 @@ export const ABSORB_MAX_FILE_BYTES =
 // env in priority order:
 //
 // 1. `MEMORY_DEFAULT_PROJECT_MODULE` — explicit user override.
-// 2. `COMPOSE_PROJECT_NAME` — bootstrap.sh writes this into memory/.env
+// 2. `COMPOSE_PROJECT_NAME` — bootstrap.sh writes this into ./.memory/settings/.env
 //    derived from the host workspace basename, so it survives container
 //    restarts and is the most reliable signal.
 //
@@ -43,7 +43,7 @@ export function inferDefaultProjectModule(env = process.env) {
   if (explicit) return explicit;
   const compose = String(env.COMPOSE_PROJECT_NAME || "").trim().toLowerCase();
   // bootstrap.sh writes placeholders like `__compose_project_name__` into
-  // memory/.env before substituting real values. If bootstrap was
+  // ./.memory/settings/.env before substituting real values. If bootstrap was
   // interrupted (CTRL-C, error mid-script) the literal placeholder may
   // survive and forward into the container. Treat any `__...__`-shaped
   // value as "not actually configured" so we don't poison recall scoping

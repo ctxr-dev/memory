@@ -15,7 +15,18 @@ MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
 DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
-MEMORY_ENV="$MEMORY_DIR/.env"
+
+# The canonical user env file lives under the durable, gitignored data dir
+# (./.memory/settings/.env), NOT inside ./memory, so it survives removing or
+# re-cloning ./memory and there is exactly ONE .env. memory/.env.example is
+# the template. The data dir is resolved from an EXPORTED MEMORY_DATA_DIR or
+# the default; it cannot be read from inside the env file to locate the env
+# file (chicken-and-egg), so relocating the data dir requires exporting
+# MEMORY_DATA_DIR before running any script.
+MEMORY_DATA_DIR_DEFAULT="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
+MEMORY_SETTINGS_DIR="$MEMORY_DATA_DIR_DEFAULT/settings"
+MEMORY_ENV="$MEMORY_SETTINGS_DIR/.env"
+DIFY_VERSION_FILE_DEFAULT="$MEMORY_SETTINGS_DIR/.dify-version"
 
 # Refuse to run if WORKSPACE_DIR is the user's home directory or root.
 # Happens when the boilerplate was cloned at the repo root (`git clone … .`
@@ -122,29 +133,31 @@ read_env_value() {
 
 load_memory_env() {
   local configured_project_name
-  local configured_memory_data_dir
 
   configured_project_name="${COMPOSE_PROJECT_NAME:-}"
   if [ -z "$configured_project_name" ]; then
     configured_project_name="$(read_env_value COMPOSE_PROJECT_NAME "$MEMORY_ENV" 2>/dev/null || true)"
   fi
 
-  configured_memory_data_dir="${MEMORY_DATA_DIR:-}"
-  if [ -z "$configured_memory_data_dir" ]; then
-    configured_memory_data_dir="$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)"
-  fi
-
   if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
     echo "FATAL: COMPOSE_PROJECT_NAME not configured." >&2
-    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to memory/.env." >&2
+    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
     exit 1
   fi
 
+  # MEMORY_DATA_DIR comes ONLY from the exported env var or the default (see
+  # MEMORY_DATA_DIR_DEFAULT at the top). We deliberately do NOT read it from
+  # the env file: MEMORY_ENV / MEMORY_SETTINGS_DIR / DIFY_VERSION_FILE_DEFAULT
+  # are computed from it BEFORE this function runs, so letting the file
+  # override it would make those paths disagree with where the file was found.
+  # To relocate the data dir, export MEMORY_DATA_DIR before running scripts.
   export MEMORY_DIR
   export MEMORY_ENV
+  export MEMORY_SETTINGS_DIR
+  export DIFY_VERSION_FILE_DEFAULT
   export WORKSPACE_DIR
   export DIFY_DOCKER_DIR
-  export MEMORY_DATA_DIR="${configured_memory_data_dir:-$WORKSPACE_DIR/.memory}"
+  export MEMORY_DATA_DIR="$MEMORY_DATA_DIR_DEFAULT"
   export COMPOSE_PROJECT_NAME="$configured_project_name"
 }
 

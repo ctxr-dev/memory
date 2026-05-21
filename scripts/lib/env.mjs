@@ -5,7 +5,15 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const MEMORY_DIR = path.resolve(here, "../..");
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "..");
-export const ENV_PATH = path.join(MEMORY_DIR, ".env");
+// Canonical env file lives under the durable, gitignored data dir
+// (./.memory/settings/.env), mirroring scripts/lib.sh. Resolved from an
+// exported MEMORY_DATA_DIR or the default; memory/.env.example is the
+// template, not a runtime read.
+export const MEMORY_DATA_DIR =
+  process.env.MEMORY_DATA_DIR && process.env.MEMORY_DATA_DIR !== ""
+    ? process.env.MEMORY_DATA_DIR
+    : path.join(WORKSPACE_DIR, ".memory");
+export const ENV_PATH = path.join(MEMORY_DATA_DIR, "settings", ".env");
 export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
 export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");

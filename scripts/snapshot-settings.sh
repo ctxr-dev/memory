@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Best-effort: NEVER abort the caller. We deliberately do NOT use `set -e`
-# so a failing copy / mkdir / heredoc (permissions, full disk) prints a
+# so a failing mkdir / chmod / heredoc (permissions, full disk) prints a
 # warning and the script still reaches `exit 0`. Keep nounset + pipefail
 # for sane variable + pipe behavior.
 set -uo pipefail
 
-# Snapshot user settings (memory/.env, memory/.dify-version, and a
-# best-effort embedding-model record) into <MEMORY_DATA_DIR>/settings/ so
-# they survive removing/re-cloning ./memory. The Dify data already lives
-# under ./.memory/; this co-locates the user's config with it. Restored
-# automatically on the next bootstrap.sh.
-#
+# Refresh the generated records under <MEMORY_DATA_DIR>/settings/ and tighten
+# the canonical .env perms. As of v0.3.0 the .env and .dify-version ARE
+# canonical in settings/ (not snapshots), so there is nothing to copy here;
+# this script only:
+#   - tightens settings/.env to 600 (it carries the Dify API key),
+#   - records the single effective embedding model (informational),
+#   - (re)writes a README.txt explaining the dir.
 # Best-effort: NEVER fail the caller. Bash 3.2 portable, set -u safe.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -25,44 +26,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # caller and always reaches `exit 0`.
 set +e
 
-# Resolve the settings dir directly (tolerate partial state).
-data_dir="${MEMORY_DATA_DIR:-$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)}"
-data_dir="${data_dir:-$WORKSPACE_DIR/.memory}"
+# Resolve the settings dir directly (tolerate partial state). MEMORY_ENV is
+# already <data_dir>/settings/.env (see lib.sh); the settings dir is its parent.
+data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
 settings_dir="$data_dir/settings"
 
 # Create + verify the settings dir is writable. If we can't write it
-# (permissions, full disk, read-only mount), warn to stderr and exit 0
-# WITHOUT claiming a snapshot happened: best-effort, never fatal.
+# (permissions, full disk, read-only mount), warn to stderr and exit 0.
 mkdir -p "$settings_dir" 2>/dev/null || true
 if [ ! -d "$settings_dir" ] || [ ! -w "$settings_dir" ]; then
-  echo "warning: settings dir '$settings_dir' is not writable; skipped snapshot." >&2
+  echo "warning: settings dir '$settings_dir' is not writable; skipped." >&2
   exit 0
 fi
 
-snapped=()
+wrote=()
 
-# --- .env (carries the API key; least-privilege perms) ---
-# Gate the summary entry on the copy actually succeeding so we never
-# claim a file was captured when the write failed.
-if [ -f "$MEMORY_DIR/.env" ]; then
-  if cp "$MEMORY_DIR/.env" "$settings_dir/.env" 2>/dev/null; then
-    # The copy carries the Dify API key. Warn (don't fail) if we can't
-    # tighten perms so the user knows the snapshot may be readable.
-    chmod 600 "$settings_dir/.env" 2>/dev/null || \
-      echo "warning: could not chmod 600 $settings_dir/.env; it carries the API key and may be readable by others." >&2
-    snapped+=(".env")
-  else
-    echo "warning: could not copy .env into the snapshot." >&2
-  fi
-fi
-
-# --- .dify-version ---
-if [ -f "$MEMORY_DIR/.dify-version" ]; then
-  if cp "$MEMORY_DIR/.dify-version" "$settings_dir/.dify-version" 2>/dev/null; then
-    snapped+=(".dify-version")
-  else
-    echo "warning: could not copy .dify-version into the snapshot." >&2
-  fi
+# --- tighten canonical .env perms (it carries the API key) ---
+if [ -f "$settings_dir/.env" ]; then
+  chmod 600 "$settings_dir/.env" 2>/dev/null || \
+    echo "warning: could not chmod 600 $settings_dir/.env; it carries the API key and may be readable by others." >&2
 fi
 
 # --- best-effort embedding-model record ---
@@ -93,49 +75,42 @@ if [ -n "$container" ] && command -v docker >/dev/null 2>&1 && command -v node >
   fi
 fi
 
-# Gate the summary entry on the redirect actually succeeding (parity with
-# the .env/.dify-version copies) so a failed write (disk full / transient
-# FS error after the -w check) is never reported as captured.
+# Gate the summary entry on the redirect actually succeeding so a failed write
+# (disk full / transient FS error after the -w check) is never reported.
 if [ -n "$embed_model" ]; then
   embed_body="$embed_model"
   embed_label="embedding-model.txt ($embed_model)"
 else
-  embed_body="(embedding model unknown; bridge not reachable at snapshot time)"
+  embed_body="(embedding model unknown; bridge not reachable at this time)"
   embed_label="embedding-model.txt (unknown)"
 fi
 if { printf '# recorded %s\n' "${ts:-unknown}"; printf '%s\n' "$embed_body"; } > "$settings_dir/embedding-model.txt" 2>/dev/null; then
-  snapped+=("$embed_label")
+  wrote+=("$embed_label")
 else
-  echo "warning: could not write embedding-model.txt into the snapshot." >&2
+  echo "warning: could not write embedding-model.txt." >&2
 fi
 
 # --- README ---
-# Gate the heredoc write so a failure (disk full / transient FS error after
-# the -w check) emits a warning, matching the header comment and the parity
-# of the .env / .dify-version / embedding-model.txt writes above.
 if ! cat > "$settings_dir/README.txt" <<'EOF'
-This directory is an automatic snapshot of your memory boilerplate user
-settings (memory/.env with the API key + dataset bindings, the pinned
-Dify version, and the configured embedding model). It lives alongside the
-persistent Dify data so it is SAFE TO KEEP when you remove or re-clone
-./memory. On the next ./memory/bootstrap.sh these settings are restored
-automatically (the .env is copied back, so re-running dify-setup.sh is
-optional). Re-created on every successful setup/up run.
+This directory holds your CANONICAL memory boilerplate settings (NOT a
+snapshot): .env (Dify API key + dataset-slot bindings + env knobs),
+.dify-version (the pinned Dify release), and embedding-model.txt (the single
+effective embedding model, informational). It lives alongside the persistent
+Dify data and is SAFE TO KEEP when you remove or re-clone ./memory. Edit .env
+here (or run ./memory/scripts/dify-setup.sh); memory/.env.example is only a
+template. Re-created on every successful setup/up run.
 EOF
 then
-  echo "warning: could not write README.txt into the snapshot." >&2
+  echo "warning: could not write README.txt." >&2
 else
-  snapped+=("README.txt")
+  wrote+=("README.txt")
 fi
 
-# Only claim a snapshot when something was actually captured.
-if [ "${#snapped[@]}" -gt 0 ]; then
-  echo "Settings snapshot written to: $settings_dir"
-  for item in "${snapped[@]}"; do
+if [ "${#wrote[@]}" -gt 0 ]; then
+  echo "Settings metadata refreshed in: $settings_dir"
+  for item in "${wrote[@]}"; do
     echo "  - $item"
   done
-else
-  echo "warning: nothing captured into $settings_dir (no memory/.env and all writes failed)." >&2
 fi
 
 exit 0

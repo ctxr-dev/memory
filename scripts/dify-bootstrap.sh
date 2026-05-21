@@ -98,26 +98,10 @@ resolve_dify_version() {
     return
   fi
 
+  # DIFY_VERSION_FILE is canonical under ./.memory/settings/, so it survives
+  # removing/re-cloning ./memory; no separate snapshot to restore from.
   if [ -f "$DIFY_VERSION_FILE" ]; then
     pinned_version="$(sed -n 's/[[:space:]]//g; /^$/d; 1p' "$DIFY_VERSION_FILE")"
-    if [ -n "$pinned_version" ]; then
-      printf '%s\n' "$pinned_version"
-      return
-    fi
-  fi
-
-  # A prior install snapshots .dify-version into <data_dir>/settings/ so it
-  # survives removing/re-cloning ./memory. If the in-clone version file is
-  # gone but the snapshot survives, restore the pinned version from it so a
-  # re-clone reuses the same Dify tag instead of jumping to GitHub-latest.
-  # No cp back to DIFY_VERSION_FILE is needed: the caller writes the resolved
-  # version there unconditionally right after this returns.
-  local data_dir
-  data_dir="${MEMORY_DATA_DIR:-$(read_env_value MEMORY_DATA_DIR "$MEMORY_ENV" 2>/dev/null || true)}"
-  data_dir="${data_dir:-$WORKSPACE_DIR/.memory}"
-  local settings_version_file="$data_dir/settings/.dify-version"
-  if [ -f "$settings_version_file" ]; then
-    pinned_version="$(sed -n 's/[[:space:]]//g; /^$/d; 1p' "$settings_version_file")"
     if [ -n "$pinned_version" ]; then
       printf '%s\n' "$pinned_version"
       return
@@ -154,9 +138,11 @@ require_cmd curl
 require_docker_compose
 
 load_memory_env
-DIFY_VERSION_FILE="$MEMORY_DIR/.dify-version"
+# .dify-version is canonical in the durable data dir (alongside settings/.env),
+# so a re-clone of ./memory reuses the same pinned Dify tag.
+DIFY_VERSION_FILE="$DIFY_VERSION_FILE_DEFAULT"
 
-mkdir -p "$MEMORY_DIR/vendor"
+mkdir -p "$MEMORY_DIR/vendor" "$MEMORY_SETTINGS_DIR"
 mkdir -p \
   "$MEMORY_DATA_DIR/dify/app/storage" \
   "$MEMORY_DATA_DIR/dify/db/data" \
@@ -208,9 +194,17 @@ set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_NGINX_SSL_PORT "127.0.0.1:0"
 set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_PLUGIN_DEBUGGING_HOST "localhost"
 set_env "$DIFY_DOCKER_DIR/.env" EXPOSE_PLUGIN_DEBUGGING_PORT "5003"
 
+# Defensive only: bootstrap.sh is what creates settings/.env (with rendered
+# identity values), and load_memory_env above already FATALs unless
+# COMPOSE_PROJECT_NAME is configured, so reaching here normally means the file
+# exists. This recreates a MISSING file from the template just so the run can
+# finish (e.g. COMPOSE_PROJECT_NAME was exported but settings/.env was deleted);
+# the template's identity placeholders are NOT rendered here, so run
+# bootstrap.sh to get a fully configured env.
 if [ ! -f "$MEMORY_ENV" ]; then
+  mkdir -p "$MEMORY_SETTINGS_DIR"
   cp "$MEMORY_DIR/.env.example" "$MEMORY_ENV"
 fi
 
 echo "Dify ${DIFY_VERSION} is bootstrapped under $DIFY_DIR"
-echo "Local memory env: $MEMORY_ENV"
+echo "Canonical memory env: $MEMORY_ENV"

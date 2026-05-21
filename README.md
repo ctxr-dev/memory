@@ -105,9 +105,9 @@ git clone https://github.com/ctxr-dev/memory ./memory
                           # at the end.
 ```
 
-`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `memory/.env` from the template.
+`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `./.memory/settings/.env` from the template.
 
-**Existing config files are structurally merged, never overwritten:** your hooks, MCP servers, and permissions all pass through verbatim and only boilerplate-owned entries are added or refreshed (see [Updates → Merge contract](#merge-contract)). Re-runs leave `memory/.env` untouched.
+**Existing config files are structurally merged, never overwritten:** your hooks, MCP servers, and permissions all pass through verbatim and only boilerplate-owned entries are added or refreshed (see [Updates → Merge contract](#merge-contract)). Re-runs leave `./.memory/settings/.env` untouched.
 
 After the stack is up, finish wiring with the [onboarding wizard](#manual-flow) (or the [AI-driven flow](#-ai-driven-flow)).
 
@@ -129,8 +129,8 @@ Steps:
 3. Ask me which LLM provider to use for the flush + compile pipeline:
    - claude (recommended; spawns `claude -p`, no API key needed)
    - codex (spawns `codex exec --json`, no API key needed)
-   - anthropic (REST with ANTHROPIC_API_KEY in memory/.env)
-   - openai (REST with OPENAI_API_KEY in memory/.env)
+   - anthropic (REST with ANTHROPIC_API_KEY in ./.memory/settings/.env)
+   - openai (REST with OPENAI_API_KEY in ./.memory/settings/.env)
    Detect which CLIs are on PATH before asking. If only one is available, default to it and ask me to confirm.
 
 4. Ask whether to install Claude Code hooks (default: yes). Hooks live in .claude/settings.json and wire SessionStart, PreCompact, PostCompact, SessionEnd, and PostToolUse (matcher ExitPlanMode, for auto-capturing approved plans into the `plans` slot) to ./memory/scripts/hooks/. Other clients can adapt .agents/hooks.json manually.
@@ -170,20 +170,20 @@ Steps:
     e) Run `./memory/scripts/dify-setup.sh` to wire datasets, install the per-document metadata schema, and (optionally) absorb my existing docs. ALTERNATIVELY paste the second AI prompt from the README (under "Onboarding -> AI-driven flow") to a fresh agent session for an MCP-driven walkthrough that uses list_datasets / create_dataset / scan_documents / absorb_files instead of the wizard.
     f) Final end-to-end smoke (only valid after step e): `./memory/scripts/mcp-smoke.sh` — read-only round-trip across get_memory_config, search_memory (plain + filtered), and recall_lessons.
 
-Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Do not edit memory/.env directly, even after install: the wizard handles that.
+Stop and ask me whenever you would otherwise guess. Do not proceed past any step on assumption. Your config lives in `./.memory/settings/.env` (created from `memory/.env.example`); the wizard (`dify-setup.sh`) manages it. If you must hand-edit, edit `./.memory/settings/.env` (there is no `memory/.env`).
 ```
 
 ## Onboarding
 
 `dify-setup.sh` is a re-runnable wizard. Once Dify is up and you've configured an embedding model under **Settings → Model Provider** in the UI, it asks at most:
 
-1. **`DIFY_KNOWLEDGE_API_KEY`**: paste it (or skip if already in `memory/.env`).
-2. **For each dataset slot** (every `DIFY_DATASET_<NAME>_ID=` line in `memory/.env`; defaults: `daily, knowledge, plans, investigations, self_improvement`): auto-create with that name (high_quality + hybrid_search), paste an existing id, or skip.
+1. **`DIFY_KNOWLEDGE_API_KEY`**: paste it (or skip if already in `./.memory/settings/.env`).
+2. **For each dataset slot** (every `DIFY_DATASET_<NAME>_ID=` line in `./.memory/settings/.env`; defaults: `daily, knowledge, plans, investigations, self_improvement`): auto-create with that name (high_quality + hybrid_search), paste an existing id, or skip.
 3. **Metadata schema**: installs the six per-document fields (`atom_type`, `tags`, `project_module`, `language`, `task_type`, `error_pattern`) on every bound slot, plus optional Dify built-ins (`document_name`, `upload_date`, `last_update_date`).
 4. **Bridge restart**: propagates new env to the MCP bridge.
 5. **Absorb existing docs?**: optional. Scans the workspace, picks files into slots (default `knowledge`), upserts each as `relative_path_with_underscores.md`. Re-running overwrites instead of duplicating.
 
-Add a slot later by appending a new `DIFY_DATASET_<NAME>_ID=` line to `memory/.env` and re-running `dify-setup.sh`; it only asks about new slots.
+Add a slot later by appending a new `DIFY_DATASET_<NAME>_ID=` line to `./.memory/settings/.env` and re-running `dify-setup.sh`; it only asks about new slots.
 
 ### Manual flow
 
@@ -222,7 +222,7 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
    (a) Open the Dify UI URL printed by ./memory/scripts/ui-url.sh
    (b) Sign in, configure an embedding model under Settings → Model Provider (REQUIRED before any high_quality dataset can be created)
    (c) Knowledge → Service API → create a Knowledge API key
-   (d) Paste the key into memory/.env as DIFY_KNOWLEDGE_API_KEY=<key>
+   (d) Paste the key into ./.memory/settings/.env as DIFY_KNOWLEDGE_API_KEY=<key>
    (e) Recreate the bridge so the new env is picked up:
        ./memory/scripts/up.sh memory_mcp
    THEN re-run me. Do not attempt to proceed without the key — `dify-setup.sh --non-interactive` will exit FATAL.
@@ -231,7 +231,7 @@ Set up the Dify memory boilerplate for this project. The MCP server is `<project
 3. For each of these slots (daily, knowledge, plans, investigations, self_improvement), check whether a dataset with that name already exists.
    - If it exists, tell me the id and ask whether to bind it.
    - If it does not, ask whether to call `create_dataset` to create it (high_quality + hybrid_search; requires the embedding model from step 1).
-4. Tell me which DIFY_DATASET_<NAME>_ID values to put in memory/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
+4. Tell me which DIFY_DATASET_<NAME>_ID values to put in ./.memory/settings/.env, then I will run `./memory/scripts/dify-setup.sh --non-interactive --auto-create` to commit them, OR you tell me the exact lines to paste. The wizard also installs the per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern) on every bound slot.
 5. Then call `scan_documents` (default globs cover .md/.mdx/.markdown/.txt/.rst/.adoc) and show me the file list with proposed doc names.
 6. Ask which subset I want absorbed and into which slot (default: knowledge). Use `absorb_files` with `dryRun=true` first, show me the result, and only do the real call after I confirm.
 
@@ -367,7 +367,7 @@ flowchart TB
 
 **Everything lives in Dify**, organised by named slots, retrieved via metadata-filtered queries.
 
-- **Named slots**: each `DIFY_DATASET_<NAME>_ID=` line in `memory/.env` declares one slot. Defaults: `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add lines to add slots (`DIFY_DATASET_RUNBOOKS_ID=`, ...). No second list to maintain.
+- **Named slots**: each `DIFY_DATASET_<NAME>_ID=` line in `./.memory/settings/.env` declares one slot. Defaults: `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add lines to add slots (`DIFY_DATASET_RUNBOOKS_ID=`, ...). No second list to maintain.
 - **Per-atom-type routing**: compile sends `self-improvement-lesson` atoms to `self_improvement` and everything else to `knowledge`. Inline `save_lesson` hits `self_improvement` directly.
 - **Naming inside Dify**:
   - `daily-<YYYY-MM-DD-HHMMSSmmm>.md`: one per flush event (dedup-merged out by compile).
@@ -461,9 +461,9 @@ cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug <project-slug>
 ./memory/scripts/up.sh memory_mcp   # recreate the bridge so it picks up env changes
 ```
 
-Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `memory/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
+Re-running bootstrap is idempotent: `./.memory/settings/.env` is preserved across upgrades; only template-derived files (`.agents/*`, `.claude/settings.json`, `.agents/rules/*`, `.claude/skills/*`) are re-rendered. The bridge reads `./.memory/settings/.env` via Compose's `env_file:`, so any new `DIFY_DATASET_<NAME>_ID=` line takes effect only after a recreate.
 
-**Settings survive removing `./memory`.** Your config (`memory/.env` with the API key + dataset-slot bindings, the pinned `memory/.dify-version`, and a recorded embedding-model note) is auto-snapshotted into the gitignored, data-side `./.memory/settings/` directory — at the end of `dify-setup.sh` and `up.sh`, or on demand via `./memory/scripts/snapshot-settings.sh`. Because `./.memory/` holds your Dify data and is never deleted with `./memory`, you can safely `rm -rf ./memory` (to upgrade clean, or remove the boilerplate) and a later `git clone … ./memory && ./memory/bootstrap.sh --slug <slug>` will **restore** `.env` + `.dify-version` from the snapshot automatically — reattaching your API key + bindings (no `dify-setup.sh` re-run) and pinning the same Dify version that wrote your data. The snapshot `.env` is `chmod 600`; treat `./.memory/settings/` as secret-bearing like `memory/.env` itself.
+**Your config lives in `./.memory/settings/` and survives removing `./memory`.** The canonical `./.memory/settings/.env` (API key + dataset-slot bindings + env knobs) and `./.memory/settings/.dify-version` (the pinned Dify release) live in the gitignored, data-side directory — NOT inside `./memory`. `memory/.env.example` is only the template. Because `./.memory/` also holds your Dify data and is never deleted with `./memory`, you can safely `rm -rf ./memory` (to upgrade clean, or remove the boilerplate) and a later `git clone … ./memory && ./memory/bootstrap.sh --slug <slug>` reuses your existing `./.memory/settings/.env` as-is — your API key + bindings stay attached (no `dify-setup.sh` re-run) and the same Dify version is reused. On every bootstrap, new keys added to `memory/.env.example` upstream are auto-merged into your `settings/.env` (existing values untouched). `settings/.env` is `chmod 600`; treat `./.memory/settings/` as secret-bearing. (A pre-0.3.0 install with a legacy `memory/.env` is migrated into `settings/.env` on the next bootstrap, then the legacy file is removed.)
 
 **If you're upgrading across a plan-capture release**, also re-run `./memory/scripts/dify-setup.sh` after `git pull` so the per-document metadata schema gets retro-installed on existing slots. See the callout below for the full upgrade recipe.
 
@@ -472,10 +472,10 @@ Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; 
 > Required steps in order:
 >
 > 1. **Re-run `./memory/scripts/dify-setup.sh`** after `git pull`. The wizard's `install_metadata_schema` step is idempotent: it inspects every bound slot, only installs missing fields, and silently skips ones already present. Pre-existing slots created by an OLDER `create_dataset` MCP tool (which did NOT auto-install the schema before this commit) get the six per-document fields retro-installed in seconds. Without this, the new ExitPlanMode hook will succeed in writing plans but log `metadata warning: no fields matched dataset metadata schema` on every save until the wizard runs.
-> 2. **Recreate the bridge container** to pick up env + image changes: `./memory/scripts/up.sh memory_mcp`. The bridge reads `memory/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until restart.
+> 2. **Recreate the bridge container** to pick up env + image changes: `./memory/scripts/up.sh memory_mcp`. The bridge reads `./.memory/settings/.env` only at container start time, so any new `MEMORY_HOOK_EXITPLANMODE_*` knob you added is invisible until restart.
 > 3. **Restart your MCP client** (Claude Code / Cursor / Codex) so it picks up the new `.claude/settings.json` / `.agents/hooks.json` hook entries. Already-running sessions won't fire the new hook until restart.
 >
-> Optional: copy the new `MEMORY_HOOK_EXITPLANMODE_DISABLE` and `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES` knobs from `.env.example` into your existing `memory/.env` if you want to tune (re-runs preserve user edits, so they aren't auto-merged). If you set them, redo step 2 to refresh bridge env.
+> Optional: the `MEMORY_HOOK_EXITPLANMODE_DISABLE` and `MEMORY_HOOK_EXITPLANMODE_MAX_BYTES` knobs are auto-merged into your `./.memory/settings/.env` (commented-out) on the next bootstrap, so you can just uncomment and set them there. If you set them, redo step 2 to refresh bridge env.
 >
 > **Behavior change to be aware of:** `upsertDocumentByName` now reduces same-name documents to one per upsert (closes a concurrent-write race window). If you had transient duplicates from a prior bug, this commit silently merges them on the next upsert. Verify in the Dify UI before relying on the upsert path for non-plan content.
 
@@ -504,7 +504,7 @@ Re-running bootstrap is idempotent: `memory/.env` is preserved across upgrades; 
 | `/memory` | **No** | The cloned boilerplate has its own `.git`. |
 | `/.memory` | **No** | Host-mounted Dify runtime data. |
 | `/.agents`, `/.claude/settings.json`, `/.mcp.json` | **Yes** | Per-project agent config: vendor-neutral hooks/MCP + Claude Code hooks + project-scope MCP server registration. |
-| `memory/.env` | **No** | Contains your Dify API key. |
+| `./.memory/settings/.env` | **No** | Contains your Dify API key. |
 | `memory/.compile-state.json`, `memory/.compile.lock` | **No** | One-line ops state / transient lockfile. Not memory. |
 
 > **Upgrading from a pre-`pwd -P` checkout (one-time):** if you cloned into a path with a symlink in it (common on macOS with iCloud-synced `~/Documents`, or Linux dev VMs with bind-mounted project trees) AND ran the boilerplate before scripts standardised on `pwd -P`, the next `up.sh` after `git pull` resolves `MEMORY_DATA_DIR` to the **physical** path. Docker treats that as a different bind source, so existing Dify storage volumes appear empty (your data is still on disk under the old, symlink-form path). Run `./memory/scripts/migrate-persistent-data.sh` once to copy state into the resolved location, then `./memory/scripts/up.sh`. Fresh installs are unaffected.
@@ -529,7 +529,7 @@ For Codex/OpenAI:
 codex mcp add <project-slug>-memory -- docker exec -i <project-slug>-memory node src/index.js
 ```
 
-For Claude Desktop, Cursor, or generic MCP clients, merge `.agents/mcp.json` (or the matching `.agents/clients/<client>` snippet) into your client's MCP config. Do not paste API keys into client configs; they live only in `memory/.env`.
+For Claude Desktop, Cursor, or generic MCP clients, merge `.agents/mcp.json` (or the matching `.agents/clients/<client>` snippet) into your client's MCP config. Do not paste API keys into client configs; they live only in `./.memory/settings/.env`.
 
 When `--install-hooks` is on (default), `.claude/settings.json` is rendered with the four lifecycle events wired to `./memory/scripts/hooks/`. Other clients can adapt `.agents/hooks.json` to their own hook format; see [STACK.md](STACK.md) for the event-to-script table.
 
@@ -604,7 +604,7 @@ node ./memory/scripts/compile.mjs --dry-run
 
 # Tier 6 — Direct CLI checks. Requires: bridge container running.
 # Verify the metadata schema is installed on the self_improvement slot.
-docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./.memory/settings/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js list-metadata-fields --datasetId self_improvement
 # expect doc_metadata to include atom_type, tags, project_module,
 # language, task_type, error_pattern.
@@ -612,7 +612,7 @@ docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -
 # Filtered search smoke against the self_improvement slot.
 # (RETRIEVES only; pair with a save_lesson MCP call from your agent for a
 # true save -> recall round-trip.)
-docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./memory/.env | cut -d= -f2 | tr -d '\r')" \
+docker exec -i "$(grep '^MCP_CONTAINER_NAME=' ./.memory/settings/.env | cut -d= -f2 | tr -d '\r')" \
   node src/memory-cli.js search --datasetId self_improvement \
   --query "smoke" --filters '{"atom_type":"self-improvement-lesson"}'
 ```
@@ -633,7 +633,7 @@ If `mcp-smoke.sh` fails with "No datasets configured" or "Flush slot 'daily' has
 ./memory/scripts/plan-capture-smoke.sh --keep    # leaves the smoke doc in place for visual inspection
 ```
 
-Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot isn't bound, or `MCP_CONTAINER_NAME` isn't set in `memory/.env`. Use this once after install (or after any upgrade that touches the hook) to prove the full pipeline works against your tenant.
+Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot isn't bound, or `MCP_CONTAINER_NAME` isn't set in `./.memory/settings/.env`. Use this once after install (or after any upgrade that touches the hook) to prove the full pipeline works against your tenant.
 
 </details>
 
@@ -646,7 +646,7 @@ Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot
 memory/
 ├── bootstrap.sh                # render project-root files; idempotent
 ├── compose.mcp.yaml            # Docker Compose override for the MCP bridge
-├── .env.example                # template for memory/.env
+├── .env.example                # template for ./.memory/settings/.env
 ├── scripts/
 │   ├── up.sh, down.sh, ps.sh   # stack lifecycle
 │   ├── ui-url.sh               # discover the host UI port

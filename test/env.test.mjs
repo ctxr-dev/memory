@@ -11,9 +11,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT } from "../scripts/lib/env.mjs";
+import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR } from "../scripts/lib/env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+test("ENV_PATH: canonical env resolves under the data dir's settings/, not memory/.env", () => {
+  // The single canonical env file lives at <data_dir>/settings/.env (default
+  // <workspace>/.memory/settings/.env), mirroring scripts/lib.sh. A regression
+  // that pointed this back at memory/.env would resurrect the two-file split.
+  assert.ok(ENV_PATH.endsWith(path.join("settings", ".env")), `ENV_PATH should end with settings/.env, got ${ENV_PATH}`);
+  assert.equal(ENV_PATH, path.join(MEMORY_DATA_DIR, "settings", ".env"));
+  assert.ok(!ENV_PATH.endsWith(path.join("memory", ".env")), "ENV_PATH must not be memory/.env");
+});
 
 test("slotEnvKey: lowercase slot -> DIFY_DATASET_<UPPER>_ID", () => {
   assert.equal(slotEnvKey("plans"), "DIFY_DATASET_PLANS_ID");

@@ -144,7 +144,7 @@ function validateAtoms(parsed) {
     throw new LLMOutputInvalid("LLM JSON missing 'atoms' array", JSON.stringify(parsed));
   }
   // Compute the body cap ONCE, not per atom. atomBodyMaxChars() walks
-  // envValue() -> readEnvFile() which re-reads memory/.env from disk on
+  // envValue() -> readEnvFile() which re-reads ./.memory/settings/.env from disk on
   // every call; reading it once per flush (instead of once per atom)
   // avoids N filesystem reads in the validation loop.
   const bodyMaxChars = atomBodyMaxChars();
