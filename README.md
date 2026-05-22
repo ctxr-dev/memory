@@ -1,4 +1,6 @@
-<h1 align="center">🧠 Local Dify MCP Memory — the self-learning RAG that makes your AI stop repeating its mistakes</h1>
+<h1 align="center">🧠 Local Dify MCP Memory</h1>
+
+<h2 align="center">The self-learning RAG that makes your AI stop repeating its mistakes</h2>
 
 <p align="center">
   <strong>Typed, deduplicated, self-improving project memory for AI coding agents.</strong>
@@ -42,8 +44,15 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
+
 <p align="center">
-  <img src="img.png" alt="Dify Knowledge UI showing project memory knowledge bases" width="920">
+  <img src="images/memory-installed.png" alt="Dify Knowledge installed and AI aware of it" width="920">
+</p>
+
+---
+
+<p align="center">
+  <img src="images/img.png" alt="Dify Knowledge UI showing project memory knowledge bases" width="920">
 </p>
 
 ## Why this exists
