@@ -36,27 +36,37 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Stable identity marker for inner hook commands we own. Every command
-// we generate from templates/{claude/settings,agents/hooks}.json has
-// the literal signature
-//   "$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/
+// Stable identity markers for inner hook commands we own. Every command
+// we generate from templates/{claude/settings,agents/hooks}.json has the
+// literal signature
+//   "$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/
 // after JSON-decoding (the templates ship the escaped form
-// `\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/`). This signature is
+// `\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/`). This signature is
 // distinctive: it bundles a Claude-Code-specific env var, the closing
-// quote pattern from our template renderer, AND the install path. A
-// user writing their own hook is overwhelmingly unlikely to reproduce
-// this exact byte sequence, so a substring match is sound.
+// quote pattern from our template renderer, AND the install path. A user
+// writing their own hook is overwhelmingly unlikely to reproduce this
+// exact byte sequence, so a substring match is sound.
 //
-// Rejected alternative: anchoring on `memory/scripts/hooks/` with a
-// leading `/` or `"` boundary still false-positives on user paths like
-// `./tools/memory/scripts/hooks/custom.sh` (the boundary char is `/`,
-// satisfied by `s/m`). The full env-var signature avoids this trap.
+// We match an ARRAY of signatures: the current `.memory/src/...` form AND
+// the pre-0.4.0 `memory/...` form. The legacy entry lets a re-bootstrap
+// after the documented `mv ./memory ./.memory/src` migration STRIP the
+// stale hook entries instead of leaving duplicates next to the freshly
+// rendered ones. The two strings do not overlap as substrings (one has
+// `/.memory/src/scripts`, the other `/memory/scripts`), so an array match
+// never double-counts an entry.
 //
-// To change the install root from `memory/`, update both this constant
-// AND the templates. Tests in test/merge-config.test.mjs lock the
-// contract (positive: our commands match; negative: nested user paths
-// containing `memory/scripts/hooks/` substrings do not).
-const HOOK_OWNERSHIP_SIGNATURE = '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/';
+// Rejected alternative: anchoring on `scripts/hooks/` with a leading `/`
+// or `"` boundary still false-positives on user paths like
+// `./tools/memory/scripts/hooks/custom.sh`. The full env-var signature
+// avoids this trap.
+//
+// To change the install root, update both these constants AND the
+// templates. Tests in test/merge-config.test.mjs lock the contract
+// (positive: our commands match; negative: nested user paths do not).
+const HOOK_OWNERSHIP_SIGNATURES = [
+  '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/',
+  '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/', // legacy pre-0.4.0; strip on upgrade
+];
 
 // Predicate: is this individual inner hook one of OURS? Operates on a
 // single `{type, command, timeout}` entry, NOT on an event array entry.
@@ -64,7 +74,11 @@ const HOOK_OWNERSHIP_SIGNATURE = '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/';
 // share an event array entry with one of ours (rare but possible if the
 // user hand-edits to bundle).
 function isOurInnerHook(h) {
-  return !!(h && typeof h.command === "string" && h.command.includes(HOOK_OWNERSHIP_SIGNATURE));
+  return !!(
+    h &&
+    typeof h.command === "string" &&
+    HOOK_OWNERSHIP_SIGNATURES.some((sig) => h.command.includes(sig))
+  );
 }
 
 // Predicate: does this event-array entry contain ANY hook we own?
