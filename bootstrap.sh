@@ -523,13 +523,13 @@ if [ ! -f "$env_file" ] && [ -f "$legacy_env" ]; then
   else
     # Hard-fail rather than fall through to rendering a blank template, which
     # would silently drop the user's existing API key + dataset bindings.
-    echo "FATAL: found legacy .memory/src/.env but could not copy it to $env_file." >&2
+    echo "FATAL: found legacy env at $legacy_env but could not copy it to $env_file." >&2
     echo "  Refusing to render a blank env over your existing key/bindings." >&2
     echo "  Fix permissions on $settings_dir (or copy the file manually) and re-run." >&2
     exit 1
   fi
 elif [ -f "$env_file" ] && [ -f "$legacy_env" ] && ! cmp -s "$env_file" "$legacy_env"; then
-  echo "warning: both .memory/src/.env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
+  echo "warning: both $legacy_env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
 fi
 
 if [ ! -f "$env_file" ]; then
@@ -582,10 +582,10 @@ fi
 chmod 600 "$env_file" 2>/dev/null || \
   echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
 
-# Exactly one canonical .env: remove any legacy .memory/src/.env now that
-# settings/.env owns it.
+# Exactly one canonical .env: remove any legacy clone-root .env ($legacy_env)
+# now that settings/.env owns it.
 if [ -f "$legacy_env" ]; then
-  rm -f "$legacy_env" && echo "Removed legacy .memory/src/.env; the canonical env is now $env_file."
+  rm -f "$legacy_env" && echo "Removed legacy env at $legacy_env; the canonical env is now $env_file."
 fi
 
 # ---------- ensure host data dir placeholder ----------
@@ -623,8 +623,9 @@ Bootstrap complete.
 
 Your config (API key, dataset bindings, env knobs) lives in:
   $env_file
-Edit THAT file, not .memory/src/.env (which no longer exists). The template is
-.memory/src/.env.example; new keys added there are merged in on the next bootstrap.
+Edit THAT file, not $legacy_env (the legacy clone-root .env, which no longer
+exists). The template is $MEMORY_DIR/.env.example; new keys added there are
+merged in on the next bootstrap.
 
 Next steps:
   1) ./.memory/src/scripts/up.sh                     # start the Dify stack

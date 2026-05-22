@@ -153,7 +153,7 @@ load_memory_env() {
 
   if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
     echo "FATAL: COMPOSE_PROJECT_NAME not configured." >&2
-    echo "  Run ./.memory/src/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
+    echo "  Run $MEMORY_DIR/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
     exit 1
   fi
 
