@@ -660,7 +660,7 @@ Next steps:
        - Claude Code: project-scope ./.mcp.json (auto-written by bootstrap)
        - Cursor / Codex / Claude Desktop: copy the relevant snippet from
          ./.agents/clients/ into the client's own MCP config, OR run
-         `./.memory/src/scripts/mcp-config.sh all` to print them again.
+         \`./.memory/src/scripts/mcp-config.sh all\` to print them again.
      The server only becomes callable from inside an agent session
      AFTER this client restart.
   6) ./.memory/src/scripts/mcp-smoke.sh               # validate
