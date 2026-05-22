@@ -203,7 +203,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
     const resolved = resolveDatasetId(config, datasetNameOrId);
     if (!resolved) {
       throw new Error(
-        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to the canonical settings/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run ./.memory/src/scripts/dify-setup.sh.`,
+        `Dataset '${datasetNameOrId}' is not configured. Add ${slotEnvKey(datasetNameOrId)}=<dataset-id> to the canonical settings/.env (every DIFY_DATASET_<NAME>_ID line declares one slot), or run dify-setup.sh.`,
       );
     }
     return resolved;
@@ -211,7 +211,7 @@ export function requireDifyWriteConfig(config, datasetNameOrId) {
   const fallback = config.legacyWriteDatasetId || config.datasetIds[0];
   if (!fallback) {
     throw new Error(
-      "No write dataset configured. Run ./.memory/src/scripts/dify-setup.sh, or add a DIFY_DATASET_<NAME>_ID=<dataset-id> line to the canonical settings/.env.",
+      "No write dataset configured. Run dify-setup.sh, or add a DIFY_DATASET_<NAME>_ID=<dataset-id> line to the canonical settings/.env.",
     );
   }
   return fallback;
@@ -451,7 +451,7 @@ export async function updateDocumentMetadata(config, { datasetId, documentId, me
     // but should NOT count this against the daily-doc retry cap.
     return {
       ok: true,
-      warning: "no fields matched dataset metadata schema; run ./.memory/src/scripts/dify-setup.sh to install per-document fields",
+      warning: "no fields matched dataset metadata schema; run dify-setup.sh to install per-document fields",
       skippedFields,
     };
   }
