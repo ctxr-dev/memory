@@ -367,7 +367,7 @@ server.registerTool(
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in the canonical settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). The dataset is created on your Dify tenant's System Default Embedding Model automatically (no model arg needed). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in the canonical settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
