@@ -14,7 +14,7 @@ Two contexts:
 ```bash
 # Working on the boilerplate itself:
 git clone https://github.com/ctxr-dev/memory
-cd .memory/src
+cd memory
 # Root has zero dependencies. The bridge has its own:
 ( cd mcp-server && npm install )
 ```
@@ -94,7 +94,7 @@ When the feature branch is ready to merge, expect to squash-merge: the per-commi
 
 ## Reporting bugs
 
-Use [GitHub Issues](https://github.com/ctxr-dev/.memory/src/issues). For installation issues, include:
+Use [GitHub Issues](https://github.com/ctxr-dev/memory/issues). For installation issues, include:
 
 - Output of `./scripts/ps.sh` (or `./.memory/src/scripts/ps.sh` if you installed the boilerplate into a project).
 - Output of `./scripts/ui-url.sh`.

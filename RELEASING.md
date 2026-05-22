@@ -18,9 +18,9 @@ Then verify against a live bridge (optional but recommended for any
 release that touches the bridge surface):
 
 ```bash
-./.memory/src/scripts/up.sh memory_mcp
-./.memory/src/scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
-./.memory/src/scripts/plan-capture-smoke.sh         # write-path probe
+./scripts/up.sh memory_mcp
+./scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
+./scripts/plan-capture-smoke.sh         # write-path probe
 ```
 
 ## Cutting the tag
@@ -51,7 +51,7 @@ release that touches the bridge surface):
 
 5. **Verify.** The README's release badge picks up the new tag
    automatically once GitHub indexes the release (usually within a
-   minute). Check `https://github.com/ctxr-dev/.memory/src/releases/latest`
+   minute). Check `https://github.com/ctxr-dev/memory/releases/latest`
    redirects to v0.1.0.
 
 ## Version pinning for downstream users

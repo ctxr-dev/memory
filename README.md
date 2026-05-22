@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ctxr-dev/.memory/src/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ctxr-dev/.memory/src/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/ctxr-dev/.memory/src/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ctxr-dev/memory?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ctxr-dev/memory/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ctxr-dev/memory/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/ctxr-dev/memory?display_name=tag&sort=semver"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg"></a>
   <img alt="Local First" src="https://img.shields.io/badge/Local--First-memory-0A7C66">
   <img alt="Dify" src="https://img.shields.io/badge/RAG-Dify-2F6FEB">
