@@ -12,6 +12,7 @@ import {
   fetchJsonWithTimeout,
   findDocumentByExactName,
   getConfig,
+  getDatasetInfo,
   getDefaultEmbeddingModel,
   getDocumentText,
   listAllDatasets,
@@ -248,18 +249,36 @@ async function listEmbeddingModelsCmd(config) {
   };
 }
 
-// Resolve the SINGLE effective embedding model the bridge would use for
-// hybrid_search (the Dify tenant's System Default, alphabetical-first when
-// several providers are configured). Distinct from `list-embedding-models`,
-// which enumerates every AVAILABLE provider/model. The settings snapshot
-// records this single value so a re-clone can be told the one model to keep
-// as the System Default.
+// Report the embedding model actually IN USE by memory: read it from the
+// compile (knowledge) dataset, which is what memory writes to and searches.
+// The tenant System Default can't be read via the dataset Service API, and a
+// bound dataset is the authoritative answer to "what model is my memory on".
+// Fall back to the tenant-list guess (clearly labelled "tenant_guess") only
+// when no compile dataset is bound yet. The settings snapshot records this.
 async function getEmbeddingDefaultCmd(config) {
+  let datasetId = "";
+  try {
+    datasetId = resolveDatasetId(config, config.compileDatasetName) || "";
+  } catch {
+    datasetId = "";
+  }
+  if (datasetId) {
+    try {
+      const info = await getDatasetInfo(config, { datasetId });
+      const model = info?.embedding_model || "";
+      const provider = info?.embedding_model_provider || "";
+      if (model) {
+        return { provider, model, source: "compile_dataset", datasetId };
+      }
+    } catch {
+      // fall through to the tenant-list guess
+    }
+  }
   const resolved = await getDefaultEmbeddingModel(config);
   return {
     provider: resolved.provider || "",
     model: resolved.model || "",
-    source: resolved.source || "",
+    source: resolved.source ? `tenant_guess:${resolved.source}` : "tenant_guess",
     ...(resolved.error ? { error: resolved.error } : {}),
   };
 }

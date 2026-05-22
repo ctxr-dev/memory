@@ -270,67 +270,59 @@ export async function createDataset(config, {
 }) {
   if (!name) throw new Error("createDataset requires a name.");
   const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets`;
-  // Well-formed RetrievalModel: search_method REQUIRED. reranking_mode +
-  // weights provided so later /retrieve calls that fall back to this
-  // dataset default don't trip "KeyError: reranking_mode" on Dify versions
-  // that strictly validate the persisted model.
-  const defaultRetrievalModel = {
-    search_method: "hybrid_search",
-    reranking_enable: false,
-    reranking_mode: "weighted_score",
-    weights: {
-      vector_setting: { vector_weight: 0.7 },
-      keyword_setting: { keyword_weight: 0.3 },
-    },
-    top_k: 8,
-    score_threshold_enabled: false,
-    score_threshold: 0,
-  };
-  // Spread-merge so a caller-supplied retrievalModel doesn't drop the
-  // reranking_mode/weights defaults (which Dify requires for the persisted
-  // dataset model in newer versions).
   const payload = {
     name,
     indexing_technique: indexingTechnique,
     permission,
-    retrieval_model: { ...defaultRetrievalModel, ...(retrievalModel || {}) },
   };
   if (description) payload.description = description;
-  // Resolve embedding (model + provider) using a 2-step precedence:
-  //   1. Explicit args from the caller (advanced API surface; no
-  //      shipped tool currently passes these).
-  //   2. Auto-discovered from the Dify tenant (the System Default
-  //      Embedding Model configured in the UI).
-  // The Dify UI is the SINGLE source of truth. We deliberately do not
-  // honour DIFY_EMBEDDING_MODEL{,_PROVIDER} env vars — exposing them
-  // would create two sources of truth that drift.
-  let finalEmbed = embeddingModel || "";
-  let finalEmbedProvider = embeddingModelProvider || "";
+
+  // Embedding model resolution. The Dify UI's System Default Embedding Model
+  // is the single source of truth, and the bridge CANNOT read it through the
+  // dataset Service API (that setting lives on the console API). So instead of
+  // GUESSING a tenant default and forcing it (which on multi-provider tenants
+  // picked the wrong model), we OMIT the embedding fields on create: Dify then
+  // applies the tenant System Default automatically. Retrieval reads each
+  // dataset's own stored model (see datasetMetaFor + retrieveChunks), so it
+  // always matches whatever Dify chose here.
+  //
+  // Advanced callers may still pin a model explicitly (both args, or neither);
+  // no shipped tool does. With an explicit pin we also carry the embedding into
+  // a hybrid retrieval_model (Dify's pydantic validator requires it there).
+  const finalEmbed = embeddingModel || "";
+  const finalEmbedProvider = embeddingModelProvider || "";
   if (Boolean(finalEmbed) !== Boolean(finalEmbedProvider)) {
     throw new Error(
       "createDataset: explicit args must set BOTH embeddingModel and embeddingModelProvider, or neither.",
     );
   }
-  if (!finalEmbed && !finalEmbedProvider) {
-    const resolved = await getDefaultEmbeddingModel(config);
-    if (resolved && resolved.provider && resolved.model) {
-      finalEmbed = resolved.model;
-      finalEmbedProvider = resolved.provider;
-    }
-  }
   if (finalEmbed && finalEmbedProvider) {
     payload.embedding_model = finalEmbed;
     payload.embedding_model_provider = finalEmbedProvider;
-    // Dify 1.14+ also requires embedding_provider_name +
-    // embedding_model_name INSIDE retrieval_model.weights.vector_setting
-    // for hybrid_search. The top-level fields above set the dataset
-    // default; the nested fields satisfy the pydantic validator on
-    // every retrieve. Both are needed.
-    const rm = payload.retrieval_model;
-    if (rm && rm.weights && rm.weights.vector_setting) {
-      rm.weights.vector_setting.embedding_provider_name = finalEmbedProvider;
-      rm.weights.vector_setting.embedding_model_name = finalEmbed;
-    }
+    const rm = {
+      search_method: "hybrid_search",
+      reranking_enable: false,
+      reranking_mode: "weighted_score",
+      weights: {
+        vector_setting: {
+          vector_weight: 0.7,
+          embedding_provider_name: finalEmbedProvider,
+          embedding_model_name: finalEmbed,
+        },
+        keyword_setting: { keyword_weight: 0.3 },
+      },
+      top_k: 8,
+      score_threshold_enabled: false,
+      score_threshold: 0,
+      ...(retrievalModel || {}),
+    };
+    payload.retrieval_model = rm;
+  } else if (retrievalModel) {
+    // Caller supplied a retrieval_model but no embedding pin: pass it through
+    // as-is (their responsibility). Without an embedding pin we otherwise omit
+    // retrieval_model so Dify can't reject a hybrid model that lacks the
+    // required embedding fields.
+    payload.retrieval_model = retrievalModel;
   }
   return fetchJsonWithTimeout(
     endpoint,
@@ -558,7 +550,10 @@ export async function getDocumentText(config, { datasetId, documentId } = {}) {
 // (cached per process) and pick semantic_search-ish behaviour when the
 // dataset has no vector index.
 
-const datasetIndexCache = new Map(); // datasetId -> "high_quality" | "economy"
+// datasetId -> { indexingTechnique, embeddingModel, embeddingProvider }
+// One GET /datasets/{id} feeds both the indexing-technique decision and the
+// per-dataset embedding model that hybrid_search retrieval requires.
+const datasetMetaCache = new Map();
 
 export async function getDatasetInfo(config, { datasetId } = {}) {
   if (!datasetId) throw new Error("getDatasetInfo requires datasetId.");
@@ -570,17 +565,32 @@ export async function getDatasetInfo(config, { datasetId } = {}) {
   );
 }
 
-async function indexingTechniqueFor(config, datasetId) {
-  if (datasetIndexCache.has(datasetId)) return datasetIndexCache.get(datasetId);
+// Resolve (and cache) a dataset's indexing technique + its OWN embedding model
+// and provider. Retrieval must echo the dataset's embedding model back to Dify
+// (the hybrid_search pydantic validator requires it), and reading it from the
+// dataset itself is always correct — no tenant-wide guessing, robust to a
+// tenant with multiple embedding providers.
+export async function datasetMetaFor(config, datasetId) {
+  if (datasetMetaCache.has(datasetId)) return datasetMetaCache.get(datasetId);
+  let meta = { indexingTechnique: "high_quality", embeddingModel: "", embeddingProvider: "" };
   try {
     const info = await getDatasetInfo(config, { datasetId });
-    const tech = info?.indexing_technique || "high_quality";
-    datasetIndexCache.set(datasetId, tech);
-    return tech;
+    meta = {
+      indexingTechnique: info?.indexing_technique || "high_quality",
+      embeddingModel: info?.embedding_model || "",
+      embeddingProvider: info?.embedding_model_provider || "",
+    };
+    datasetMetaCache.set(datasetId, meta);
   } catch {
-    // If probe fails, assume high_quality (the boilerplate's default).
-    return "high_quality";
+    // If the probe fails, assume the boilerplate default technique and leave
+    // the embedding unknown; the caller decides how to proceed. Don't cache a
+    // failure so the next call retries.
   }
+  return meta;
+}
+
+async function indexingTechniqueFor(config, datasetId) {
+  return (await datasetMetaFor(config, datasetId)).indexingTechnique;
 }
 
 // Cache the resolved tenant default embedding model so we don't re-query
@@ -590,25 +600,18 @@ async function indexingTechniqueFor(config, datasetId) {
 let _embeddingDefaultCache = null;     // null = not yet resolved
 let _embeddingDefaultPromise = null;   // in-flight promise dedup
 
-// Resolve the embedding model name + provider URI to use for any
-// hybrid_search call by querying the Dify tenant directly:
-//   `/v1/workspaces/current/models/model-types/text-embedding`.
-// Picks the alphabetical-first active provider's first model.
-//
-// The Dify UI's System Model Settings is the SINGLE source of truth.
-// We deliberately do NOT honour DIFY_EMBEDDING_MODEL{,_PROVIDER} env
-// vars: exposing them as "advanced overrides" creates two sources of
-// truth that drift, and the very existence of the override config in
-// `.env.example` invites users to ask "do I need to set this?" — the
-// same redundant-config friction that this auto-discovery was meant
-// to eliminate. If a user has multiple embedding providers configured
-// and wants to pin a specific one for memory, they configure it as
-// the System Default in the Dify UI; everything that consumes
-// embeddings (memory + any other Dify app in the tenant) uses the
-// same value.
+// INFORMATIONAL FALLBACK ONLY. This is NOT used to create datasets or build
+// retrieval requests any more — those omit the embedding (Dify applies the
+// tenant System Default on create) and read each dataset's OWN model on
+// retrieve (see createDataset / datasetMetaFor / defaultRetrievalModelFor).
+// The reason: the dataset Service API CANNOT read the tenant System Default
+// (that lives on the console API), so this can only GUESS the alphabetical-
+// first active provider, which is wrong on multi-provider tenants. It now
+// survives solely as a last-resort label for `get-embedding-default` when no
+// dataset is bound yet; callers tag its result `tenant_guess`.
 //
 // Returns:
-//   { provider, model, source: "tenant" }       — tenant default in use
+//   { provider, model, source: "tenant" }       — alphabetical-first guess
 //   { provider: "", model: "", source: "tenant_empty" } — no model in tenant
 //   { provider: "", model: "", source: "probe_failed", error } — transient
 export async function getDefaultEmbeddingModel(config) {
@@ -669,13 +672,13 @@ export async function getDefaultEmbeddingModel(config) {
   return _embeddingDefaultPromise;
 }
 
-// Build the retrieval_model. Now async because it auto-discovers the
-// embedding model from the tenant when env vars aren't set. Caching
-// inside getDefaultEmbeddingModel makes repeated calls free.
-async function defaultRetrievalModelFor(indexingTechnique, config) {
+// Build the retrieval_model for a dataset. For high_quality datasets, Dify's
+// hybrid_search validator REQUIRES embedding_provider_name + embedding_model_name
+// in weights.vector_setting; we pass the DATASET'S OWN embedding model (resolved
+// by the caller via datasetMetaFor), which always matches what the dataset was
+// created with. Economy datasets have no vector index -> keyword_search.
+function defaultRetrievalModelFor(indexingTechnique, { embeddingModel, embeddingProvider } = {}) {
   if (indexingTechnique === "economy") {
-    // Economy datasets have no vector index — keyword-only retrieval is
-    // the only option Dify accepts.
     return {
       search_method: "keyword_search",
       reranking_enable: false,
@@ -686,18 +689,10 @@ async function defaultRetrievalModelFor(indexingTechnique, config) {
       score_threshold: 0,
     };
   }
-  // Dify 1.14+ requires embedding_provider_name + embedding_model_name
-  // INSIDE weights.vector_setting when search_method is hybrid_search.
-  // Resolve via getDefaultEmbeddingModel — the Dify UI's System Default
-  // Embedding Model is the single source of truth. No env-var overrides
-  // (see getDefaultEmbeddingModel header for the full rationale).
   const vectorSetting = { vector_weight: 0.7 };
-  if (config) {
-    const resolved = await getDefaultEmbeddingModel(config);
-    if (resolved && resolved.provider && resolved.model) {
-      vectorSetting.embedding_provider_name = resolved.provider;
-      vectorSetting.embedding_model_name = resolved.model;
-    }
+  if (embeddingProvider && embeddingModel) {
+    vectorSetting.embedding_provider_name = embeddingProvider;
+    vectorSetting.embedding_model_name = embeddingModel;
   }
   return {
     search_method: "hybrid_search",
@@ -733,10 +728,19 @@ export async function retrieveChunks(config, { datasetId, query, metadataConditi
 
   let rm = explicitRm;
   if ((wantsThreshold || wantsMetadata || wantsTopK) && !rm) {
-    // Probe the dataset to decide between hybrid_search (high_quality) and
-    // keyword_search (economy). Cached per-process.
-    const tech = await indexingTechniqueFor(config, datasetId);
-    rm = await defaultRetrievalModelFor(tech, config);
+    // Probe the dataset once (cached): its indexing technique decides
+    // hybrid_search (high_quality) vs keyword_search (economy), and its own
+    // embedding model is echoed back into the hybrid_search vector_setting.
+    const meta = await datasetMetaFor(config, datasetId);
+    if (meta.indexingTechnique !== "economy" && !(meta.embeddingProvider && meta.embeddingModel)) {
+      throw new Error(
+        `retrieveChunks: dataset ${datasetId} is high_quality but its embedding model could not be resolved from Dify; cannot build a valid hybrid_search request.`,
+      );
+    }
+    rm = defaultRetrievalModelFor(meta.indexingTechnique, {
+      embeddingModel: meta.embeddingModel,
+      embeddingProvider: meta.embeddingProvider,
+    });
   }
 
   if (rm) {
