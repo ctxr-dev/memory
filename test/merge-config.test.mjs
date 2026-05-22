@@ -90,6 +90,26 @@ test("isOurHookEntry: ACCEPTS our generated forms (full $CLAUDE_PROJECT_DIR sign
   }
 });
 
+test("isOurHookEntry: ACCEPTS the current .memory/src signature (v0.4.0 layout)", () => {
+  // v0.4.0 moved the clone to <project>/.memory/src, so every shipped
+  // template now renders this form. Both this and the legacy memory/ form
+  // must be recognised (the legacy one so a re-bootstrap after migration
+  // strips stale entries instead of duplicating them).
+  for (const oursPath of [
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/pre-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/post-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-end.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/exit-plan-mode.sh',
+  ]) {
+    const oursEntry = {
+      matcher: "",
+      hooks: [{ type: "command", command: oursPath, timeout: 5 }],
+    };
+    assert.equal(isOurHookEntry(oursEntry), true, `should match new form: ${oursPath}`);
+  }
+});
+
 // ---------- mergeHooksConfig ----------
 
 const OUR_TEMPLATE = {
@@ -342,6 +362,45 @@ test("mergeHooksConfig: entry that was 100% ours is dropped, not kept as empty s
   // (an empty stub from the user's old entry + ours).
   assert.equal(merged.hooks.SessionStart.length, 1);
   assert.equal(merged.hooks.SessionStart[0].hooks.length, 1);
+});
+
+test("mergeHooksConfig: v0.4.0 upgrade strips LEGACY memory/ entries and installs .memory/src ones (no duplication)", () => {
+  // The documented migration is `mv ./memory ./.memory/src` then re-run
+  // bootstrap. At that point the user's settings.json still carries the
+  // pre-0.4.0 hook entries pointing at "$CLAUDE_PROJECT_DIR"/memory/... .
+  // The dual ownership signature must recognise those legacy entries as
+  // OURS so they are stripped, not preserved as user entries next to the
+  // freshly rendered .memory/src ones.
+  const legacyInstalled = {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 15 }],
+        },
+      ],
+    },
+  };
+  const newTemplate = {
+    hooks: {
+      SessionStart: [
+        {
+          matcher: "",
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 15 }],
+        },
+      ],
+    },
+  };
+  const merged = mergeHooksConfig(legacyInstalled, newTemplate);
+  // Exactly one entry: the legacy one is stripped, the new one installed.
+  assert.equal(merged.hooks.SessionStart.length, 1);
+  assert.equal(
+    merged.hooks.SessionStart[0].hooks[0].command,
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh',
+  );
+  // Re-run is idempotent (no duplicate, byte-stable).
+  const reRun = mergeHooksConfig(merged, newTemplate);
+  assert.deepEqual(reRun, merged);
 });
 
 test("mergeHooksConfig: does not mutate inputs", () => {
