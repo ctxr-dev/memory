@@ -541,7 +541,7 @@ async function main() {
         if (metadataWarning && !warnedSchemaMissing.has(targetDataset)) {
           warnedSchemaMissing.add(targetDataset);
           console.error(
-            `compile.mjs: WARNING: metadata schema missing on dataset '${targetDataset}'. Promoted docs are un-filterable until you run ./memory/scripts/dify-setup.sh.`,
+            `compile.mjs: WARNING: metadata schema missing on dataset '${targetDataset}'. Promoted docs are un-filterable until you run ./.memory/src/scripts/dify-setup.sh.`,
           );
         }
 

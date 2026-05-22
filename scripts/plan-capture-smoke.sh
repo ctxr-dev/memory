@@ -16,7 +16,7 @@
 # Requires: bridge container running, DIFY_DATASET_PLANS_ID bound, Dify
 # API key configured. Skips with a clear message if any prereq missing.
 #
-# Run this AFTER ./memory/scripts/dify-setup.sh during install
+# Run this AFTER ./.memory/src/scripts/dify-setup.sh during install
 # verification to confirm the auto-capture path works end-to-end against
 # YOUR Dify. Pass --keep to leave the smoke doc in place; default is
 # --cleanup (delete after verifying).
@@ -48,7 +48,7 @@ load_memory_env
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
   echo "plan-capture-smoke SKIP: MCP_CONTAINER_NAME not set in $MEMORY_ENV." >&2
-  echo "  Run ./memory/bootstrap.sh --slug <project-slug> first." >&2
+  echo "  Run ./.memory/src/bootstrap.sh --slug <project-slug> first." >&2
   exit 0
 fi
 
@@ -58,13 +58,13 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if ! docker inspect -f '{{.State.Running}}' "$container_name" >/dev/null 2>&1; then
-  echo "plan-capture-smoke SKIP: $container_name is not running. Start it with ./memory/scripts/up.sh." >&2
+  echo "plan-capture-smoke SKIP: $container_name is not running. Start it with ./.memory/src/scripts/up.sh." >&2
   exit 0
 fi
 
 plans_id="${DIFY_DATASET_PLANS_ID:-$(read_env_value DIFY_DATASET_PLANS_ID "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$plans_id" ]; then
-  echo "plan-capture-smoke SKIP: DIFY_DATASET_PLANS_ID is empty. Run ./memory/scripts/dify-setup.sh to bind the plans slot." >&2
+  echo "plan-capture-smoke SKIP: DIFY_DATASET_PLANS_ID is empty. Run ./.memory/src/scripts/dify-setup.sh to bind the plans slot." >&2
   exit 0
 fi
 
@@ -74,7 +74,7 @@ fi
 # treat a missing key as a SKIP (parity with the checks above).
 dify_key="${DIFY_KNOWLEDGE_API_KEY:-$(read_env_value DIFY_KNOWLEDGE_API_KEY "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$dify_key" ]; then
-  echo "plan-capture-smoke SKIP: DIFY_KNOWLEDGE_API_KEY is empty in $MEMORY_ENV. Run ./memory/scripts/dify-setup.sh to configure Dify access." >&2
+  echo "plan-capture-smoke SKIP: DIFY_KNOWLEDGE_API_KEY is empty in $MEMORY_ENV. Run ./.memory/src/scripts/dify-setup.sh to configure Dify access." >&2
   exit 0
 fi
 

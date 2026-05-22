@@ -18,9 +18,9 @@ Then verify against a live bridge (optional but recommended for any
 release that touches the bridge surface):
 
 ```bash
-./memory/scripts/up.sh memory_mcp
-./memory/scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
-./memory/scripts/plan-capture-smoke.sh         # write-path probe
+./.memory/src/scripts/up.sh memory_mcp
+./.memory/src/scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
+./.memory/src/scripts/plan-capture-smoke.sh         # write-path probe
 ```
 
 ## Cutting the tag
@@ -51,7 +51,7 @@ release that touches the bridge surface):
 
 5. **Verify.** The README's release badge picks up the new tag
    automatically once GitHub indexes the release (usually within a
-   minute). Check `https://github.com/ctxr-dev/memory/releases/latest`
+   minute). Check `https://github.com/ctxr-dev/.memory/src/releases/latest`
    redirects to v0.1.0.
 
 ## Version pinning for downstream users
@@ -60,7 +60,7 @@ Downstream users who want stability over rolling can pin their install
 to a tagged release:
 
 ```bash
-git clone --branch v0.1.0 https://github.com/ctxr-dev/memory ./memory
+git clone --branch v0.1.0 https://github.com/ctxr-dev/memory ./.memory/src
 ```
 
 The default install instructions in the README track `main` (rolling).

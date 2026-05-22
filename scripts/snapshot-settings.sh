@@ -96,8 +96,8 @@ This directory holds your CANONICAL memory boilerplate settings (NOT a
 snapshot): .env (Dify API key + dataset-slot bindings + env knobs),
 .dify-version (the pinned Dify release), and embedding-model.txt (the single
 effective embedding model, informational). It lives alongside the persistent
-Dify data and is SAFE TO KEEP when you remove or re-clone ./memory. Edit .env
-here (or run ./memory/scripts/dify-setup.sh); memory/.env.example is only a
+Dify data and is SAFE TO KEEP when you remove or re-clone ./.memory/src. Edit .env
+here (or run ./.memory/src/scripts/dify-setup.sh); .memory/src/.env.example is only a
 template. Re-created on every successful setup/up run.
 EOF
 then

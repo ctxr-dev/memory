@@ -70,7 +70,7 @@ After approving a plan, you have two breadcrumbs:
    exit-plan-mode.mjs: wrote plan-<slug>.md to plans
    ```
    If you see `skipped (...)` instead, the reason is in the parens. Common reasons: `not-approved`, `empty-plan`, `plans slot not bound` (run `dify-setup.sh`), `bridge unavailable` (run `up.sh memory_mcp`), `plan-too-large`, `disabled via MEMORY_HOOK_EXITPLANMODE_DISABLE=true`.
-2. **Dify UI**: run `./memory/scripts/ui-url.sh` to print the URL, open Knowledge → `plans` dataset, and look for the new `plan-<slug>.md` document. Iterating on the same titled plan overwrites the same doc in place (no duplicates accumulate).
+2. **Dify UI**: run `./.memory/src/scripts/ui-url.sh` to print the URL, open Knowledge → `plans` dataset, and look for the new `plan-<slug>.md` document. Iterating on the same titled plan overwrites the same doc in place (no duplicates accumulate).
 
 For programmatic verification, an MCP-aware agent can call `search_memory({ query: "<plan title>", datasets: ["plans"], filters: { atom_type: "plan" } })` and assert at least one hit.
 

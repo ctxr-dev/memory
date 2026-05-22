@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-The **preferred** channel is a private [GitHub Security Advisory](https://github.com/ctxr-dev/memory/security/advisories/new). It is encrypted, threaded, and gives you a private fork to share repro code without leaking the vulnerability publicly.
+The **preferred** channel is a private [GitHub Security Advisory](https://github.com/ctxr-dev/.memory/src/security/advisories/new). It is encrypted, threaded, and gives you a private fork to share repro code without leaking the vulnerability publicly.
 
 As a fallback, email **dmitri.meshin@gmail.com** with the subject `[memory-boilerplate] security report`. Please do **not** open a public GitHub issue for security-sensitive reports until the fix is shipped.
 

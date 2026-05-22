@@ -9,12 +9,12 @@ This workspace keeps agent-facing configuration under `.agents/` so Claude, Curs
 - Optional hook manifest: `.agents/hooks.json`, only installed with `--install-hooks`
 - Optional Claude Code project hook adapter: `.claude/settings.json`, only installed with `--install-hooks`
 - Optional Claude Code project skills: `.claude/skills/`, mirrored from `.agents/rules/` only when `--install-hooks`
-- Runtime stack: `memory/`
+- Runtime stack: `.memory/src/`
 
 `mcp.json` is the workspace-owned MCP source of truth. Clients that do not automatically read `.agents/mcp.json` can use the generated snippets in `.agents/clients/` or the helper:
 
 ```bash
-./memory/scripts/mcp-config.sh all
+./.memory/src/scripts/mcp-config.sh all
 ```
 
 Codex/OpenAI can be registered with:

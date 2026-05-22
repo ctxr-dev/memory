@@ -76,7 +76,7 @@ async function searchCmd(config, { query, datasetId, limit, filters, scoreThresh
     ? [resolveDatasetId(config, datasetId) || datasetId]
     : config.datasetIds;
   if (datasets.length === 0) {
-    throw new Error("No dataset configured. Run ./memory/scripts/dify-setup.sh or pass --datasetId.");
+    throw new Error("No dataset configured. Run ./.memory/src/scripts/dify-setup.sh or pass --datasetId.");
   }
   const max = Number.parseInt(limit, 10) || config.maxResults;
   const filterObj = parseJsonFlag(filters, "filters");

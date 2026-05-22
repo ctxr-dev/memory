@@ -12,7 +12,7 @@ Persistent Dify data lives under the workspace-level hidden directory you reques
 
 Hooks write session memory directly into Dify. They do not create sidecar memory files.
 
-The upstream Dify source lives under `memory/vendor/dify/`, but project data is not stored there.
+The upstream Dify source lives under `.memory/src/vendor/dify/`, but project data is not stored there.
 
 References:
 
@@ -24,23 +24,23 @@ References:
 ## Start
 
 ```bash
-./memory/scripts/up.sh
+./.memory/src/scripts/up.sh
 ```
 
-On first run, the script resolves the current Dify release, writes it to `./.memory/settings/.dify-version`, clones that pinned release into `memory/vendor/dify`, creates local env files, starts Dify, builds the MCP bridge, and prints the Dify UI URL. Later restarts reuse `./.memory/settings/.dify-version` so Dify does not silently upgrade against existing `.memory/dify` database/vector data.
+On first run, the script resolves the current Dify release, writes it to `./.memory/settings/.dify-version`, clones that pinned release into `.memory/src/vendor/dify`, creates local env files, starts Dify, builds the MCP bridge, and prints the Dify UI URL. Later restarts reuse `./.memory/settings/.dify-version` so Dify does not silently upgrade against existing `.memory/dify` database/vector data.
 
 Useful commands:
 
 ```bash
-./memory/scripts/ui-url.sh
-./memory/scripts/ps.sh
-./memory/scripts/down.sh
-./memory/scripts/migrate-persistent-data.sh
+./.memory/src/scripts/ui-url.sh
+./.memory/src/scripts/ps.sh
+./.memory/src/scripts/down.sh
+./.memory/src/scripts/migrate-persistent-data.sh
 ```
 
 ## First-Time Dify UI Setup
 
-Open the Dify UI printed by `./memory/scripts/ui-url.sh`. Example:
+Open the Dify UI printed by `./.memory/src/scripts/ui-url.sh`. Example:
 
 ```text
 http://127.0.0.1:32774
@@ -49,7 +49,7 @@ http://127.0.0.1:32774
 The port can change after recreating containers, so prefer:
 
 ```bash
-./memory/scripts/ui-url.sh
+./.memory/src/scripts/ui-url.sh
 ```
 
 Then complete these steps in Dify:
@@ -138,7 +138,7 @@ The MCP bridge accepts multiple dataset IDs separated by commas.
 The recommended path is the wizard:
 
 ```bash
-./memory/scripts/dify-setup.sh
+./.memory/src/scripts/dify-setup.sh
 ```
 
 It binds named slots to Dify dataset IDs in `./.memory/settings/.env` and optionally absorbs your existing project documentation. See the [README onboarding section](README.md#onboarding) for the full walkthrough.
@@ -219,7 +219,7 @@ That JSON shape is the same shape Dify's Knowledge API expects for document crea
 Restart the bridge after changing env:
 
 ```bash
-./memory/scripts/up.sh memory_mcp
+./.memory/src/scripts/up.sh memory_mcp
 ```
 
 (`memory_mcp` is the compose service name; `__MEMORY_SERVER_NAME__` is the container name and is NOT a valid argument to `docker compose up`.)
@@ -265,10 +265,10 @@ docker exec -i __MEMORY_SERVER_NAME__ node src/index.js
 Print client-specific config:
 
 ```bash
-./memory/scripts/mcp-config.sh all
-./memory/scripts/mcp-config.sh codex
-./memory/scripts/mcp-config.sh claude-desktop
-./memory/scripts/mcp-config.sh cursor
+./.memory/src/scripts/mcp-config.sh all
+./.memory/src/scripts/mcp-config.sh codex
+./.memory/src/scripts/mcp-config.sh claude-desktop
+./.memory/src/scripts/mcp-config.sh cursor
 ```
 
 For Codex/OpenAI:
@@ -325,7 +325,7 @@ After Dify is configured and the MCP server is added to your client:
 1. Start the stack:
 
 ```bash
-./memory/scripts/up.sh
+./.memory/src/scripts/up.sh
 ```
 
 2. Open Codex/OpenAI, Claude, Cursor, or another MCP client with the MCP server configured.
@@ -365,7 +365,7 @@ It is mirrored into Claude Code's project settings:
 
 That means Claude Code can run the hooks from this workspace without touching your global settings. If those files are absent, the MCP memory server is still usable, but continuous automatic session capture is not active.
 
-**Re-runs are non-destructive.** `bootstrap.sh` invokes `scripts/merge-config.mjs` (pure Node, no `jq`) to structurally merge the rendered `hooks.json` and `settings.json` into the user's existing files. The boilerplate identifies its own entries by the literal command signature `"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/...`; any hook entry that does NOT carry that signature is preserved verbatim across re-runs. The same merge strategy applies to `.agents/mcp.json` (only the bridge server entry is replaced; other MCP servers in the user's config are untouched). See `scripts/lib/merge-config.mjs` for the contract; `test/merge-config.test.mjs` locks idempotency, isolation, and the anchored-signature guarantee.
+**Re-runs are non-destructive.** `bootstrap.sh` invokes `scripts/merge-config.mjs` (pure Node, no `jq`) to structurally merge the rendered `hooks.json` and `settings.json` into the user's existing files. The boilerplate identifies its own entries by the literal command signature `"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/...`; any hook entry that does NOT carry that signature is preserved verbatim across re-runs. The same merge strategy applies to `.agents/mcp.json` (only the bridge server entry is replaced; other MCP servers in the user's config are untouched). See `scripts/lib/merge-config.mjs` for the contract; `test/merge-config.test.mjs` locks idempotency, isolation, and the anchored-signature guarantee.
 
 Current hook events:
 
@@ -378,7 +378,7 @@ Current hook events:
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/session-start.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/session-start.sh",
             "timeout": 15
           }
         ]
@@ -390,7 +390,7 @@ Current hook events:
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/pre-compact.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/pre-compact.sh",
             "timeout": 130
           }
         ]
@@ -402,7 +402,7 @@ Current hook events:
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/post-compact.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/post-compact.sh",
             "timeout": 130
           }
         ]
@@ -414,7 +414,7 @@ Current hook events:
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/session-end.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/session-end.sh",
             "timeout": 130
           }
         ]
@@ -426,7 +426,7 @@ Current hook events:
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/memory/scripts/hooks/exit-plan-mode.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/exit-plan-mode.sh",
             "timeout": 30
           }
         ]
@@ -448,7 +448,7 @@ Manual flush test (extracts and writes a `daily-<ts>.md` document to Dify if you
 
 ```bash
 printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory because flat markdown does not scale."}' |
-  ./memory/scripts/hooks/post-compact.sh
+  ./.memory/src/scripts/hooks/post-compact.sh
 # Find the doc in the Dify UI under your write dataset:
 #   daily-2026-05-09-120530123.md
 ```
@@ -456,9 +456,9 @@ printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_s
 Manual compile (after `./.memory/settings/.env` is configured and the stack is up):
 
 ```bash
-node ./memory/scripts/compile.mjs              # promote any enabled daily-* docs
-node ./memory/scripts/compile.mjs --dry-run    # see decisions without writing to Dify
-node ./memory/scripts/compile.mjs --force      # also re-process disabled daily-* docs
+node ./.memory/src/scripts/compile.mjs              # promote any enabled daily-* docs
+node ./.memory/src/scripts/compile.mjs --dry-run    # see decisions without writing to Dify
+node ./.memory/src/scripts/compile.mjs --force      # also re-process disabled daily-* docs
                                                # (recovery pass; useful after a failed run)
 ```
 
@@ -488,11 +488,11 @@ For hook-capable clients, wire lifecycle events to the matching script:
 
 | Lifecycle event | Script | Expected JSON on stdin |
 | :--- | :--- | :--- |
-| Session start | `./memory/scripts/hooks/session-start.sh` | optional `session_id`, `cwd`, `hook_event_name` |
-| Before compaction/context pruning | `./memory/scripts/hooks/pre-compact.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
-| After compaction/summarization | `./memory/scripts/hooks/post-compact.sh` | `compact_summary` preferred; optional `session_id`, `cwd`, `reason` |
-| Session end | `./memory/scripts/hooks/session-end.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
-| After ExitPlanMode tool returns approved | `./memory/scripts/hooks/exit-plan-mode.sh` | `tool_input.plan` (string), `tool_response.approved` (true/false/null); optional `session_id`, `cwd`, `tool_name="ExitPlanMode"` |
+| Session start | `./.memory/src/scripts/hooks/session-start.sh` | optional `session_id`, `cwd`, `hook_event_name` |
+| Before compaction/context pruning | `./.memory/src/scripts/hooks/pre-compact.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
+| After compaction/summarization | `./.memory/src/scripts/hooks/post-compact.sh` | `compact_summary` preferred; optional `session_id`, `cwd`, `reason` |
+| Session end | `./.memory/src/scripts/hooks/session-end.sh` | `transcript_path` preferred; optional `session_id`, `cwd`, `reason` |
+| After ExitPlanMode tool returns approved | `./.memory/src/scripts/hooks/exit-plan-mode.sh` | `tool_input.plan` (string), `tool_response.approved` (true/false/null); optional `session_id`, `cwd`, `tool_name="ExitPlanMode"` |
 
 If a client has only a session-end hook, wire only `session-end.sh`. If it has only a summary-after-compaction hook, wire `post-compact.sh` and pass the summary as `compact_summary`. If it cannot pass a transcript path or compact summary, automatic continuous capture is not available for that client; use MCP `write_memory` manually or rely on clients that expose hook payloads.
 
@@ -524,7 +524,7 @@ If you intentionally switch Dify to another vector store or an external database
 You can push `.memory/dify/` if you really want the full local state in a remote repo. Be aware that database/vector-store files can become large, include sensitive content, and are safest to copy after stopping the stack:
 
 ```bash
-./memory/scripts/down.sh
+./.memory/src/scripts/down.sh
 ```
 
 For normal durability, back up `.memory/dify/`. Keep `./.memory/settings/.env` private.
@@ -534,41 +534,41 @@ For normal durability, back up `.memory/dify/`. Keep `./.memory/settings/.env` p
 Check container status:
 
 ```bash
-./memory/scripts/ps.sh
+./.memory/src/scripts/ps.sh
 ```
 
 Find the current UI port:
 
 ```bash
-./memory/scripts/ui-url.sh
+./.memory/src/scripts/ui-url.sh
 ```
 
 Restart only the MCP bridge after changing `./.memory/settings/.env`:
 
 ```bash
-./memory/scripts/up.sh memory_mcp
+./.memory/src/scripts/up.sh memory_mcp
 ```
 
 Stop the stack:
 
 ```bash
-./memory/scripts/down.sh
+./.memory/src/scripts/down.sh
 ```
 
 ### "FATAL: WORKSPACE_DIR resolves to '...' which is your home or root."
 
-`scripts/lib.sh` refuses to run when the boilerplate was cloned at the user-project root (`git clone … .`) instead of into a `./memory` subdirectory. Bind-mounting `$HOME` (or `/`) into the bridge container at `/workspace` would expose every dotfile and personal artefact to absorb / scan. The guard normalises both `$HOME` and `WORKSPACE_DIR` via `pwd -P`, so a Linux home that happens to be a symlinked mount also trips it. Fix: re-clone into a project subdirectory:
+`scripts/lib.sh` refuses to run when the boilerplate was cloned at the user-project root (`git clone … .`) instead of into a `./.memory/src` subdirectory. Bind-mounting `$HOME` (or `/`) into the bridge container at `/workspace` would expose every dotfile and personal artefact to absorb / scan. The guard normalises both `$HOME` and `WORKSPACE_DIR` via `pwd -P`, so a Linux home that happens to be a symlinked mount also trips it. Fix: re-clone into a project subdirectory:
 
 ```bash
 cd ~/your-project
-git clone https://github.com/ctxr-dev/memory ./memory
-./memory/bootstrap.sh --slug <project-slug>
+git clone https://github.com/ctxr-dev/memory ./.memory/src
+./.memory/src/bootstrap.sh --slug <project-slug>
 ```
 
 ### Concurrent compile attempts
 
-`scripts/compile.mjs` acquires `memory/.compile.lock` (file-based, atomic POSIX `O_CREAT|O_EXCL`) before mutating `.compile-state.json`. A second compile spawned by an overlapping `SessionStart` finds the lock alive and exits 0 silently. Stale locks (process dead, or holder older than `MEMORY_COMPILE_LOCK_STALE_MS`, default 30 minutes) are reclaimed automatically. Implementation: `scripts/lib/lock.mjs`. Manual recovery (only needed if a compile crashed mid-write AND the stale window has not elapsed):
+`scripts/compile.mjs` acquires `.memory/src/.compile.lock` (file-based, atomic POSIX `O_CREAT|O_EXCL`) before mutating `.compile-state.json`. A second compile spawned by an overlapping `SessionStart` finds the lock alive and exits 0 silently. Stale locks (process dead, or holder older than `MEMORY_COMPILE_LOCK_STALE_MS`, default 30 minutes) are reclaimed automatically. Implementation: `scripts/lib/lock.mjs`. Manual recovery (only needed if a compile crashed mid-write AND the stale window has not elapsed):
 
 ```bash
-rm -f memory/.compile.lock
+rm -f .memory/src/.compile.lock
 ```

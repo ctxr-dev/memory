@@ -9,7 +9,7 @@ export const MEMORY_DIR = path.resolve(here, "../..");
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "../..");
 // Canonical env file lives under the durable, gitignored data dir
 // (./.memory/settings/.env), mirroring scripts/lib.sh. Resolved from an
-// exported MEMORY_DATA_DIR or the default; memory/.env.example is the
+// exported MEMORY_DATA_DIR or the default; .memory/src/.env.example is the
 // template, not a runtime read.
 export const MEMORY_DATA_DIR =
   process.env.MEMORY_DATA_DIR && process.env.MEMORY_DATA_DIR !== ""

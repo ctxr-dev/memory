@@ -167,7 +167,7 @@ server.registerTool(
       }
       if (selectedDatasetIds.length === 0) {
         throw new Error(
-          "No datasets to search. Bind at least one slot via DIFY_DATASET_<NAME>_ID (run ./memory/scripts/dify-setup.sh) or pass `datasets` explicitly.",
+          "No datasets to search. Bind at least one slot via DIFY_DATASET_<NAME>_ID (run ./.memory/src/scripts/dify-setup.sh) or pass `datasets` explicitly.",
         );
       }
 
@@ -669,7 +669,7 @@ server.registerTool(
       const lessonId = config.datasetMap.get("self_improvement")?.id;
       if (!lessonId) {
         throw new Error(
-          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./memory/scripts/dify-setup.sh).",
+          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./.memory/src/scripts/dify-setup.sh).",
         );
       }
       const datasetSlot = "self_improvement";
@@ -751,7 +751,7 @@ server.registerTool(
       const lessonSlot = config.datasetMap.get("self_improvement")?.id ? "self_improvement" : null;
       if (!lessonSlot) {
         throw new Error(
-          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./memory/scripts/dify-setup.sh).",
+          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./.memory/src/scripts/dify-setup.sh).",
         );
       }
       const limit = maxResults || 5;

@@ -263,7 +263,7 @@ async function main() {
   const legacyId = envValue("DIFY_WRITE_DATASET_ID", "");
   if (!boundId && !legacyId) {
     throw new SkipMemory(
-      `Dify slot '${datasetName}' is not bound (${envKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ./memory/scripts/dify-setup.sh.`,
+      `Dify slot '${datasetName}' is not bound (${envKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ./.memory/src/scripts/dify-setup.sh.`,
     );
   }
 
