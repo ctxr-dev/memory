@@ -4,9 +4,15 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const MEMORY_DIR = path.resolve(here, "../..");
-// The clone lives at <project>/.memory/src, so the project root is two levels
-// up from MEMORY_DIR (past src, then past .memory). Mirrors scripts/lib.sh.
-export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "../..");
+// Resolve the project root from the clone location, mirroring scripts/lib.sh.
+// Installed layout (<project>/.memory/src) -> project root is two levels up;
+// a bare repo checkout or a legacy <project>/memory install -> one level up.
+// Detect "src" under a ".memory" parent and pick the matching depth so
+// WORKSPACE_DIR is correct for fresh installs, legacy installs, and repo-dev
+// workflows alike.
+const inMemorySrc =
+  path.basename(MEMORY_DIR) === "src" && path.basename(path.dirname(MEMORY_DIR)) === ".memory";
+export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, inMemorySrc ? "../.." : "..");
 // Canonical env file lives under the durable, gitignored data dir
 // (./.memory/settings/.env), mirroring scripts/lib.sh. Resolved from an
 // exported MEMORY_DATA_DIR or the default; .memory/src/.env.example is the

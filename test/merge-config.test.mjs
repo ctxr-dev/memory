@@ -26,7 +26,7 @@ import {
 test("isOurHookEntry: true when any inner command path includes the marker", () => {
   const ours = {
     matcher: "",
-    hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 15 }],
+    hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 15 }],
   };
   assert.equal(isOurHookEntry(ours), true);
 });
@@ -73,14 +73,14 @@ test("isOurHookEntry: REJECTS user paths even when they contain the substring 'm
 
 test("isOurHookEntry: ACCEPTS our generated forms (full $CLAUDE_PROJECT_DIR signature)", () => {
   // The signature is the full byte sequence:
-  //   "$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/
+  //   "$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/
   // including the closing quote from the template render. This is what
   // every shipped template produces; nothing else should match.
   for (const oursPath of [
-    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh',
-    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/pre-compact.sh',
-    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/post-compact.sh',
-    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/pre-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/post-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-end.sh',
   ]) {
     const oursEntry = {
       matcher: "",
@@ -90,23 +90,25 @@ test("isOurHookEntry: ACCEPTS our generated forms (full $CLAUDE_PROJECT_DIR sign
   }
 });
 
-test("isOurHookEntry: ACCEPTS the current .memory/src signature (v0.4.0 layout)", () => {
-  // v0.4.0 moved the clone to <project>/.memory/src, so every shipped
-  // template now renders this form. Both this and the legacy memory/ form
-  // must be recognised (the legacy one so a re-bootstrap after migration
-  // strips stale entries instead of duplicating them).
-  for (const oursPath of [
-    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh',
-    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/pre-compact.sh',
-    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/post-compact.sh',
-    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-end.sh',
-    '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/exit-plan-mode.sh',
+test("isOurHookEntry: ACCEPTS the legacy memory/ signature (v0.4.0 upgrade-compat)", () => {
+  // v0.4.0 moved the clone to <project>/.memory/src and the shipped templates
+  // now render the .memory/src form (locked by the other positive tests + the
+  // shipped-templates test). The LEGACY "$CLAUDE_PROJECT_DIR"/memory/... form
+  // must ALSO stay recognised so a re-bootstrap after the documented migration
+  // strips the stale pre-0.4.0 entries instead of duplicating them. Dropping
+  // the legacy signature from HOOK_OWNERSHIP_SIGNATURES must fail this test.
+  for (const legacyPath of [
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/pre-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/post-compact.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh',
+    '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/exit-plan-mode.sh',
   ]) {
-    const oursEntry = {
+    const legacyEntry = {
       matcher: "",
-      hooks: [{ type: "command", command: oursPath, timeout: 5 }],
+      hooks: [{ type: "command", command: legacyPath, timeout: 5 }],
     };
-    assert.equal(isOurHookEntry(oursEntry), true, `should match new form: ${oursPath}`);
+    assert.equal(isOurHookEntry(legacyEntry), true, `should still match legacy form: ${legacyPath}`);
   }
 });
 
@@ -117,19 +119,19 @@ const OUR_TEMPLATE = {
     SessionStart: [
       {
         matcher: "",
-        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 15 }],
+        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 15 }],
       },
     ],
     SessionEnd: [
       {
         matcher: "",
-        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh', timeout: 130 }],
+        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-end.sh', timeout: 130 }],
       },
     ],
     PostToolUse: [
       {
         matcher: "ExitPlanMode",
-        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/exit-plan-mode.sh', timeout: 30 }],
+        hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/exit-plan-mode.sh', timeout: 30 }],
       },
     ],
   },
@@ -156,7 +158,7 @@ test("mergeHooksConfig: preserves user-added hook entries on the SAME event", ()
   // User entry survives, OUR entry appended.
   assert.equal(merged.hooks.SessionStart.length, 2);
   assert.equal(merged.hooks.SessionStart[0].hooks[0].command, "./scripts/notify-startup.sh");
-  assert.ok(merged.hooks.SessionStart[1].hooks[0].command.includes("/memory/scripts/hooks/session-start.sh"));
+  assert.ok(merged.hooks.SessionStart[1].hooks[0].command.includes("/.memory/src/scripts/hooks/session-start.sh"));
 });
 
 test("mergeHooksConfig: preserves user-only events not mentioned in our template", () => {
@@ -198,7 +200,7 @@ test("mergeHooksConfig: re-run with updated timeout REPLACES our prior entry", (
       SessionStart: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 30 }],
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 30 }],
         },
       ],
     },
@@ -245,7 +247,7 @@ test("mergeHooksConfig: mixed event with both user and our entries -> user kept,
       SessionStart: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 60 }],
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 60 }],
         },
       ],
     },
@@ -279,7 +281,7 @@ test("mergeHooksConfig: PostToolUse with same matcher 'ExitPlanMode' but user co
     e.hooks.some((h) => h.command === "./tools/my-plan-archiver.sh"),
   );
   const ourEntry = merged.hooks.PostToolUse.find((e) =>
-    e.hooks.some((h) => h.command.includes("memory/scripts/hooks/exit-plan-mode.sh")),
+    e.hooks.some((h) => h.command.includes(".memory/src/scripts/hooks/exit-plan-mode.sh")),
   );
   assert.ok(userEntry, "user entry preserved");
   assert.ok(ourEntry, "our entry installed");
@@ -326,7 +328,7 @@ test("mergeHooksConfig: bundled inner-hook entry preserves user command, replace
         {
           matcher: "",
           hooks: [
-            { type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-end.sh', timeout: 130 },
+            { type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-end.sh', timeout: 130 },
             { type: "command", command: "./scripts/user-cleanup.sh", timeout: 10 },
           ],
         },
@@ -340,7 +342,7 @@ test("mergeHooksConfig: bundled inner-hook entry preserves user command, replace
   assert.equal(merged.hooks.SessionEnd[0].hooks.length, 1);
   assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, "./scripts/user-cleanup.sh");
   // Ours appended as a fresh entry.
-  assert.ok(merged.hooks.SessionEnd[1].hooks[0].command.includes("/memory/scripts/hooks/session-end.sh"));
+  assert.ok(merged.hooks.SessionEnd[1].hooks[0].command.includes("/.memory/src/scripts/hooks/session-end.sh"));
 });
 
 test("mergeHooksConfig: entry that was 100% ours is dropped, not kept as empty stub", () => {
@@ -352,7 +354,7 @@ test("mergeHooksConfig: entry that was 100% ours is dropped, not kept as empty s
       SessionStart: [
         {
           matcher: "",
-          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/session-start.sh', timeout: 15 }],
+          hooks: [{ type: "command", command: '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/session-start.sh', timeout: 15 }],
         },
       ],
     },

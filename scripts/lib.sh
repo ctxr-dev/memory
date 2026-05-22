@@ -12,9 +12,19 @@ set -euo pipefail
 #   3. The HOME-guard check below relies on string equality with $HOME,
 #      which is the resolved (non-symlinked) form on every platform.
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-# The clone lives at <project>/.memory/src, so the project root is TWO levels
-# up from MEMORY_DIR (../.. = past src, then past .memory).
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+# Resolve the project root from the clone location. In the installed layout the
+# clone is <project>/.memory/src, so the project root is TWO levels up. In a
+# bare repo checkout (developing/releasing the boilerplate) or a legacy
+# pre-0.4.0 install at <project>/memory, it is ONE level up. Detect the
+# installed layout (clone basename "src" under a ".memory" parent) and pick the
+# matching depth; otherwise fall back to the parent. This keeps WORKSPACE_DIR
+# correct for fresh installs, legacy installs, and repo-dev workflows alike,
+# without a refuse-to-run guard.
+if [ "$(basename "$MEMORY_DIR")" = "src" ] && [ "$(basename "$(dirname "$MEMORY_DIR")")" = ".memory" ]; then
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+else
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+fi
 DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
 

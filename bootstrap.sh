@@ -8,9 +8,16 @@ set -euo pipefail
 # preserved; new template keys are merged in).
 
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-# bootstrap.sh sits at the clone root (<project>/.memory/src), so the project
-# root is TWO levels up (../.. = past src, then past .memory).
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+# bootstrap.sh sits at the clone root. Installed layout (<project>/.memory/src)
+# -> project root is TWO levels up; a bare repo checkout or a legacy
+# <project>/memory install -> ONE level up. Detect "src" under a ".memory"
+# parent and pick the matching depth (mirrors scripts/lib.sh) so WORKSPACE_DIR
+# is correct in every context without a refuse-to-run guard.
+if [ "$(basename "$MEMORY_DIR")" = "src" ] && [ "$(basename "$(dirname "$MEMORY_DIR")")" = ".memory" ]; then
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+else
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+fi
 TEMPLATES_DIR="$MEMORY_DIR/templates"
 
 usage() {
