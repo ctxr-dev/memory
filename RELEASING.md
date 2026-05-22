@@ -18,9 +18,9 @@ Then verify against a live bridge (optional but recommended for any
 release that touches the bridge surface):
 
 ```bash
-./memory/scripts/up.sh memory_mcp
-./memory/scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
-./memory/scripts/plan-capture-smoke.sh         # write-path probe
+./scripts/up.sh memory_mcp
+./scripts/mcp-smoke.sh                  # read-path probes incl. audit_memory
+./scripts/plan-capture-smoke.sh         # write-path probe
 ```
 
 ## Cutting the tag
@@ -60,7 +60,7 @@ Downstream users who want stability over rolling can pin their install
 to a tagged release:
 
 ```bash
-git clone --branch v0.1.0 https://github.com/ctxr-dev/memory ./memory
+git clone --branch v0.1.0 https://github.com/ctxr-dev/memory ./.memory/src
 ```
 
 The default install instructions in the README track `main` (rolling).

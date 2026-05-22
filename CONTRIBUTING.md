@@ -9,7 +9,7 @@ By submitting a pull request you agree that your contribution is licensed under 
 Two contexts:
 
 - **Working ON the boilerplate itself** (cloning this repo to develop the boilerplate): paths in this file are relative to the repo root (e.g. `./scripts/ps.sh`, `./bootstrap.sh`).
-- **Working IN a project that installed the boilerplate** (`git clone https://github.com/ctxr-dev/memory ./memory`): same files live under `./memory/` (e.g. `./memory/scripts/ps.sh`).
+- **Working IN a project that installed the boilerplate** (`git clone https://github.com/ctxr-dev/memory ./.memory/src`): same files live under `./.memory/src/` (e.g. `./.memory/src/scripts/ps.sh`).
 
 ```bash
 # Working on the boilerplate itself:
@@ -96,7 +96,7 @@ When the feature branch is ready to merge, expect to squash-merge: the per-commi
 
 Use [GitHub Issues](https://github.com/ctxr-dev/memory/issues). For installation issues, include:
 
-- Output of `./scripts/ps.sh` (or `./memory/scripts/ps.sh` if you installed the boilerplate into a project).
+- Output of `./scripts/ps.sh` (or `./.memory/src/scripts/ps.sh` if you installed the boilerplate into a project).
 - Output of `./scripts/ui-url.sh`.
 - Output of `docker logs $MCP_CONTAINER_NAME --tail 50` (defaults to `<slug>-memory` if you accepted the bootstrap default).
 - Your `bootstrap.sh` invocation (with the slug).

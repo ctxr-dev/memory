@@ -12,13 +12,25 @@ set -euo pipefail
 #   3. The HOME-guard check below relies on string equality with $HOME,
 #      which is the resolved (non-symlinked) form on every platform.
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+# Resolve the project root from the clone location. In the installed layout the
+# clone is <project>/.memory/src, so the project root is TWO levels up. In a
+# bare repo checkout (developing/releasing the boilerplate) or a legacy
+# pre-0.4.0 install at <project>/memory, it is ONE level up. Detect the
+# installed layout (clone basename "src" under a ".memory" parent) and pick the
+# matching depth; otherwise fall back to the parent. This keeps WORKSPACE_DIR
+# correct for fresh installs, legacy installs, and repo-dev workflows alike,
+# without a refuse-to-run guard.
+if [ "$(basename "$MEMORY_DIR")" = "src" ] && [ "$(basename "$(dirname "$MEMORY_DIR")")" = ".memory" ]; then
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+else
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+fi
 DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
 
 # The canonical user env file lives under the durable, gitignored data dir
-# (./.memory/settings/.env), NOT inside ./memory, so it survives removing or
-# re-cloning ./memory and there is exactly ONE .env. memory/.env.example is
+# (./.memory/settings/.env), NOT inside ./.memory/src, so it survives removing or
+# re-cloning ./.memory/src and there is exactly ONE .env. .memory/src/.env.example is
 # the template. The data dir is resolved from an EXPORTED MEMORY_DATA_DIR or
 # the default; it cannot be read from inside the env file to locate the env
 # file (chicken-and-egg), so relocating the data dir requires exporting
@@ -30,7 +42,7 @@ DIFY_VERSION_FILE_DEFAULT="$MEMORY_SETTINGS_DIR/.dify-version"
 
 # Refuse to run if WORKSPACE_DIR is the user's home directory or root.
 # Happens when the boilerplate was cloned at the repo root (`git clone … .`
-# instead of `git clone … ./memory`), which would bind-mount $HOME (or /)
+# instead of `git clone … ./.memory/src`), which would bind-mount $HOME (or /)
 # into the bridge container at /workspace.
 #
 # WORKSPACE_DIR is `pwd -P`-resolved above, so we must compare against BOTH
@@ -46,7 +58,7 @@ case "$WORKSPACE_DIR" in
   "${HOME:-/nonexistent-home}"|"${home_resolved:-/nonexistent-home}"|/|/root)
     echo "FATAL: WORKSPACE_DIR resolves to '$WORKSPACE_DIR', which is your home or root." >&2
     echo "  Clone the boilerplate INTO a project subdirectory:" >&2
-    echo "    cd ~/your-project && git clone <repo> ./memory" >&2
+    echo "    cd ~/your-project && git clone <repo> ./.memory/src" >&2
     echo "  Do not git clone the boilerplate AS the project root." >&2
     exit 1
     ;;
@@ -141,7 +153,7 @@ load_memory_env() {
 
   if [ -z "$configured_project_name" ] || [ "$configured_project_name" = "__COMPOSE_PROJECT_NAME__" ]; then
     echo "FATAL: COMPOSE_PROJECT_NAME not configured." >&2
-    echo "  Run ./memory/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
+    echo "  Run $MEMORY_DIR/bootstrap.sh --slug <project-slug> first; it writes COMPOSE_PROJECT_NAME to ./.memory/settings/.env." >&2
     exit 1
   fi
 

@@ -12,11 +12,11 @@ Use these generated snippets for clients that do not automatically read `.agents
 The installed project also provides:
 
 ```bash
-./memory/scripts/mcp-config.sh all
-./memory/scripts/mcp-config.sh codex
-./memory/scripts/mcp-config.sh codex-toml
-./memory/scripts/mcp-config.sh claude-desktop
-./memory/scripts/mcp-config.sh cursor
+./.memory/src/scripts/mcp-config.sh all
+./.memory/src/scripts/mcp-config.sh codex
+./.memory/src/scripts/mcp-config.sh codex-toml
+./.memory/src/scripts/mcp-config.sh claude-desktop
+./.memory/src/scripts/mcp-config.sh cursor
 ```
 
 Codex/OpenAI can usually be registered automatically with:

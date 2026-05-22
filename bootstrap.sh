@@ -3,18 +3,27 @@ set -euo pipefail
 
 # Renders project-root files (.agents/, .claude/settings.json, .gitignore block)
 # from templates inside the cloned boilerplate, and creates the canonical env
-# at ./.memory/settings/.env from memory/.env.example. Idempotent: safe to
-# re-run after `cd memory && git pull` (existing settings/.env values are
+# at ./.memory/settings/.env from .memory/src/.env.example. Idempotent: safe to
+# re-run after `cd .memory/src && git pull` (existing settings/.env values are
 # preserved; new template keys are merged in).
 
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+# bootstrap.sh sits at the clone root. Installed layout (<project>/.memory/src)
+# -> project root is TWO levels up; a bare repo checkout or a legacy
+# <project>/memory install -> ONE level up. Detect "src" under a ".memory"
+# parent and pick the matching depth (mirrors scripts/lib.sh) so WORKSPACE_DIR
+# is correct in every context without a refuse-to-run guard.
+if [ "$(basename "$MEMORY_DIR")" = "src" ] && [ "$(basename "$(dirname "$MEMORY_DIR")")" = ".memory" ]; then
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
+else
+  WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+fi
 TEMPLATES_DIR="$MEMORY_DIR/templates"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  ./memory/bootstrap.sh --slug <project-slug> [options]
+  ./.memory/src/bootstrap.sh --slug <project-slug> [options]
 
 Options:
   --slug <slug>            Project slug (lowercase a-z, 0-9, -). Auto-derived
@@ -29,7 +38,7 @@ Options:
                            specify one explicitly or the first detected is used.
   -h, --help               This help.
 
-Run from the user-project root after `git clone <boilerplate> ./memory`.
+Run from the user-project root after `git clone <boilerplate> ./.memory/src`.
 USAGE
 }
 
@@ -76,7 +85,7 @@ require_cmd() {
 # usable / before any clone), so we INLINE a minimal copy of lib.sh's
 # resolve_docker_bin here. Rationale: Rancher Desktop's shim at ~/.rd/bin is
 # only added to PATH by an interactive shell profile, so a non-interactive
-# `./memory/bootstrap.sh` falsely reports "docker missing". Colima and the
+# `./.memory/src/bootstrap.sh` falsely reports "docker missing". Colima and the
 # in-app Rancher binary have the same problem. This ONLY ADDS locations to
 # PATH; if nothing is found it returns without error so the require_cmd below
 # still emits the canonical install-guidance message.
@@ -455,8 +464,8 @@ fi
 
 # ---------- canonical env: ./.memory/settings/.env ----------
 # The single user env file lives in the durable, gitignored data dir, NOT in
-# ./memory, so it survives removing/re-cloning ./memory and there is exactly
-# ONE .env. memory/.env.example is the only template. Resolve the settings dir
+# ./.memory/src, so it survives removing/re-cloning ./.memory/src and there is exactly
+# ONE .env. .memory/src/.env.example is the only template. Resolve the settings dir
 # from an exported MEMORY_DATA_DIR or the default (at first bootstrap there is
 # no env file yet to read a custom data dir from; export it to relocate).
 settings_data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
@@ -503,7 +512,7 @@ set_env_unique() {
 }
 
 # Migrate a pre-0.3.0 install: if the new settings/.env does not exist yet but
-# a legacy memory/.env does, move its contents across (keeps the user's key +
+# a legacy .memory/src/.env does, move its contents across (keeps the user's key +
 # bindings). If BOTH exist they may diverge; settings/.env is the new canonical
 # and wins, but warn so the user can reconcile. The legacy file is removed at
 # the end either way, so there is exactly one .env.
@@ -514,13 +523,13 @@ if [ ! -f "$env_file" ] && [ -f "$legacy_env" ]; then
   else
     # Hard-fail rather than fall through to rendering a blank template, which
     # would silently drop the user's existing API key + dataset bindings.
-    echo "FATAL: found legacy memory/.env but could not copy it to $env_file." >&2
+    echo "FATAL: found legacy env at $legacy_env but could not copy it to $env_file." >&2
     echo "  Refusing to render a blank env over your existing key/bindings." >&2
     echo "  Fix permissions on $settings_dir (or copy the file manually) and re-run." >&2
     exit 1
   fi
 elif [ -f "$env_file" ] && [ -f "$legacy_env" ] && ! cmp -s "$env_file" "$legacy_env"; then
-  echo "warning: both memory/.env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
+  echo "warning: both $legacy_env (legacy) and $env_file exist and differ; keeping $env_file as canonical and removing the legacy file. Verify your key/bindings if needed." >&2
 fi
 
 if [ ! -f "$env_file" ]; then
@@ -540,7 +549,7 @@ else
     echo "warning: merge-env.mjs failed; new keys from .env.example may NOT have been merged into $env_file (your existing settings are intact). Re-run bootstrap or merge manually." >&2
   fi
   if [ "$migrated" -eq 1 ]; then
-    env_action="migrated from memory/.env"
+    env_action="migrated from .memory/src/.env"
   elif [ "$merge_ok" -eq 1 ]; then
     env_action="updated"
   else
@@ -573,10 +582,10 @@ fi
 chmod 600 "$env_file" 2>/dev/null || \
   echo "warning: could not chmod 600 $env_file; it carries the API key and may be readable by others." >&2
 
-# Exactly one canonical .env: remove any legacy memory/.env now that
-# settings/.env owns it.
+# Exactly one canonical .env: remove any legacy clone-root .env ($legacy_env)
+# now that settings/.env owns it.
 if [ -f "$legacy_env" ]; then
-  rm -f "$legacy_env" && echo "Removed legacy memory/.env; the canonical env is now $env_file."
+  rm -f "$legacy_env" && echo "Removed legacy env at $legacy_env; the canonical env is now $env_file."
 fi
 
 # ---------- ensure host data dir placeholder ----------
@@ -614,16 +623,17 @@ Bootstrap complete.
 
 Your config (API key, dataset bindings, env knobs) lives in:
   $env_file
-Edit THAT file, not memory/.env (which no longer exists). The template is
-memory/.env.example; new keys added there are merged in on the next bootstrap.
+Edit THAT file, not $legacy_env (the legacy clone-root .env, which no longer
+exists). The template is $MEMORY_DIR/.env.example; new keys added there are
+merged in on the next bootstrap.
 
 Next steps:
-  1) ./memory/scripts/up.sh                     # start the Dify stack
+  1) ./.memory/src/scripts/up.sh                     # start the Dify stack
                                                   (FIRST RUN: 2-5 minutes on a
                                                    cold Docker image pull
                                                    (multi-GB); ~30-60s once the
                                                    image cache is warm.)
-  2) ./memory/scripts/ui-url.sh                 # open the printed URL
+  2) ./.memory/src/scripts/ui-url.sh                 # open the printed URL
   3) In Dify UI: create the admin account.
      Then Settings -> Model Provider:
        - select OpenAI (recommended) or Ollama (for local zero-cost embeddings)
@@ -633,7 +643,7 @@ Next steps:
      Then Knowledge -> Service API -> create a Knowledge API key.
      (Do NOT paste the key by hand; the next step's wizard prompts for it
       and writes it into ./.memory/settings/.env for you.)
-  4) ./memory/scripts/dify-setup.sh              # paste the Knowledge API key
+  4) ./.memory/src/scripts/dify-setup.sh              # paste the Knowledge API key
                                                   when prompted; auto-create
                                                   the configured dataset slots
                                                   (defaults: daily, knowledge,
@@ -650,10 +660,10 @@ Next steps:
        - Claude Code: project-scope ./.mcp.json (auto-written by bootstrap)
        - Cursor / Codex / Claude Desktop: copy the relevant snippet from
          ./.agents/clients/ into the client's own MCP config, OR run
-         `./memory/scripts/mcp-config.sh all` to print them again.
+         `./.memory/src/scripts/mcp-config.sh all` to print them again.
      The server only becomes callable from inside an agent session
      AFTER this client restart.
-  6) ./memory/scripts/mcp-smoke.sh               # validate
+  6) ./.memory/src/scripts/mcp-smoke.sh               # validate
 
 Plan-mode integration (Claude Code only; other clients can ignore):
   When you exit plan mode and approve a plan, the PostToolUse hook
@@ -664,7 +674,7 @@ Plan-mode integration (Claude Code only; other clients can ignore):
   for the agent contract.
 
 The boilerplate ships with its own .git so you can update it later:
-  cd memory && git pull && cd .. && ./memory/bootstrap.sh --slug $slug
+  cd .memory/src && git pull && cd .. && ./.memory/src/bootstrap.sh --slug $slug
 
 Re-running bootstrap is idempotent. Your ./.memory/settings/.env is preserved
 across upgrades (new template keys are merged in, existing values untouched).

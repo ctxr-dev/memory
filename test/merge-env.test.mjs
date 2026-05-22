@@ -1,5 +1,5 @@
 // Lock the upgrade-merge contract. On `git pull`, bootstrap appends keys
-// that exist in memory/.env.example but are missing from the user's canonical
+// that exist in the clone-root .env.example but are missing from the user's canonical
 // ./.memory/settings/.env, so new knobs surface without a hand-diff. The
 // merge MUST be append-only (never touch existing user values), MUST treat a
 // commented key in either file as "present", MUST preserve commented-vs-active

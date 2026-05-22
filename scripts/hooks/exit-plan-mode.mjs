@@ -132,7 +132,7 @@ async function main() {
   const boundId = envValue(envKey, "");
   if (!boundId) {
     throw new SkipPlanCapture(
-      `plans slot not bound; ${envKey} empty, run ./memory/scripts/dify-setup.sh`,
+      `plans slot not bound; ${envKey} empty, run ./.memory/src/scripts/dify-setup.sh`,
     );
   }
 
@@ -178,7 +178,7 @@ async function main() {
       // benign if not actually needed.
       const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|\b404\b/is.test(msg);
       const hint = looksLikeStaleEnv
-        ? " — try ./memory/scripts/up.sh memory_mcp to refresh the bridge env"
+        ? ` (try ./.memory/src/scripts/up.sh memory_mcp to refresh the bridge env)`
         : "";
       throw new SkipPlanCapture(`bridge unavailable: ${msg}${hint}`);
     }

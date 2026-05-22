@@ -100,7 +100,7 @@ The trap-to-avoid section is the highest-value part for future retrieval. If you
 
 ## Verifying the save worked
 
-After a successful `save_to_dataset` call the response carries `ok: true`, `documentOk: true`, and `metadataOk: true`. If `metadataOk: false`, the doc landed but its metadata didn't — run `./memory/scripts/dify-setup.sh` to retro-install the schema on the `investigations` slot, then re-call `save_to_dataset` to write the metadata.
+After a successful `save_to_dataset` call the response carries `ok: true`, `documentOk: true`, and `metadataOk: true`. If `metadataOk: false`, the doc landed but its metadata didn't: run `./.memory/src/scripts/dify-setup.sh` to retro-install the schema on the `investigations` slot, then re-call `save_to_dataset` to write the metadata.
 
 Programmatic verification: `search_memory({ query: "<investigation title>", datasets: ["investigations"] })` should return at least one hit with `documentName: "investigation-<slug>.md"`.
 
