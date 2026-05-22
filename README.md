@@ -105,7 +105,7 @@ git clone https://github.com/ctxr-dev/memory ./.memory/src
                           # at the end.
 ```
 
-`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `./.memory/settings/.env` from the template.
+`bootstrap.sh` renders `.agents/` (vendor-neutral, for Cursor / Codex / Claude Desktop / generic MCP clients) and (when `--install-hooks` is on, default) also `.claude/settings.json` (Claude Code hooks) AND `.mcp.json` at the workspace root (Claude Code's project-scope MCP server registration; without this, `/mcp` does NOT see the new memory server even when the bridge is up). It also appends a `/.memory` block to `.gitignore`, detects available LLM CLIs (`claude`, `codex`, falls back to `anthropic` / `openai`), and creates `./.memory/settings/.env` from the template.
 
 **Existing config files are structurally merged, never overwritten:** your hooks, MCP servers, and permissions all pass through verbatim and only boilerplate-owned entries are added or refreshed (see [Updates → Merge contract](#merge-contract)). Re-runs leave `./.memory/settings/.env` untouched.
 
@@ -637,49 +637,54 @@ Skips with a clear `SKIP:` message if the bridge isn't running, the `plans` slot
 
 </details>
 
-## Repository layout (cloned `./.memory/src/`)
+## Repository layout (single `./.memory/` folder)
+
+Everything the boilerplate touches lives under one gitignored directory, so your project root gains exactly one entry to ignore (`/.memory`). The `src/` subtree is this cloned repo (safe to `rm -rf` and re-clone); `dify/` and `settings/` are your durable data and survive a re-clone.
 
 <details>
 <summary>Expand: repository tree</summary>
 
 ```text
-.memory/src/
-├── bootstrap.sh                # render project-root files; idempotent
-├── compose.mcp.yaml            # Docker Compose override for the MCP bridge
-├── .env.example                # template for ./.memory/settings/.env
-├── scripts/
-│   ├── up.sh, down.sh, ps.sh   # stack lifecycle
-│   ├── ui-url.sh               # discover the host UI port
-│   ├── dify-bootstrap.sh       # resolve + pin Dify version, clone vendor
-│   ├── dify-setup.sh           # interactive dataset binding + metadata
-│   │                           # schema installer + absorb wizard
-│   ├── mcp-config.sh           # print client snippets
-│   ├── mcp-smoke.sh            # JSON-RPC smoke against the bridge
-│   ├── compile.mjs             # daily -> knowledge / self_improvement
-│   │                           # promotion (per-atom-type routing,
-│   │                           # metadata-filtered dedup-merge)
-│   ├── merge-config.mjs        # CLI used by bootstrap.sh to structurally
-│   │                           # merge our hooks/MCP entries into the
-│   │                           # user's existing config without losing
-│   │                           # user content
-│   ├── lib/{env,llm,dify-write,redact,slug,datasets,lock,merge-config}.mjs
-│   └── hooks/
-│       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
-│       ├── pre-compact.sh            # -> flush.mjs pre-compact
-│       ├── post-compact.sh           # -> flush.mjs post-compact
-│       ├── session-end.sh            # -> flush.mjs session-end
-│       └── flush.mjs                 # shared extractor (incl. self-
-│                                     # improvement-lesson type + metadata)
-├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
-├── mcp-server/src/{index,dify,memory-cli,glob,slug}.js
-├── templates/
-│   ├── agents/                       # rendered to <project>/.agents/
-│   ├── claude/settings.json          # rendered to <project>/.claude/
-│   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
-│   ├── skills/plan-capture.md        # rendered to .claude/skills/ AND .agents/rules/
-│   ├── skills/investigation-capture.md # rendered to .claude/skills/ AND .agents/rules/
-│   └── gitignore.append              # appended to <project>/.gitignore
-└── vendor/dify/                # cloned at first dify-bootstrap
+.memory/                            # single gitignored folder (one .gitignore entry: /.memory)
+├── src/                            # the cloned boilerplate (THIS repo); rm -rf + re-clone safe
+│   ├── bootstrap.sh                # render project-root files; idempotent
+│   ├── compose.mcp.yaml            # Docker Compose override for the MCP bridge
+│   ├── .env.example                # template for ../settings/.env
+│   ├── scripts/
+│   │   ├── up.sh, down.sh, ps.sh   # stack lifecycle
+│   │   ├── ui-url.sh               # discover the host UI port
+│   │   ├── dify-bootstrap.sh       # resolve + pin Dify version, clone vendor
+│   │   ├── dify-setup.sh           # interactive dataset binding + metadata
+│   │   │                           # schema installer + absorb wizard
+│   │   ├── mcp-config.sh           # print client snippets
+│   │   ├── mcp-smoke.sh            # JSON-RPC smoke against the bridge
+│   │   ├── compile.mjs             # daily -> knowledge / self_improvement
+│   │   │                           # promotion (per-atom-type routing,
+│   │   │                           # metadata-filtered dedup-merge)
+│   │   ├── merge-config.mjs        # CLI used by bootstrap.sh to structurally
+│   │   │                           # merge our hooks/MCP entries into the
+│   │   │                           # user's existing config without losing
+│   │   │                           # user content
+│   │   ├── lib/{env,llm,dify-write,redact,slug,datasets,lock,merge-config}.mjs
+│   │   └── hooks/
+│   │       ├── session-start.{sh,mjs}    # lazy compile trigger + reminder
+│   │       ├── pre-compact.sh            # -> flush.mjs pre-compact
+│   │       ├── post-compact.sh           # -> flush.mjs post-compact
+│   │       ├── session-end.sh            # -> flush.mjs session-end
+│   │       └── flush.mjs                 # shared extractor (incl. self-
+│   │                                     # improvement-lesson type + metadata)
+│   ├── prompts/{flush,compile}.md  # LLM extraction + dedup-merge prompts
+│   ├── mcp-server/src/{index,dify,memory-cli,glob,slug}.js
+│   ├── templates/
+│   │   ├── agents/                       # rendered to <project>/.agents/
+│   │   ├── claude/settings.json          # rendered to <project>/.claude/
+│   │   ├── skills/self-improvement.md    # rendered to .claude/skills/ AND .agents/rules/
+│   │   ├── skills/plan-capture.md        # rendered to .claude/skills/ AND .agents/rules/
+│   │   ├── skills/investigation-capture.md # rendered to .claude/skills/ AND .agents/rules/
+│   │   └── gitignore.append              # appended to <project>/.gitignore
+│   └── vendor/dify/                # upstream Dify source, cloned at first dify-bootstrap
+├── dify/                           # Dify persistent data (db, object storage, weaviate, redis)
+└── settings/                       # canonical .env (API key + dataset bindings) + .dify-version
 
 # Memory is stored entirely in Dify, organised by named slot, named:
 #   daily-<YYYY-MM-DD-HHMMSSmmm>.md             (one per flush event, daily slot)
