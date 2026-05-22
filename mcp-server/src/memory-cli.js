@@ -256,12 +256,8 @@ async function listEmbeddingModelsCmd(config) {
 // Fall back to the tenant-list guess (clearly labelled "tenant_guess") only
 // when no compile dataset is bound yet. The settings snapshot records this.
 async function getEmbeddingDefaultCmd(config) {
-  let datasetId = "";
-  try {
-    datasetId = resolveDatasetId(config, config.compileDatasetName) || "";
-  } catch {
-    datasetId = "";
-  }
+  // resolveDatasetId is null-safe (returns "" / null, never throws).
+  const datasetId = resolveDatasetId(config, config.compileDatasetName) || "";
   if (datasetId) {
     try {
       const info = await getDatasetInfo(config, { datasetId });

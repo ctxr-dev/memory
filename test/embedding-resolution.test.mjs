@@ -45,6 +45,21 @@ test("createDataset (explicit pin) sends both top-level + nested vector_setting 
   }, { responseFn: () => jsonResponse({ id: "ds-pinned" }) });
 });
 
+test("createDataset (explicit pin) keeps embedding fields even when caller overrides weights", async () => {
+  await withFetchStub(async (calls) => {
+    await createDataset(config, {
+      name: "pinned2",
+      embeddingModel: "text-embedding-3-large",
+      embeddingModelProvider: "langgenius/openai/openai",
+      retrievalModel: { weights: { vector_setting: { vector_weight: 0.9 }, keyword_setting: { keyword_weight: 0.1 } } },
+    });
+    const vs = JSON.parse(calls[0].body).retrieval_model.weights.vector_setting;
+    assert.equal(vs.vector_weight, 0.9, "caller weight override is honored");
+    assert.equal(vs.embedding_provider_name, "langgenius/openai/openai", "embedding survives the override");
+    assert.equal(vs.embedding_model_name, "text-embedding-3-large");
+  }, { responseFn: () => jsonResponse({ id: "ds-pinned2" }) });
+});
+
 test("createDataset rejects half-specified embedding args", async () => {
   await assert.rejects(
     () => createDataset(config, { name: "x", embeddingModel: "m" }),
@@ -87,6 +102,25 @@ test("retrieveChunks throws for a high_quality dataset with no resolvable embedd
     responseFn: (call) => {
       if (call.url.endsWith("/datasets/ds-hq-noembed") && call.method !== "POST") {
         return jsonResponse({ indexing_technique: "high_quality" }); // no embedding_model
+      }
+      return jsonResponse({ records: [] });
+    },
+  });
+});
+
+test("retrieveChunks propagates the REAL error when the dataset GET fails (not a misleading embedding message)", async () => {
+  await withFetchStub(async () => {
+    await assert.rejects(
+      () => retrieveChunks(config, { datasetId: "ds-404", query: "hi", scoreThreshold: 0.5 }),
+      (err) => {
+        assert.doesNotMatch(err.message, /embedding model could not be resolved/);
+        return true;
+      },
+    );
+  }, {
+    responseFn: (call) => {
+      if (call.url.endsWith("/datasets/ds-404") && call.method !== "POST") {
+        return { ok: false, status: 404, statusText: "Not Found", text: async () => '{"message":"dataset not found"}' };
       }
       return jsonResponse({ records: [] });
     },

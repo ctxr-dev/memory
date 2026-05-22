@@ -304,17 +304,22 @@ export async function createDataset(config, {
       reranking_enable: false,
       reranking_mode: "weighted_score",
       weights: {
-        vector_setting: {
-          vector_weight: 0.7,
-          embedding_provider_name: finalEmbedProvider,
-          embedding_model_name: finalEmbed,
-        },
+        vector_setting: { vector_weight: 0.7 },
         keyword_setting: { keyword_weight: 0.3 },
       },
       top_k: 8,
       score_threshold_enabled: false,
       score_threshold: 0,
       ...(retrievalModel || {}),
+    };
+    // Apply the embedding fields LAST so a caller-supplied `weights` (e.g.
+    // tweaked vector/keyword weights) can't drop the embedding_* fields that
+    // Dify's hybrid_search validator requires.
+    rm.weights = rm.weights || {};
+    rm.weights.vector_setting = {
+      ...(rm.weights.vector_setting || {}),
+      embedding_provider_name: finalEmbedProvider,
+      embedding_model_name: finalEmbed,
     };
     payload.retrieval_model = rm;
   } else if (retrievalModel) {
@@ -572,25 +577,27 @@ export async function getDatasetInfo(config, { datasetId } = {}) {
 // tenant with multiple embedding providers.
 export async function datasetMetaFor(config, datasetId) {
   if (datasetMetaCache.has(datasetId)) return datasetMetaCache.get(datasetId);
-  let meta = { indexingTechnique: "high_quality", embeddingModel: "", embeddingProvider: "" };
-  try {
-    const info = await getDatasetInfo(config, { datasetId });
-    meta = {
-      indexingTechnique: info?.indexing_technique || "high_quality",
-      embeddingModel: info?.embedding_model || "",
-      embeddingProvider: info?.embedding_model_provider || "",
-    };
-    datasetMetaCache.set(datasetId, meta);
-  } catch {
-    // If the probe fails, assume the boilerplate default technique and leave
-    // the embedding unknown; the caller decides how to proceed. Don't cache a
-    // failure so the next call retries.
-  }
+  // Let a GET failure (404 / auth / network) PROPAGATE with its real message
+  // rather than masking it as a misleading "embedding could not be resolved"
+  // downstream. We don't cache failures, so the next call retries.
+  const info = await getDatasetInfo(config, { datasetId });
+  const meta = {
+    indexingTechnique: info?.indexing_technique || "high_quality",
+    embeddingModel: info?.embedding_model || "",
+    embeddingProvider: info?.embedding_model_provider || "",
+  };
+  datasetMetaCache.set(datasetId, meta);
   return meta;
 }
 
 async function indexingTechniqueFor(config, datasetId) {
-  return (await datasetMetaFor(config, datasetId)).indexingTechnique;
+  // Resilient: callers that only need the technique (not the embedding) should
+  // not break if the probe fails — assume the boilerplate default.
+  try {
+    return (await datasetMetaFor(config, datasetId)).indexingTechnique;
+  } catch {
+    return "high_quality";
+  }
 }
 
 // Cache the resolved tenant default embedding model so we don't re-query
