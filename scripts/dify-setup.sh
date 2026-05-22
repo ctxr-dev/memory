@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ "${1-}" = "-h" ] || [ "${1-}" = "--help" ]; then
   cat <<EOF
 Usage:
-  dify-setup.sh [--non-interactive --auto-create]
+  $0 [--non-interactive --auto-create]
 
 Slot model: every DIFY_DATASET_<NAME>_ID line in the canonical settings/.env declares
 one slot. Defaults are daily, knowledge, plans, investigations,
@@ -32,7 +32,7 @@ fi
 load_memory_env
 
 ENV_FILE="$MEMORY_ENV"
-[ -f "$ENV_FILE" ] || { echo "$ENV_FILE missing. Run bootstrap.sh first." >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "$ENV_FILE missing. Run $MEMORY_DIR/bootstrap.sh first." >&2; exit 1; }
 
 CONTAINER_NAME="$(read_env_value MCP_CONTAINER_NAME "$ENV_FILE" 2>/dev/null || true)"
 [ -n "$CONTAINER_NAME" ] || { echo "MCP_CONTAINER_NAME not in $ENV_FILE." >&2; exit 1; }
@@ -179,7 +179,7 @@ restart_bridge() {
 
 # ---------- preflight ----------
 if ! docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null | grep -q true; then
-  echo "Container '$CONTAINER_NAME' not running. Start with up.sh" >&2
+  echo "Container '$CONTAINER_NAME' not running. Start with $MEMORY_DIR/scripts/up.sh" >&2
   exit 1
 fi
 
@@ -198,16 +198,16 @@ if [ -z "$API_KEY" ]; then
 FATAL: DIFY_KNOWLEDGE_API_KEY not set; cannot continue in --non-interactive mode.
 
 Set it first, then re-run:
-  1) Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ui-url.sh>')).
+  1) Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo "<run $MEMORY_DIR/scripts/ui-url.sh>")).
   2) Knowledge -> Service API -> create a Knowledge API key.
   3) Edit $ENV_FILE: DIFY_KNOWLEDGE_API_KEY=<the-key>
   4) Recreate the bridge so the new key is loaded:
-     up.sh memory_mcp
-  5) dify-setup.sh --non-interactive --auto-create
+     $MEMORY_DIR/scripts/up.sh memory_mcp
+  5) $MEMORY_DIR/scripts/dify-setup.sh --non-interactive --auto-create
 EOF
     exit 1
   fi
-  echo "Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ui-url.sh>'))"
+  echo "Open the Dify UI ($("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo "<run $MEMORY_DIR/scripts/ui-url.sh>"))"
   echo "Knowledge -> Service API -> create a Knowledge API key. Paste it now."
   echo "(Input is hidden; trailing whitespace and carriage returns are trimmed.)"
   api_key="$(prompt_secret 'DIFY_KNOWLEDGE_API_KEY')"
@@ -275,7 +275,7 @@ FATAL: no embedding model is configured in your Dify tenant.
 Dify requires a default text-embedding model before any high_quality
 dataset can be created. Open the Dify UI:
 
-  $("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo '<run ui-url.sh>')
+  $("$SCRIPT_DIR/ui-url.sh" 2>/dev/null || echo "<run $MEMORY_DIR/scripts/ui-url.sh>")
 
 Then:
   1. Settings (top-right gear) -> Model Provider.
@@ -307,7 +307,7 @@ list_json="$(cli list-datasets 2>/dev/null || true)"
 # Check both for parse failure AND for an error envelope.
 if ! printf '%s' "$list_json" | node -e 'JSON.parse(require("fs").readFileSync(0,"utf8"))' >/dev/null 2>&1; then
   echo "FATAL: bridge returned non-JSON for list-datasets. Likely the bridge container is down." >&2
-  echo "  Try: up.sh memory_mcp" >&2
+  echo "  Try: $MEMORY_DIR/scripts/up.sh memory_mcp" >&2
   exit 1
 fi
 list_err="$(printf '%s' "$list_json" | node -e '

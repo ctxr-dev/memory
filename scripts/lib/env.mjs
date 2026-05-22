@@ -15,8 +15,8 @@ const inMemorySrc =
 export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, inMemorySrc ? "../.." : "..");
 // Canonical env file lives under the durable, gitignored data dir
 // (./.memory/settings/.env), mirroring scripts/lib.sh. Resolved from an
-// exported MEMORY_DATA_DIR or the default; .memory/src/.env.example is the
-// template, not a runtime read.
+// exported MEMORY_DATA_DIR or the default; the clone-root .env.example
+// ($MEMORY_DIR/.env.example) is the template, not a runtime read.
 export const MEMORY_DATA_DIR =
   process.env.MEMORY_DATA_DIR && process.env.MEMORY_DATA_DIR !== ""
     ? process.env.MEMORY_DATA_DIR

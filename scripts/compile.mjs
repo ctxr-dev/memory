@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue, atomBodyMaxChars } from "./lib/env.mjs";
+import { MEMORY_DIR, COMPILE_LOCK_PATH, COMPILE_STATE_PATH, PROMPTS_DIR, envInt, envValue, atomBodyMaxChars } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable, LLMOutputInvalid } from "./lib/llm.mjs";
 import {
@@ -541,7 +541,7 @@ async function main() {
         if (metadataWarning && !warnedSchemaMissing.has(targetDataset)) {
           warnedSchemaMissing.add(targetDataset);
           console.error(
-            `compile.mjs: WARNING: metadata schema missing on dataset '${targetDataset}'. Promoted docs are un-filterable until you run dify-setup.sh.`,
+            `compile.mjs: WARNING: metadata schema missing on dataset '${targetDataset}'. Promoted docs are un-filterable until you run ${MEMORY_DIR}/scripts/dify-setup.sh.`,
           );
         }
 

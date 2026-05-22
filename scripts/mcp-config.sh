@@ -9,7 +9,7 @@ load_memory_env
 container_name="${MCP_CONTAINER_NAME:-$(read_env_value MCP_CONTAINER_NAME "$MEMORY_ENV" 2>/dev/null || true)}"
 if [ -z "$container_name" ] || [ "$container_name" = "__MEMORY_SERVER_NAME__" ]; then
   echo "FATAL: MCP_CONTAINER_NAME not set in $MEMORY_ENV (got '$container_name')." >&2
-  echo "  Run bootstrap.sh --slug <project-slug> first." >&2
+  echo "  Run $MEMORY_DIR/bootstrap.sh --slug <project-slug> first." >&2
   exit 1
 fi
 
@@ -45,14 +45,14 @@ print_codex_command() {
 }
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage:
-  mcp-config.sh json
-  mcp-config.sh claude-desktop
-  mcp-config.sh cursor
-  mcp-config.sh codex
-  mcp-config.sh codex-toml
-  mcp-config.sh all
+  $0 json
+  $0 claude-desktop
+  $0 cursor
+  $0 codex
+  $0 codex-toml
+  $0 all
 EOF
 }
 

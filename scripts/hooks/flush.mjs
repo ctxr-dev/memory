@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { PROMPTS_DIR, envInt, envValue, slotEnvKey, atomBodyMaxChars } from "../lib/env.mjs";
+import { MEMORY_DIR, PROMPTS_DIR, envInt, envValue, slotEnvKey, atomBodyMaxChars } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
 import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
@@ -263,7 +263,7 @@ async function main() {
   const legacyId = envValue("DIFY_WRITE_DATASET_ID", "");
   if (!boundId && !legacyId) {
     throw new SkipMemory(
-      `Dify slot '${datasetName}' is not bound (${envKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run dify-setup.sh.`,
+      `Dify slot '${datasetName}' is not bound (${envKey} empty and no DIFY_WRITE_DATASET_ID fallback). Run ${MEMORY_DIR}/scripts/dify-setup.sh.`,
     );
   }
 

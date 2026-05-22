@@ -3,7 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { slugify } from "../lib/slug.mjs";
 import { saveDocument, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
-import { envValue, envInt, slotEnvKey } from "../lib/env.mjs";
+import { MEMORY_DIR, envValue, envInt, slotEnvKey } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 
 const PLANS_SLOT = "plans";
@@ -132,7 +132,7 @@ async function main() {
   const boundId = envValue(envKey, "");
   if (!boundId) {
     throw new SkipPlanCapture(
-      `plans slot not bound; ${envKey} empty, run dify-setup.sh`,
+      `plans slot not bound; ${envKey} empty, run ${MEMORY_DIR}/scripts/dify-setup.sh`,
     );
   }
 
@@ -178,7 +178,7 @@ async function main() {
       // benign if not actually needed.
       const looksLikeStaleEnv = /\bplans?\b.*\b(?:not\s+(?:configured|bound)|unknown|missing)|requireDifyWriteConfig|\b404\b/is.test(msg);
       const hint = looksLikeStaleEnv
-        ? " (try up.sh memory_mcp to refresh the bridge env)"
+        ? ` (try ${MEMORY_DIR}/scripts/up.sh memory_mcp to refresh the bridge env)`
         : "";
       throw new SkipPlanCapture(`bridge unavailable: ${msg}${hint}`);
     }

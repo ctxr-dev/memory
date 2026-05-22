@@ -91,13 +91,13 @@ else
 fi
 
 # --- README ---
-if ! cat > "$settings_dir/README.txt" <<'EOF'
+if ! cat > "$settings_dir/README.txt" <<EOF
 This directory holds your CANONICAL memory boilerplate settings (NOT a
 snapshot): .env (Dify API key + dataset-slot bindings + env knobs),
 .dify-version (the pinned Dify release), and embedding-model.txt (the single
 effective embedding model, informational). It lives alongside the persistent
 Dify data and is SAFE TO KEEP when you remove or re-clone the boilerplate. Edit .env
-here (or run dify-setup.sh); the boilerplate's .env.example is only a
+here (or run $MEMORY_DIR/scripts/dify-setup.sh); the boilerplate's .env.example is only a
 template. Re-created on every successful setup/up run.
 EOF
 then
