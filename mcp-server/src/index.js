@@ -167,7 +167,7 @@ server.registerTool(
       }
       if (selectedDatasetIds.length === 0) {
         throw new Error(
-          "No datasets to search. Bind at least one slot via DIFY_DATASET_<NAME>_ID (run dify-setup.sh) or pass `datasets` explicitly.",
+          "No datasets to search. Bind at least one slot via DIFY_DATASET_<NAME>_ID (run ./.memory/src/scripts/dify-setup.sh) or pass `datasets` explicitly.",
         );
       }
 
@@ -367,7 +367,7 @@ server.registerTool(
   {
     title: "Create a Dify dataset",
     description:
-      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). The dataset is created on your Dify tenant's System Default Embedding Model automatically (no model arg needed). Returns the new dataset id and the install result for each field; the user (or dify-setup.sh) must then bind the id to a name in the canonical settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
+      "Create a new Dify Knowledge dataset (high_quality + hybrid_search by default) AND install the standard per-document metadata schema (atom_type, tags, project_module, language, task_type, error_pattern). The dataset is created on your Dify tenant's System Default Embedding Model automatically (no model arg needed). Returns the new dataset id and the install result for each field; the user (or ./.memory/src/scripts/dify-setup.sh) must then bind the id to a name in the canonical settings/.env by adding a DIFY_DATASET_<NAME>_ID=<id> line.",
     inputSchema: {
       name: z.string().trim().min(1).max(120),
       description: z.string().trim().max(500).optional(),
@@ -380,7 +380,7 @@ server.registerTool(
       const datasetId = created?.id || created?.dataset?.id;
       // Best-effort schema install. Per-field failures are aggregated
       // and returned; they do NOT abort dataset creation since the
-      // user can re-run dify-setup.sh to install missing fields later.
+      // user can re-run ./.memory/src/scripts/dify-setup.sh to install missing fields later.
       const fieldResults = [];
       const fieldErrors = [];
       if (datasetId) {
@@ -399,7 +399,7 @@ server.registerTool(
       // whether ALL six per-doc fields installed cleanly. A caller seeing
       // `ok:true, metadataSchema.complete:false` should treat the dataset
       // as usable but unfilterable until the missing fields are added
-      // (re-run dify-setup.sh, or call create_metadata_field directly).
+      // (re-run ./.memory/src/scripts/dify-setup.sh, or call create_metadata_field directly).
       return jsonToolResponse({
         ok: !!datasetId,
         dataset: created,
@@ -669,7 +669,7 @@ server.registerTool(
       const lessonId = config.datasetMap.get("self_improvement")?.id;
       if (!lessonId) {
         throw new Error(
-          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run dify-setup.sh).",
+          "save_lesson: self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./.memory/src/scripts/dify-setup.sh).",
         );
       }
       const datasetSlot = "self_improvement";
@@ -751,7 +751,7 @@ server.registerTool(
       const lessonSlot = config.datasetMap.get("self_improvement")?.id ? "self_improvement" : null;
       if (!lessonSlot) {
         throw new Error(
-          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run dify-setup.sh).",
+          "self_improvement dataset is not configured. Set DIFY_DATASET_SELF_IMPROVEMENT_ID in the canonical settings/.env (or run ./.memory/src/scripts/dify-setup.sh).",
         );
       }
       const limit = maxResults || 5;

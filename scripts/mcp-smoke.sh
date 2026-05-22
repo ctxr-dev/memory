@@ -105,7 +105,7 @@ if (!config.apiKeyConfigured) {
   fail("DIFY_KNOWLEDGE_API_KEY is not configured in the canonical settings/.env");
 }
 if (!Array.isArray(config.datasetIds) || config.datasetIds.length === 0) {
-  fail("No datasets configured. Run $MEMORY_DIR/scripts/dify-setup.sh to bind dataset slots (every DIFY_DATASET_<NAME>_ID line declares one).");
+  fail("No datasets configured. Run ./.memory/src/scripts/dify-setup.sh to bind dataset slots (every DIFY_DATASET_<NAME>_ID line declares one).");
 }
 const flushSlot = config.flushDataset || "daily";
 const compileSlot = config.compileDataset || "knowledge";
@@ -117,19 +117,19 @@ const compileBound = slots.find((s) => s.name === compileSlot)?.configuredId;
 // bridge will work, but writes will land on the legacy dataset, not the
 // per-slot one the user thinks is wired.
 if (!flushBound && !config.legacyWriteDatasetId) {
-  fail(`Flush slot '${flushSlot}' has no configured id. Run $MEMORY_DIR/scripts/dify-setup.sh.`);
+  fail(`Flush slot '${flushSlot}' has no configured id. Run ./.memory/src/scripts/dify-setup.sh.`);
 }
 if (!compileBound && !config.legacyWriteDatasetId) {
-  fail(`Compile slot '${compileSlot}' has no configured id. Run $MEMORY_DIR/scripts/dify-setup.sh.`);
+  fail(`Compile slot '${compileSlot}' has no configured id. Run ./.memory/src/scripts/dify-setup.sh.`);
 }
 let warnings = 0;
 if (!flushBound && config.legacyWriteDatasetId) {
   warnings += 1;
-  console.error(`MCP smoke WARNING: flush slot '${flushSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run $MEMORY_DIR/scripts/dify-setup.sh to bind the slot.`);
+  console.error(`MCP smoke WARNING: flush slot '${flushSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./.memory/src/scripts/dify-setup.sh to bind the slot.`);
 }
 if (!compileBound && config.legacyWriteDatasetId) {
   warnings += 1;
-  console.error(`MCP smoke WARNING: compile slot '${compileSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run $MEMORY_DIR/scripts/dify-setup.sh to bind the slot.`);
+  console.error(`MCP smoke WARNING: compile slot '${compileSlot}' is unbound; writes fall back to DIFY_WRITE_DATASET_ID=${config.legacyWriteDatasetId}. Run ./.memory/src/scripts/dify-setup.sh to bind the slot.`);
 }
 
 const search = toolText(3);

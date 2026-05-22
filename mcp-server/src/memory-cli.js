@@ -76,7 +76,7 @@ async function searchCmd(config, { query, datasetId, limit, filters, scoreThresh
     ? [resolveDatasetId(config, datasetId) || datasetId]
     : config.datasetIds;
   if (datasets.length === 0) {
-    throw new Error("No dataset configured. Run dify-setup.sh or pass --datasetId.");
+    throw new Error("No dataset configured. Run ./.memory/src/scripts/dify-setup.sh or pass --datasetId.");
   }
   const max = Number.parseInt(limit, 10) || config.maxResults;
   const filterObj = parseJsonFlag(filters, "filters");
@@ -198,7 +198,7 @@ async function listMetadataFieldsCmd(config, { datasetId }) {
 }
 
 // Returns a compact view of the bridge container's effective config so
-// host-side wizards (dify-setup.sh) can detect stale-bridge-env: the host
+// host-side wizards (./.memory/src/scripts/dify-setup.sh) can detect stale-bridge-env: the host
 // .env may have the API key but the running container loaded its env at
 // start time and won't see edits until a restart. apiKeyConfigured = true
 // means the BRIDGE sees a non-empty key — which is what matters for
@@ -223,7 +223,7 @@ async function getConfigCmd(config) {
   };
 }
 
-// Pre-flight for dify-setup.sh: does the Dify tenant have ANY embedding
+// Pre-flight for ./.memory/src/scripts/dify-setup.sh: does the Dify tenant have ANY embedding
 // model usable for `high_quality` + `hybrid_search`? If `data` is empty,
 // every dataset create with that retrieval mode fails with the cryptic
 // "Default model not found for text-embedding". The wizard should hard-
