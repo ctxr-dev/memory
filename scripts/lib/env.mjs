@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const MEMORY_DIR = path.resolve(here, "../..");
-export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "..");
+// The clone lives at <project>/.memory/src, so the project root is two levels
+// up from MEMORY_DIR (past src, then past .memory). Mirrors scripts/lib.sh.
+export const WORKSPACE_DIR = path.resolve(MEMORY_DIR, "../..");
 // Canonical env file lives under the durable, gitignored data dir
 // (./.memory/settings/.env), mirroring scripts/lib.sh. Resolved from an
 // exported MEMORY_DATA_DIR or the default; memory/.env.example is the

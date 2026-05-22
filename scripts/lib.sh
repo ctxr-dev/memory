@@ -12,7 +12,9 @@ set -euo pipefail
 #   3. The HOME-guard check below relies on string equality with $HOME,
 #      which is the resolved (non-symlinked) form on every platform.
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+# The clone lives at <project>/.memory/src, so the project root is TWO levels
+# up from MEMORY_DIR (../.. = past src, then past .memory).
+WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
 DIFY_DIR="$MEMORY_DIR/vendor/dify"
 DIFY_DOCKER_DIR="$DIFY_DIR/docker"
 

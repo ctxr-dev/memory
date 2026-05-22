@@ -8,7 +8,9 @@ set -euo pipefail
 # preserved; new template keys are merged in).
 
 MEMORY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-WORKSPACE_DIR="$(cd "$MEMORY_DIR/.." && pwd -P)"
+# bootstrap.sh sits at the clone root (<project>/.memory/src), so the project
+# root is TWO levels up (../.. = past src, then past .memory).
+WORKSPACE_DIR="$(cd "$MEMORY_DIR/../.." && pwd -P)"
 TEMPLATES_DIR="$MEMORY_DIR/templates"
 
 usage() {
