@@ -319,7 +319,7 @@ list_err="$(printf '%s' "$list_json" | node -e '
 if [ -n "$list_err" ]; then
   echo "FATAL: Dify rejected list-datasets: $list_err" >&2
   echo "  Most common cause: DIFY_KNOWLEDGE_API_KEY is wrong or revoked." >&2
-  echo "  Check $ENV_FILE, then up.sh memory_mcp to refresh the bridge." >&2
+  echo "  Check $ENV_FILE, then $MEMORY_DIR/scripts/up.sh memory_mcp to refresh the bridge." >&2
   exit 1
 fi
 
