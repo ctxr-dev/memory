@@ -60,6 +60,23 @@ test("createDataset (explicit pin) keeps embedding fields even when caller overr
   }, { responseFn: () => jsonResponse({ id: "ds-pinned2" }) });
 });
 
+test("createDataset (explicit pin) deep-merges a PARTIAL weights override (keeps keyword_setting + embedding)", async () => {
+  await withFetchStub(async (calls) => {
+    await createDataset(config, {
+      name: "pinned3",
+      embeddingModel: "text-embedding-3-large",
+      embeddingModelProvider: "langgenius/openai/openai",
+      // caller tweaks ONLY the vector weight; keyword_setting must survive
+      retrievalModel: { weights: { vector_setting: { vector_weight: 0.85 } } },
+    });
+    const w = JSON.parse(calls[0].body).retrieval_model.weights;
+    assert.equal(w.vector_setting.vector_weight, 0.85);
+    assert.equal(w.vector_setting.embedding_model_name, "text-embedding-3-large");
+    assert.equal(w.vector_setting.embedding_provider_name, "langgenius/openai/openai");
+    assert.deepEqual(w.keyword_setting, { keyword_weight: 0.3 }, "keyword_setting default preserved");
+  }, { responseFn: () => jsonResponse({ id: "ds-pinned3" }) });
+});
+
 test("createDataset rejects half-specified embedding args", async () => {
   await assert.rejects(
     () => createDataset(config, { name: "x", embeddingModel: "m" }),

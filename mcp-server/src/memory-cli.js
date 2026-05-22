@@ -256,20 +256,32 @@ async function listEmbeddingModelsCmd(config) {
 // Fall back to the tenant-list guess (clearly labelled "tenant_guess") only
 // when no compile dataset is bound yet. The settings snapshot records this.
 async function getEmbeddingDefaultCmd(config) {
-  // resolveDatasetId is null-safe (returns "" / null, never throws).
+  // resolveDatasetId is null-safe (returns an empty string on failure, never
+  // throws). If a compile dataset IS bound, it is the authoritative answer.
   const datasetId = resolveDatasetId(config, config.compileDatasetName) || "";
   if (datasetId) {
+    // The compile dataset is bound, so DON'T silently fall back to a tenant
+    // guess if the GET fails — that would mask a broken/stale binding and let
+    // the snapshot record a misleading model. Surface the failure instead.
     try {
       const info = await getDatasetInfo(config, { datasetId });
-      const model = info?.embedding_model || "";
-      const provider = info?.embedding_model_provider || "";
-      if (model) {
-        return { provider, model, source: "compile_dataset", datasetId };
-      }
-    } catch {
-      // fall through to the tenant-list guess
+      return {
+        provider: info?.embedding_model_provider || "",
+        model: info?.embedding_model || "",
+        source: "compile_dataset",
+        datasetId,
+      };
+    } catch (err) {
+      return {
+        provider: "",
+        model: "",
+        source: "compile_dataset_unreachable",
+        datasetId,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
+  // No compile dataset bound yet: best-effort tenant guess (clearly labelled).
   const resolved = await getDefaultEmbeddingModel(config);
   return {
     provider: resolved.provider || "",

@@ -299,27 +299,38 @@ export async function createDataset(config, {
   if (finalEmbed && finalEmbedProvider) {
     payload.embedding_model = finalEmbed;
     payload.embedding_model_provider = finalEmbedProvider;
+    const baseWeights = {
+      vector_setting: { vector_weight: 0.7 },
+      keyword_setting: { keyword_weight: 0.3 },
+    };
+    const caller = retrievalModel || {};
+    const callerWeights = caller.weights || {};
+    // Deep-merge weights so a PARTIAL caller override (e.g. just vector_weight)
+    // can't strip the other required sub-keys (keyword_setting / vector_weight),
+    // and apply the embedding_* fields LAST so they always survive — Dify's
+    // hybrid_search validator requires them.
     const rm = {
       search_method: "hybrid_search",
       reranking_enable: false,
       reranking_mode: "weighted_score",
-      weights: {
-        vector_setting: { vector_weight: 0.7 },
-        keyword_setting: { keyword_weight: 0.3 },
-      },
       top_k: 8,
       score_threshold_enabled: false,
       score_threshold: 0,
-      ...(retrievalModel || {}),
-    };
-    // Apply the embedding fields LAST so a caller-supplied `weights` (e.g.
-    // tweaked vector/keyword weights) can't drop the embedding_* fields that
-    // Dify's hybrid_search validator requires.
-    rm.weights = rm.weights || {};
-    rm.weights.vector_setting = {
-      ...(rm.weights.vector_setting || {}),
-      embedding_provider_name: finalEmbedProvider,
-      embedding_model_name: finalEmbed,
+      ...caller,
+      weights: {
+        ...baseWeights,
+        ...callerWeights,
+        vector_setting: {
+          ...baseWeights.vector_setting,
+          ...(callerWeights.vector_setting || {}),
+          embedding_provider_name: finalEmbedProvider,
+          embedding_model_name: finalEmbed,
+        },
+        keyword_setting: {
+          ...baseWeights.keyword_setting,
+          ...(callerWeights.keyword_setting || {}),
+        },
+      },
     };
     payload.retrieval_model = rm;
   } else if (retrievalModel) {
