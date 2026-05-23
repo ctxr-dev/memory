@@ -9,7 +9,7 @@ description: Use the project memory to look up self-improvement lessons before r
 >
 > **Why default to RAG:** local-file memory (Claude Code's `~/.claude/projects/.../memory/*.md`, Cursor's project memory, etc.) is per-client and per-session: invisible to every other agent and to your future self in another session. The RAG memory is shared across every agent on this project, persists in Dify, and is the entire reason the boilerplate exists. Picking local-file memory when RAG is available silently bypasses it and gives the user the impression nothing was actually saved where it counts.
 >
-> **Health probe:** treat the RAG path as healthy if a `save_to_dataset` / `save_lesson` call succeeds. If it errors (bridge container down, no datasets bound, network unreachable), the RAG path is unhealthy.
+> **Health probe (attempt first):** the health check IS the attempt. ALWAYS try the `save_to_dataset` / `save_lesson` call FIRST and treat success as healthy. Do NOT pre-judge the RAG path as unhealthy or skip the attempt out of caution or uncertainty. Only when a call actually ERRORS (bridge container down, no datasets bound, network unreachable) is the RAG path unhealthy, and only then do you fall back.
 >
 > **Decision:**
 >

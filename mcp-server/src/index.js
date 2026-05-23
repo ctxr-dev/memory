@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { INSTRUCTIONS } from "./discipline.js";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -97,10 +98,15 @@ function errorToolResponse(error) {
 // env_file forwards the canonical settings/.env). The literal placeholder is only ever
 // seen if the container was started without the env file — surface that
 // as the tool-name so the misconfig is loud instead of silent.
-const server = new McpServer({
-  name: process.env.MCP_CONTAINER_NAME || "memory-mcp",
-  version: "0.1.0",
-});
+const server = new McpServer(
+  {
+    name: process.env.MCP_CONTAINER_NAME || "memory-mcp",
+    version: "0.1.0",
+  },
+  // `instructions` is returned on initialize, so every MCP client receives the
+  // memory discipline on connect (hookless clients have no SessionStart carrier).
+  { instructions: INSTRUCTIONS, capabilities: {} },
+);
 
 server.registerTool(
   "get_memory_config",
