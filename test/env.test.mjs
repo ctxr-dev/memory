@@ -44,6 +44,11 @@ test("parseEnvValue: surrounding quotes are stripped and a quoted '#' is kept", 
   assert.equal(parseEnvValue("'a#b'"), "a#b");
 });
 
+test("parseEnvValue: a quoted value followed by an inline comment drops both quotes and comment", () => {
+  assert.equal(parseEnvValue('"value" # comment'), "value");
+  assert.equal(parseEnvValue("'a#b'   # note"), "a#b");
+});
+
 test("parseEnvValue: a value that is entirely a comment, or empty, becomes empty", () => {
   assert.equal(parseEnvValue("# only a comment"), "");
   assert.equal(parseEnvValue("   "), "");

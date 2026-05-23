@@ -36,13 +36,17 @@ export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 export function parseEnvValue(raw) {
   let v = String(raw ?? "").trim();
   if (!v) return "";
-  if (v[0] === "#") return "";
-  if (
-    v.length >= 2 &&
-    ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'"))
-  ) {
-    return v.slice(1, -1);
+  // Quoted value: return the literal inside the first matching quote pair and
+  // ignore anything after the closing quote (e.g. a trailing inline comment,
+  // `"value" # note`). A '#' inside the quotes is kept.
+  const q = v[0];
+  if (q === '"' || q === "'") {
+    const end = v.indexOf(q, 1);
+    if (end !== -1) return v.slice(1, end);
+    // Unterminated quote: fall through and treat the value literally.
   }
+  if (v[0] === "#") return "";
+  // Unquoted: a '#' preceded by whitespace starts an inline comment.
   const hash = v.search(/\s#/);
   if (hash !== -1) v = v.slice(0, hash);
   return v.trim();

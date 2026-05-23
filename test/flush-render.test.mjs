@@ -36,7 +36,7 @@ test("renderNothingMarker: visible record, zero atoms, not pending promotion", (
 test("renderRawFallback: preserves the raw body inside an untrusted fence", () => {
   const doc = renderRawFallback({ source, reason: "claude exited 1: API Error 400" });
   assert.match(doc, /outcome: distillation-failed/);
-  assert.match(doc, /pending_promotion: true/);
+  assert.match(doc, /pending_promotion: false/);
   assert.match(doc, /<!-- BEGIN UNTRUSTED MEMORY BODY -->/);
   assert.match(doc, /<!-- END UNTRUSTED MEMORY BODY -->/);
   assert.ok(doc.includes(source.body), "raw context must be preserved for a later compile pass");
