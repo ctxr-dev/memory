@@ -11,6 +11,7 @@ import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
 import { callLLMWithRetry, LLMOutputInvalid } from "../lib/llm.mjs";
 import { writeMemory, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
 import { isReentrant, reentryEnv } from "../lib/reentry.mjs";
+import { acquireLock, installLockReleaseHandlers } from "../lib/lock.mjs";
 
 // flush.mjs has two phases (the deterministic-capture mechanism):
 //
@@ -35,12 +36,13 @@ const MAX_CHARS = envInt("MEMORY_HOOK_MAX_CHARS", 80_000);
 const SESSION_END_MIN_TURNS = envInt("MEMORY_HOOK_SESSION_END_MIN_TURNS", 1);
 const PRECOMPACT_MIN_TURNS = envInt("MEMORY_HOOK_PRECOMPACT_MIN_TURNS", 5);
 
-// Operational state, alongside the compile equivalents at the clone root.
-// .flush.log is covered by the `*.log` gitignore rule; .flush-state.json is
-// listed explicitly. Neither is memory content.
+// Operational state at the clone root (gitignored, not memory content): the
+// .flush.log breadcrumb (covered by `*.log`) and per-session `.flush-<id>.lock`
+// claim files used for atomic dedup via lock.mjs.
 const FLUSH_LOG_PATH = path.join(MEMORY_DIR, ".flush.log");
-const FLUSH_STATE_PATH = path.join(MEMORY_DIR, ".flush-state.json");
-const DEDUP_MS = 60_000;
+// A worker that crashed mid-distill should have its session lock reclaimed
+// after this; comfortably longer than the LLM timeout + bridge write timeout.
+const FLUSH_LOCK_STALE_MS = envInt("MEMORY_FLUSH_LOCK_STALE_MS", 300_000);
 
 function shortId(id) {
   return String(id || "").slice(0, 8);
@@ -332,36 +334,14 @@ function renderRawFallback({ source, reason }) {
   ].join("\n");
 }
 
-function readFlushState() {
-  try {
-    return JSON.parse(fs.readFileSync(FLUSH_STATE_PATH, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function saveFlushState(sessionId, timestamp) {
-  try {
-    fs.writeFileSync(FLUSH_STATE_PATH, JSON.stringify({ session_id: sessionId, timestamp }));
-  } catch {
-    /* best effort */
-  }
-}
-
-// Drop the dedup claim, but only if it is still THIS worker's session
-// (compare-and-delete). The state file is a single global slot; a concurrent
-// worker for a different session may have overwritten it, and clearing it
-// unconditionally would remove their claim and allow a duplicate. Called when a
-// worker that claimed a session persists nothing (bridge down, write error), so
-// a later hook event can retry instead of being suppressed for the window.
-function clearFlushState(sessionId) {
-  try {
-    if (readFlushState().session_id === sessionId) {
-      fs.rmSync(FLUSH_STATE_PATH, { force: true });
-    }
-  } catch {
-    /* best effort */
-  }
+// Per-session lock path. Dedup is keyed by the session, not a single global
+// state file: workers for the SAME session (pre-compact + post-compact, or a
+// session-end right after a compact) must not both distil+write, while workers
+// for DIFFERENT sessions never contend. The session id is sanitised to safe
+// filename characters.
+function flushLockPath(sessionId) {
+  const safe = String(sessionId || "manual").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
+  return path.join(MEMORY_DIR, `.flush-${safe}.lock`);
 }
 
 function cleanupContext(ctxFile) {
@@ -438,18 +418,30 @@ function runHookFront(mode) {
 
 async function runWorker(ctxFile, sessionId, mode) {
   const tag = `worker ${mode} session ${shortId(sessionId)}`;
-  const now = Date.now();
 
-  // Dedup: pre-compact and post-compact (or a quick session-end right after a
-  // compact) can fire within seconds. Skip a second flush for the same session
-  // inside the window so we do not write twins.
-  const state = readFlushState();
-  if (state.session_id === sessionId && now - (state.timestamp || 0) < DEDUP_MS) {
-    logBreadcrumb(`${tag}: dedup skip`);
+  // Atomic dedup: take a per-session lock so that of two workers spawned
+  // back-to-back for the same session (pre-compact + post-compact), exactly one
+  // proceeds and the other skips. lock.mjs uses an atomic openSync('wx') claim
+  // with stale-owner reclaim, which a read-then-write timestamp file could not
+  // guarantee. The lock is held for the whole distil+write and released in
+  // `finally` (and on signals), so a failed worker frees it for a later retry
+  // and a crashed worker's lock is reclaimed after the stale TTL.
+  const lockPath = flushLockPath(sessionId);
+  installLockReleaseHandlers(lockPath);
+  const lock = acquireLock(lockPath, { staleMs: FLUSH_LOCK_STALE_MS, label: "flush" });
+  if (!lock.ok) {
+    logBreadcrumb(`${tag}: dedup skip (session lock held: ${lock.reason})`);
     cleanupContext(ctxFile);
     return;
   }
+  try {
+    await flushSession({ ctxFile, sessionId, mode, tag });
+  } finally {
+    lock.release();
+  }
+}
 
+async function flushSession({ ctxFile, sessionId, mode, tag }) {
   let source;
   try {
     source = JSON.parse(fs.readFileSync(ctxFile, "utf8"));
@@ -483,14 +475,6 @@ async function runWorker(ctxFile, sessionId, mode) {
     return;
   }
 
-  // Claim this session in the dedup state BEFORE the slow distill step, so a
-  // sibling worker (pre-compact + post-compact fire back-to-back, each spawning
-  // its own worker) that starts a beat later reads the claim and skips instead
-  // of producing a duplicate daily doc. Writing only after the write completed
-  // left the whole multi-second distill window open to a duplicate; the gap
-  // between the dedup read above and this claim is sub-millisecond.
-  saveFlushState(sessionId, now);
-
   // Decide WHAT to persist. The distiller never blocks the user (it runs here,
   // in the background) and a failure becomes a raw-context fallback rather than
   // a silent drop.
@@ -518,18 +502,14 @@ async function runWorker(ctxFile, sessionId, mode) {
   }
 
   // Persist. The write is the one step that genuinely cannot proceed if the
-  // bridge is down. On any write failure NOTHING was persisted, so we clear the
-  // dedup claim (the claim only existed to suppress a concurrent sibling, not to
-  // block recovery), letting a later hook event retry once the bridge recovers.
+  // bridge is down. On failure nothing was persisted; the per-session lock is
+  // released in runWorker's finally, so a later hook event can retry.
   const docName = dailyDocName();
   try {
     const result = await writeMemory({ name: docName, text, datasetId: datasetName });
-    // Dedup state was already claimed before the distill step; leave it so a
-    // sibling within the window still skips.
     cleanupContext(ctxFile);
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
   } catch (err) {
-    clearFlushState(sessionId);
     // Delete the staged context on any write failure: nothing was persisted, so
     // there is nothing to recover from it (the source transcript still exists in
     // the client, and a later hook event will re-stage), and retaining redacted
@@ -537,10 +517,10 @@ async function runWorker(ctxFile, sessionId, mode) {
     // .flush.log breadcrumb records the failure for diagnosis.
     cleanupContext(ctxFile);
     if (err instanceof DifyBridgeUnavailable) {
-      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); dedup claim cleared, staged context removed`);
+      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); staged context removed`);
       return;
     }
-    logBreadcrumb(`${tag}: write failed (${err?.message || err}); dedup claim cleared, staged context removed`);
+    logBreadcrumb(`${tag}: write failed (${err?.message || err}); staged context removed`);
   }
 }
 
