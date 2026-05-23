@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR } from "../scripts/lib/env.mjs";
+import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR, parseEnvValue } from "../scripts/lib/env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +22,39 @@ test("ENV_PATH: canonical env resolves under the data dir's settings/, not memor
   assert.ok(ENV_PATH.endsWith(path.join("settings", ".env")), `ENV_PATH should end with settings/.env, got ${ENV_PATH}`);
   assert.equal(ENV_PATH, path.join(MEMORY_DATA_DIR, "settings", ".env"));
   assert.ok(!ENV_PATH.endsWith(path.join("memory", ".env")), "ENV_PATH must not be memory/.env");
+});
+
+test("parseEnvValue: strips an inline comment from an unquoted value", () => {
+  // The exact .env.example shape that made the dataset name unresolvable.
+  assert.equal(parseEnvValue("daily              # flush.mjs writes daily-<ts>.md docs here"), "daily");
+  assert.equal(parseEnvValue("knowledge # absorb_files default target"), "knowledge");
+});
+
+test("parseEnvValue: leaves a value without an inline comment untouched", () => {
+  assert.equal(parseEnvValue("daily"), "daily");
+  assert.equal(parseEnvValue("f8b6586e-eff6-431f-a143-20cda6de92e2"), "f8b6586e-eff6-431f-a143-20cda6de92e2");
+});
+
+test("parseEnvValue: a '#' NOT preceded by whitespace is literal (not a comment)", () => {
+  assert.equal(parseEnvValue("a#b"), "a#b");
+});
+
+test("parseEnvValue: surrounding quotes are stripped and a quoted '#' is kept", () => {
+  assert.equal(parseEnvValue('"a # b"'), "a # b");
+  assert.equal(parseEnvValue("'a#b'"), "a#b");
+  // Unterminated quote (malformed) is returned literally, NOT comment-stripped.
+  assert.equal(parseEnvValue('"foo # bar'), '"foo # bar');
+});
+
+test("parseEnvValue: a quoted value followed by an inline comment drops both quotes and comment", () => {
+  assert.equal(parseEnvValue('"value" # comment'), "value");
+  assert.equal(parseEnvValue("'a#b'   # note"), "a#b");
+});
+
+test("parseEnvValue: a value that is entirely a comment, or empty, becomes empty", () => {
+  assert.equal(parseEnvValue("# only a comment"), "");
+  assert.equal(parseEnvValue("   "), "");
+  assert.equal(parseEnvValue(""), "");
 });
 
 test("slotEnvKey: lowercase slot -> DIFY_DATASET_<UPPER>_ID", () => {

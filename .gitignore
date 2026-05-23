@@ -11,3 +11,5 @@ vendor/dify/
 .compile-state.json
 .compile-state.json.log
 .compile.lock
+.flush-*.lock
+.flush.log
