@@ -14,6 +14,7 @@ import {
   renderNothingMarker,
   renderRawFallback,
   renderDailyDocument,
+  renderErrorMarker,
 } from "../scripts/hooks/flush.mjs";
 
 const source = {
@@ -42,6 +43,15 @@ test("renderRawFallback: preserves the raw body inside an untrusted fence", () =
   assert.match(doc, /distiller_error:.*400/);
   // Body preserved (indented), so a later reader can recover it.
   assert.ok(doc.includes("fix the thing"), "raw context must be preserved");
+});
+
+test("renderErrorMarker: records a visible context-unreadable outcome from argv only", () => {
+  const doc = renderErrorMarker({ sessionId: "sess9999", mode: "session-end", reason: "ENOENT: no such file" });
+  assert.match(doc, /atom_count: 0/);
+  assert.match(doc, /pending_promotion: false/);
+  assert.match(doc, /outcome: context-unreadable/);
+  assert.match(doc, /session_short: sess9999/);
+  assert.match(doc, /could not read its staged context file: ENOENT/);
 });
 
 test("renderRawFallback: indents the body so an injected '### Atom' is not parsed as an atom", () => {

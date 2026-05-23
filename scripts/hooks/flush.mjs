@@ -275,6 +275,19 @@ function renderNothingMarker(source) {
   ].join("\n");
 }
 
+// Recorded when the worker cannot even read its staged context file (it went
+// missing or is corrupt). Surfaces the failure in the store too, not only in
+// the .flush.log breadcrumb, honouring the always-record goal. Synthesised from
+// the argv sessionId/mode since the staged source is what we failed to read.
+function renderErrorMarker({ sessionId, mode, reason }) {
+  const source = { sessionId, cwd: "", hookEvent: mode };
+  return [
+    ...dailyHeader(source, { atomCount: 0, pendingPromotion: false, outcome: "context-unreadable" }),
+    `The flush worker could not read its staged context file: ${String(reason || "").slice(0, 200)}`,
+    "",
+  ].join("\n");
+}
+
 // Recorded when distillation itself failed (provider unavailable, bad output,
 // timeout). The raw (already redacted) context is preserved as a recoverable
 // fallback record so an outage never silently loses the conversation. It
@@ -324,6 +337,17 @@ function readFlushState() {
 function saveFlushState(sessionId, timestamp) {
   try {
     fs.writeFileSync(FLUSH_STATE_PATH, JSON.stringify({ session_id: sessionId, timestamp }));
+  } catch {
+    /* best effort */
+  }
+}
+
+// Drop the dedup claim. Called when a worker that claimed a session ends up
+// persisting nothing (bridge down, write error), so a later hook event can
+// retry instead of being suppressed inside the dedup window.
+function clearFlushState() {
+  try {
+    fs.rmSync(FLUSH_STATE_PATH, { force: true });
   } catch {
     /* best effort */
   }
@@ -417,6 +441,20 @@ async function runWorker(ctxFile, sessionId, mode) {
     source = JSON.parse(fs.readFileSync(ctxFile, "utf8"));
   } catch (err) {
     logBreadcrumb(`${tag}: context unreadable (${err?.message || err})`);
+    // Always record: surface this in the store too (not only the breadcrumb)
+    // when the slot is bound and the bridge is reachable.
+    const ds = flushDatasetName();
+    if (flushSlotBound(ds)) {
+      try {
+        await writeMemory({
+          name: dailyDocName(),
+          text: renderErrorMarker({ sessionId, mode, reason: err?.message || String(err) }),
+          datasetId: ds,
+        });
+      } catch (markerErr) {
+        logBreadcrumb(`${tag}: could not record context-unreadable marker (${markerErr?.message || markerErr})`);
+      }
+    }
     cleanupContext(ctxFile);
     return;
   }
@@ -466,21 +504,25 @@ async function runWorker(ctxFile, sessionId, mode) {
   }
 
   // Persist. The write is the one step that genuinely cannot proceed if the
-  // bridge is down. There is no automatic retry: we leave the staged context
-  // file in place for best-effort MANUAL recovery (note it lives under the OS
-  // temp dir and may be cleaned up) and log loudly instead of exiting silently.
+  // bridge is down. On any write failure NOTHING was persisted, so we clear the
+  // dedup claim (the claim only existed to suppress a concurrent sibling, not to
+  // block recovery), letting a later hook event retry once the bridge recovers.
   const docName = dailyDocName();
   try {
     const result = await writeMemory({ name: docName, text, datasetId: datasetName });
-    // Dedup state was already claimed before the distill step.
+    // Dedup state was already claimed before the distill step; leave it so a
+    // sibling within the window still skips.
     cleanupContext(ctxFile);
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
   } catch (err) {
+    clearFlushState();
     if (err instanceof DifyBridgeUnavailable) {
-      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); staged context left at ${ctxFile} for manual recovery (no auto-retry)`);
+      // Keep the staged context for best-effort manual recovery (it lives under
+      // the OS temp dir and may be cleaned up); no automatic retry queue.
+      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); dedup claim cleared; staged context left at ${ctxFile} for manual recovery`);
       return;
     }
-    logBreadcrumb(`${tag}: write failed (${err?.message || err})`);
+    logBreadcrumb(`${tag}: write failed (${err?.message || err}); dedup claim cleared`);
     cleanupContext(ctxFile);
   }
 }
@@ -531,4 +573,5 @@ export {
   renderDailyDocument,
   renderNothingMarker,
   renderRawFallback,
+  renderErrorMarker,
 };
