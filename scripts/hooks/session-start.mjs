@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { MEMORY_DIR, COMPILE_STATE_PATH, envValue } from "../lib/env.mjs";
+import { isReentrant, reentryEnv } from "../lib/reentry.mjs";
 
 const RECURSION_GUARD = "memory_compile";
 
@@ -22,11 +23,10 @@ function spawnCompileDetached() {
   const compileScript = path.join(MEMORY_DIR, "scripts", "compile.mjs");
   if (!fs.existsSync(compileScript)) return false;
 
-  const env = { ...process.env, CLAUDE_INVOKED_BY: RECURSION_GUARD };
   const child = spawn("node", [compileScript], {
     detached: true,
     stdio: "ignore",
-    env,
+    env: reentryEnv(RECURSION_GUARD),
     cwd: MEMORY_DIR,
   });
   child.unref();
@@ -34,7 +34,9 @@ function spawnCompileDetached() {
 }
 
 function maybeTriggerCompile() {
-  if (process.env.CLAUDE_INVOKED_BY === RECURSION_GUARD) return false;
+  // Value-agnostic guard: any memory-spawned process (compile OR a distiller
+  // tagged memory-distill by llm.mjs) must not re-trigger compile.
+  if (isReentrant()) return false;
   const state = readState();
   if (state.last_attempted_date === todayUtcDate()) return false;
   return spawnCompileDetached();

@@ -26,6 +26,28 @@ export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
 export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
+// Parse one .env value the way dotenv does: trim, honour surrounding single
+// or double quotes (a '#' inside quotes is literal), and otherwise drop an
+// inline "# comment" (a '#' at the start, or preceded by whitespace). Without
+// this, the inline comments shipped in .env.example (e.g.
+// `DIFY_FLUSH_DATASET=daily   # flush.mjs writes ...`) leak into the value, so
+// the dataset name becomes "daily   # ..." and slot resolution (and every
+// other consumer) silently reads a polluted string.
+export function parseEnvValue(raw) {
+  let v = String(raw ?? "").trim();
+  if (!v) return "";
+  if (v[0] === "#") return "";
+  if (
+    v.length >= 2 &&
+    ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'"))
+  ) {
+    return v.slice(1, -1);
+  }
+  const hash = v.search(/\s#/);
+  if (hash !== -1) v = v.slice(0, hash);
+  return v.trim();
+}
+
 export function readEnvFile(file = ENV_PATH) {
   if (!fs.existsSync(file)) return {};
   const out = {};
@@ -34,7 +56,7 @@ export function readEnvFile(file = ENV_PATH) {
     if (!line || line.startsWith("#")) continue;
     const i = line.indexOf("=");
     if (i === -1) continue;
-    out[line.slice(0, i)] = line.slice(i + 1);
+    out[line.slice(0, i).trim()] = parseEnvValue(line.slice(i + 1));
   }
   return out;
 }
