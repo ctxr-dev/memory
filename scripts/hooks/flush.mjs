@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { MEMORY_DIR, PROMPTS_DIR, envInt, envValue, slotEnvKey, atomBodyMaxChars } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
 import { dailyDocName } from "../lib/slug.mjs";
@@ -342,12 +343,17 @@ function saveFlushState(sessionId, timestamp) {
   }
 }
 
-// Drop the dedup claim. Called when a worker that claimed a session ends up
-// persisting nothing (bridge down, write error), so a later hook event can
-// retry instead of being suppressed inside the dedup window.
-function clearFlushState() {
+// Drop the dedup claim, but only if it is still THIS worker's session
+// (compare-and-delete). The state file is a single global slot; a concurrent
+// worker for a different session may have overwritten it, and clearing it
+// unconditionally would remove their claim and allow a duplicate. Called when a
+// worker that claimed a session persists nothing (bridge down, write error), so
+// a later hook event can retry instead of being suppressed for the window.
+function clearFlushState(sessionId) {
   try {
-    fs.rmSync(FLUSH_STATE_PATH, { force: true });
+    if (readFlushState().session_id === sessionId) {
+      fs.rmSync(FLUSH_STATE_PATH, { force: true });
+    }
   } catch {
     /* best effort */
   }
@@ -394,8 +400,11 @@ function runHookFront(mode) {
 
   let ctxFile;
   try {
-    ctxFile = path.join(os.tmpdir(), `memory-flush-${shortId(source.sessionId)}-${Date.now()}.json`);
-    fs.writeFileSync(ctxFile, JSON.stringify(source));
+    // Unpredictable name (mitigates a TOCTOU pre-create on a shared /tmp) and
+    // owner-only mode: the staged context is redacted but can still hold
+    // sensitive project content, so it must not be world-readable.
+    ctxFile = path.join(os.tmpdir(), `memory-flush-${randomUUID()}.json`);
+    fs.writeFileSync(ctxFile, JSON.stringify(source), { mode: 0o600 });
   } catch (err) {
     logBreadcrumb(`hook ${mode}: could not stage context (${err?.message || err})`);
     return;
@@ -515,7 +524,7 @@ async function runWorker(ctxFile, sessionId, mode) {
     cleanupContext(ctxFile);
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
   } catch (err) {
-    clearFlushState();
+    clearFlushState(sessionId);
     if (err instanceof DifyBridgeUnavailable) {
       // Keep the staged context for best-effort manual recovery (it lives under
       // the OS temp dir and may be cleaned up); no automatic retry queue.
