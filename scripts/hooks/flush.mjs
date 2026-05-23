@@ -342,9 +342,12 @@ function flushDatasetName() {
 }
 
 function flushSlotBound(datasetName) {
-  const boundId = envValue(slotEnvKey(datasetName), "");
-  const legacyId = envValue("DIFY_WRITE_DATASET_ID", "");
-  return Boolean(boundId || legacyId);
+  // Require the NAMED slot binding. The worker writes with datasetId set to the
+  // slot name, and the bridge (requireDifyWriteConfig) throws "not configured"
+  // for an unbound name. The legacy DIFY_WRITE_DATASET_ID fallback only applies
+  // when NO name is passed, so it does not make the named flush slot writeable;
+  // treating it as bound here would pass the preflight and then fail the write.
+  return Boolean(envValue(slotEnvKey(datasetName), ""));
 }
 
 // ---- Phase 1: hook front (fast, deterministic, no network) ----

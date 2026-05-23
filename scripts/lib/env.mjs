@@ -26,10 +26,13 @@ export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
 export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
-// Parse one .env value the way dotenv does: trim, honour surrounding single
-// or double quotes (a '#' inside quotes is literal), and otherwise drop an
-// inline "# comment" (a '#' at the start, or preceded by whitespace). Without
-// this, the inline comments shipped in .env.example (e.g.
+// Parse one .env value. Deliberately small (NOT a full dotenv parser): it
+// trims, honours a simple pair of surrounding single or double quotes (the
+// content from the first quote to the next matching quote is taken literally,
+// including a '#'; escaped quotes / backslashes are NOT handled, which is fine
+// for the simple values this project stores), and otherwise drops an inline
+// "# comment" (a '#' at the start, or preceded by whitespace). Without this,
+// the inline comments shipped in .env.example (e.g.
 // `DIFY_FLUSH_DATASET=daily   # flush.mjs writes ...`) leak into the value, so
 // the dataset name becomes "daily   # ..." and slot resolution (and every
 // other consumer) silently reads a polluted string.
