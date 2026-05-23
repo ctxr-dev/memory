@@ -431,6 +431,14 @@ async function runWorker(ctxFile, sessionId, mode) {
     return;
   }
 
+  // Claim this session in the dedup state BEFORE the slow distill step, so a
+  // sibling worker (pre-compact + post-compact fire back-to-back, each spawning
+  // its own worker) that starts a beat later reads the claim and skips instead
+  // of producing a duplicate daily doc. Writing only after the write completed
+  // left the whole multi-second distill window open to a duplicate; the gap
+  // between the dedup read above and this claim is sub-millisecond.
+  saveFlushState(sessionId, now);
+
   // Decide WHAT to persist. The distiller never blocks the user (it runs here,
   // in the background) and a failure becomes a raw-context fallback rather than
   // a silent drop.
@@ -464,7 +472,7 @@ async function runWorker(ctxFile, sessionId, mode) {
   const docName = dailyDocName();
   try {
     const result = await writeMemory({ name: docName, text, datasetId: datasetName });
-    saveFlushState(sessionId, now);
+    // Dedup state was already claimed before the distill step.
     cleanupContext(ctxFile);
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
   } catch (err) {
