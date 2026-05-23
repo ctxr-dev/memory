@@ -42,6 +42,8 @@ test("parseEnvValue: a '#' NOT preceded by whitespace is literal (not a comment)
 test("parseEnvValue: surrounding quotes are stripped and a quoted '#' is kept", () => {
   assert.equal(parseEnvValue('"a # b"'), "a # b");
   assert.equal(parseEnvValue("'a#b'"), "a#b");
+  // Unterminated quote (malformed) is returned literally, NOT comment-stripped.
+  assert.equal(parseEnvValue('"foo # bar'), '"foo # bar');
 });
 
 test("parseEnvValue: a quoted value followed by an inline comment drops both quotes and comment", () => {

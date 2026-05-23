@@ -46,7 +46,9 @@ export function parseEnvValue(raw) {
   if (q === '"' || q === "'") {
     const end = v.indexOf(q, 1);
     if (end !== -1) return v.slice(1, end);
-    // Unterminated quote: fall through and treat the value literally.
+    // Unterminated quote (malformed): return the trimmed value literally rather
+    // than guessing, so a stray '#' inside it is not mistaken for a comment.
+    return v;
   }
   if (v[0] === "#") return "";
   // Unquoted: a '#' preceded by whitespace starts an inline comment.

@@ -146,7 +146,9 @@ function buildSourceMaterial(rawInput, mode) {
     throw new SkipMemory(`no usable transcript content for ${mode}`);
   }
 
-  return { sessionId, cwd, hookEvent, body: sliceForLLM(body), turnCount };
+  // Stamp capture time in the hook front: the worker runs later, so a
+  // render-time timestamp would record persist time, not capture time.
+  return { sessionId, cwd, hookEvent, body: sliceForLLM(body), turnCount, capturedAtMs: Date.now() };
 }
 
 function loadPrompt() {
@@ -226,10 +228,13 @@ function validateAtoms(parsed) {
 }
 
 function dailyHeader(source, { atomCount, pendingPromotion, outcome, suffix = "" }) {
+  // Prefer the hook-front capture time (threaded through the staged source);
+  // fall back to now for synthesised sources (e.g. the context-unreadable marker).
+  const capturedAt = source.capturedAtMs ? new Date(source.capturedAtMs) : new Date();
   return [
     `# Daily flush ${source.hookEvent}${suffix}`,
     "",
-    `- captured_at_utc: ${new Date().toISOString()}`,
+    `- captured_at_utc: ${capturedAt.toISOString()}`,
     `- hook_event: ${source.hookEvent}`,
     `- session_id: ${source.sessionId}`,
     `- session_short: ${shortId(source.sessionId)}`,
@@ -525,14 +530,17 @@ async function runWorker(ctxFile, sessionId, mode) {
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
   } catch (err) {
     clearFlushState(sessionId);
+    // Delete the staged context on any write failure: nothing was persisted, so
+    // there is nothing to recover from it (the source transcript still exists in
+    // the client, and a later hook event will re-stage), and retaining redacted
+    // but potentially sensitive content on disk is an unnecessary risk. The
+    // .flush.log breadcrumb records the failure for diagnosis.
+    cleanupContext(ctxFile);
     if (err instanceof DifyBridgeUnavailable) {
-      // Keep the staged context for best-effort manual recovery (it lives under
-      // the OS temp dir and may be cleaned up); no automatic retry queue.
-      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); dedup claim cleared; staged context left at ${ctxFile} for manual recovery`);
+      logBreadcrumb(`${tag}: BRIDGE UNAVAILABLE, nothing saved (${err.message}); dedup claim cleared, staged context removed`);
       return;
     }
-    logBreadcrumb(`${tag}: write failed (${err?.message || err}); dedup claim cleared`);
-    cleanupContext(ctxFile);
+    logBreadcrumb(`${tag}: write failed (${err?.message || err}); dedup claim cleared, staged context removed`);
   }
 }
 
