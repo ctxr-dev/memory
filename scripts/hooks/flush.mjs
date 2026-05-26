@@ -390,9 +390,11 @@ async function acquireDailyLock(date) {
 // compile.mjs:parseAtomsFromMarkdown keys on `### Atom` lines and ignores
 // the repeated `# Daily flush ...` session headers, so all atoms parse.
 export function mergeDailyText(existing, incoming) {
-  const base = String(existing || "").trim();
-  if (!base) return incoming;
-  return `${base}\n\n${incoming}`;
+  const prior = String(existing || "");
+  if (!prior.trim()) return incoming; // empty/whitespace-only: first block, verbatim
+  // Preserve the prior content as-is (including any leading whitespace); only
+  // trim its trailing whitespace so the blank-line separator is clean.
+  return `${prior.replace(/\s+$/, "")}\n\n${incoming}`;
 }
 
 // Accumulate a session's rendered block into the single per-day daily doc.
@@ -532,11 +534,14 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
     const ds = flushDatasetName();
     if (flushSlotBound(ds)) {
       try {
+        // One timestamp so the lock-key date and the doc name cannot straddle a
+        // UTC-midnight flip (dailyDocName derives its date from the same Date).
+        const now = new Date();
         await appendToDaily({
           datasetName: ds,
-          name: dailyDocName(),
+          name: dailyDocName(now),
           text: renderErrorMarker({ sessionId, mode, reason: err?.message || String(err) }),
-          date: dateUtc(),
+          date: dateUtc(now),
         });
       } catch (markerErr) {
         logBreadcrumb(`${tag}: could not record context-unreadable marker (${markerErr?.message || markerErr})`);
@@ -585,8 +590,11 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
   // Persist. The write is the one step that genuinely cannot proceed if the
   // bridge is down. On failure nothing was persisted; the per-session lock is
   // released in runWorker's finally, so a later hook event can retry.
-  const date = dateUtc();
-  const docName = dailyDocName();
+  // One timestamp so the lock-key date and the doc name cannot straddle a
+  // UTC-midnight flip (dailyDocName derives its date from the same Date).
+  const now = new Date();
+  const date = dateUtc(now);
+  const docName = dailyDocName(now);
   try {
     const result = await appendToDaily({ datasetName, name: docName, text, date });
     cleanupContext(ctxFile);
