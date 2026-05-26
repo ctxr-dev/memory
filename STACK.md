@@ -444,7 +444,7 @@ What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `./.memory/settings/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
 
-Manual flush test (extracts and writes a `daily-<ts>.md` document to Dify if your LLM provider is configured and the bridge is up):
+Manual flush test (extracts and appends to the day's `daily-<YYYY-MM-DD>.md` document in Dify if your LLM provider is configured and the bridge is up):
 
 ```bash
 printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory because flat markdown does not scale."}' |
