@@ -26,7 +26,7 @@ function freshModule(name, body) {
 }
 
 test("a cache-busted re-import observes a changed module", async () => {
-  const m = freshModule("reimport.js", "export const tag = () => 'one';\n");
+  const m = freshModule("reimport.mjs", "export const tag = () => 'one';\n");
   const first = await import(`${m.url}?v=0`);
   assert.equal(first.tag(), "one");
 
@@ -39,7 +39,7 @@ test("a cache-busted re-import observes a changed module", async () => {
 });
 
 test("let-rebinding routes existing call sites to the reloaded module", async () => {
-  const m = freshModule("rebind.js", "export const tag = () => 'A';\n");
+  const m = freshModule("rebind.mjs", "export const tag = () => 'A';\n");
   let tag; // reassigned by loadLib(); a closure (handler) reads it at call time
   let seq = 0;
   const loadLib = async () => {
@@ -60,7 +60,7 @@ test("loadLib-style validation rejects a module missing an expected export", asy
   // Mirrors the bridge guard: stage exports, verify none are undefined, only
   // then commit. A module missing an export must abort the reload, not
   // half-apply undefined bindings.
-  const m = freshModule("partial.js", "export const a = () => 1;\n"); // `b` intentionally absent
+  const m = freshModule("partial.mjs", "export const a = () => 1;\n"); // `b` intentionally absent
   const ns = await import(`${m.url}?v=0`);
   const next = { a: ns.a, b: ns.b };
   let committed = false;
