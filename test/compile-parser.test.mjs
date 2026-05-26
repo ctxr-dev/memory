@@ -281,3 +281,53 @@ test("parseAtomsFromMarkdown: multiple atoms parse independently", () => {
   assert.equal(atoms[0].type, "decision");
   assert.equal(atoms[1].type, "reference");
 });
+
+// Dify's segments read-back collapses the rendered 4-space body indent to a
+// single leading space (verified against live dailies). The parser must still
+// recover the atom + body from that collapsed form, or compile promotes
+// nothing from real Dify-stored dailies.
+test("parseAtomsFromMarkdown: parses Dify-collapsed single-space bodies", () => {
+  const md = [
+    "### Atom · decision · Collapsed",
+    "- type: decision",
+    "- title: Collapsed",
+    "- tags: [a, b]",
+    '- metadata: {"project_module":"x"}',
+    "- body: |",
+    " Line one of the body.", // single leading space, as Dify returns it
+    " Line two of the body.",
+    '- evidence: "ev"',
+  ].join("\n");
+  const atoms = parseAtomsFromMarkdown(md);
+  assert.equal(atoms.length, 1);
+  assert.equal(atoms[0].type, "decision");
+  assert.equal(atoms[0].title, "Collapsed");
+  assert.equal(atoms[0].body, "Line one of the body.\nLine two of the body.");
+  assert.equal(atoms[0].evidence, "ev");
+});
+
+// Dify also strips the leading "###" from the atom heading that begins a
+// segment (the first atom after each session header), keeping it for later
+// atoms in the chunk. The parser must recover atoms with the bare "Atom · "
+// delimiter, or the first atom of every session silently fails to promote.
+test("parseAtomsFromMarkdown: recovers atoms whose '###' Dify stripped", () => {
+  const md = [
+    "Atom · decision · First", // '###' stripped by Dify (chunk-leading heading)
+    "- type: decision",
+    "- title: First",
+    "- tags: [a]",
+    "- body: |",
+    " First body.",
+    "### Atom · reference · Second", // later atom keeps '###'
+    "- type: reference",
+    "- title: Second",
+    "- tags: [b]",
+    "- body: |",
+    " Second body.",
+  ].join("\n");
+  const atoms = parseAtomsFromMarkdown(md);
+  assert.equal(atoms.length, 2);
+  assert.deepEqual(atoms.map((a) => a.title), ["First", "Second"]);
+  assert.equal(atoms[0].body, "First body.");
+  assert.equal(atoms[1].body, "Second body.");
+});
