@@ -9,7 +9,7 @@ import { redact } from "../lib/redact.mjs";
 import { dailyDocName, dateUtc, timestampUtc } from "../lib/slug.mjs";
 import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
 import { callLLMWithRetry, LLMOutputInvalid } from "../lib/llm.mjs";
-import { writeMemory, listDocuments, readDocument, saveDocument, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
+import { writeMemory, findByName, readDocument, saveDocument, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
 import { isReentrant, reentryEnv } from "../lib/reentry.mjs";
 import { acquireLock, installLockReleaseHandlers } from "../lib/lock.mjs";
 
@@ -50,7 +50,13 @@ const FLUSH_LOCK_STALE_MS = envInt("MEMORY_FLUSH_LOCK_STALE_MS", 300_000);
 // short (it runs after distillation, at persist time), so a brief bounded
 // wait suffices; if the lock can't be taken we fall back to a standalone
 // legacy-named doc so atoms are never dropped (compile reads both formats).
-const DAILY_LOCK_STALE_MS = envInt("MEMORY_DAILY_LOCK_STALE_MS", 120_000);
+// Stale-reclaim timeout must comfortably exceed the worst-case critical section
+// so a SLOW-but-live holder is never reclaimed underneath itself. The section
+// runs up to three bridge ops (find + read + save), each bounded by the bridge
+// client's per-call timeout (180s), so the floor is ~3x180s; 600s adds margin.
+// (A contending writer never blocks on this: it waits at most DAILY_LOCK_WAIT_MS
+// then falls back to a standalone doc, so a long stale window is safe.)
+const DAILY_LOCK_STALE_MS = envInt("MEMORY_DAILY_LOCK_STALE_MS", 600_000);
 const DAILY_LOCK_WAIT_MS = envInt("MEMORY_DAILY_LOCK_WAIT_MS", 30_000);
 const DAILY_LOCK_POLL_MS = 500;
 
@@ -403,10 +409,8 @@ async function appendToDaily({ datasetName, name, text, date }) {
     return { name: fallbackName, accumulated: false };
   }
   try {
-    const listed = await listDocuments({ prefix: name.replace(/\.md$/, ""), datasetId: datasetName });
-    const existingDoc = Array.isArray(listed?.documents)
-      ? listed.documents.find((d) => d?.name === name)
-      : null;
+    const found = await findByName({ name, datasetId: datasetName });
+    const existingDoc = found?.document || null;
     let existingText = "";
     if (existingDoc?.id) {
       const r = await readDocument({ documentId: existingDoc.id, datasetId: datasetName });

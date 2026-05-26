@@ -201,6 +201,12 @@ export function readDocument({ documentId, datasetId } = {}) {
   return execCli("read", { documentId, datasetId });
 }
 
+// Direct exact-name lookup (server-side), returning { document } or a null
+// document. Cheaper and tighter than listing by keyword then filtering.
+export function findByName({ name, datasetId } = {}) {
+  return execCli("find-by-name", { name, datasetId });
+}
+
 export function searchMemoryFiltered({ query, datasetId, limit, filters, scoreThreshold } = {}) {
   const flags = { query, datasetId, limit };
   if (filters && typeof filters === "object") flags.filters = JSON.stringify(filters);
