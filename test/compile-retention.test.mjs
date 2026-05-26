@@ -11,13 +11,10 @@ import { classifyDaily, daysBetweenUtc } from "../scripts/compile.mjs";
 const TODAY = "2026-05-25";
 const ACTIVE = 7;
 
-function classify(name, promoted = []) {
-  return classifyDaily({
-    name,
-    todayUtc: TODAY,
-    activeDays: ACTIVE,
-    promotedSet: new Set(promoted),
-  });
+// `promoted` is a map { name: wordCount } (the recorded fingerprint); pass
+// `wordCount` to represent the daily's CURRENT word_count from the listing.
+function classify(name, { promoted = {}, wordCount } = {}) {
+  return classifyDaily({ name, todayUtc: TODAY, activeDays: ACTIVE, promoted, wordCount });
 }
 
 test("daysBetweenUtc: whole-day differences", () => {
@@ -42,8 +39,18 @@ test("yesterday (in window, not promoted) -> promote", () => {
   assert.equal(classify("daily-2026-05-24.md"), "promote");
 });
 
-test("yesterday already promoted -> skip-promoted (kept enabled)", () => {
-  assert.equal(classify("daily-2026-05-24.md", ["daily-2026-05-24.md"]), "skip-promoted");
+test("yesterday already promoted, unchanged word_count -> skip-promoted (kept enabled)", () => {
+  assert.equal(
+    classify("daily-2026-05-24.md", { promoted: { "daily-2026-05-24.md": 10 }, wordCount: 10 }),
+    "skip-promoted",
+  );
+});
+
+test("yesterday already promoted but word_count CHANGED (late append) -> promote again", () => {
+  assert.equal(
+    classify("daily-2026-05-24.md", { promoted: { "daily-2026-05-24.md": 10 }, wordCount: 25 }),
+    "promote",
+  );
 });
 
 test("last in-window day (age == activeDays - 1) -> promote", () => {
@@ -58,18 +65,18 @@ test("reaching window age (age == activeDays) -> retire", () => {
 
 test("MEMORY_DAILY_ACTIVE_DAYS=1 keeps only today; yesterday retires", () => {
   assert.equal(
-    classifyDaily({ name: "daily-2026-05-25.md", todayUtc: TODAY, activeDays: 1, promotedSet: new Set() }),
+    classifyDaily({ name: "daily-2026-05-25.md", todayUtc: TODAY, activeDays: 1, promoted: {} }),
     "skip-today",
   );
   assert.equal(
-    classifyDaily({ name: "daily-2026-05-24.md", todayUtc: TODAY, activeDays: 1, promotedSet: new Set() }),
+    classifyDaily({ name: "daily-2026-05-24.md", todayUtc: TODAY, activeDays: 1, promoted: {} }),
     "retire",
   );
 });
 
 test("aged-out doc retires regardless of promoted state", () => {
   assert.equal(classify("daily-2026-05-01.md"), "retire");
-  assert.equal(classify("daily-2026-05-01.md", ["daily-2026-05-01.md"]), "retire");
+  assert.equal(classify("daily-2026-05-01.md", { promoted: { "daily-2026-05-01.md": 5 }, wordCount: 5 }), "retire");
 });
 
 test("legacy per-event name is classified by its date", () => {

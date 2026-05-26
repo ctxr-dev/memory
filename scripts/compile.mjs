@@ -55,15 +55,22 @@ export function daysBetweenUtc(fromDate, toDate) {
 //   promote       -> complete & within window, not yet promoted; promote, keep enabled
 //   skip-promoted -> complete & within window, already promoted; do nothing
 //   retire        -> at/over the window age; promote-if-needed then disable
-export function classifyDaily({ name, todayUtc, activeDays, promotedSet }) {
+export function classifyDaily({ name, todayUtc, activeDays, promoted, wordCount }) {
   const parsed = parseDailyDocName(name);
   // Unparseable names are left untouched (never auto-disabled): safest default.
   if (!parsed) return "skip-today";
   const ageDays = daysBetweenUtc(parsed.date, todayUtc);
   if (!Number.isFinite(ageDays) || ageDays <= 0) return "skip-today";
   if (ageDays >= activeDays) return "retire";
-  const promoted = promotedSet instanceof Set ? promotedSet : new Set(promotedSet || []);
-  return promoted.has(name) ? "skip-promoted" : "promote";
+  const map = promoted && typeof promoted === "object" && !Array.isArray(promoted) ? promoted : {};
+  if (!Object.prototype.hasOwnProperty.call(map, name)) return "promote";
+  // Re-promote if the daily's content CHANGED since it was promoted: a detached
+  // flush worker can append more atoms to an already-promoted (still-in-window)
+  // day, even across UTC midnight. word_count is the cheap change signal (it
+  // comes free on the listing, no extra read). On re-promote the LLM dedup
+  // skips/updates the already-promoted atoms, so only genuinely new atoms create
+  // knowledge docs. Unchanged days short-circuit here (the common case).
+  return map[name] === (wordCount ?? null) ? "skip-promoted" : "promote";
 }
 
 function defaultState() {
@@ -72,7 +79,7 @@ function defaultState() {
     last_run_iso: "",
     actions: { create: 0, update: 0, skip: 0, error: 0 },
     metadata_retry: {},   // dailyDocId -> attempt count
-    promoted_dailies: [],  // names of dailies already promoted (kept enabled within the active window)
+    promoted_dailies: {},  // { dailyName: wordCount } promoted + kept enabled within the active window; word_count is the change signal for re-promote-on-append
   };
 }
 
@@ -84,7 +91,13 @@ function readState() {
       ...defaultState(),
       ...raw,
       metadata_retry: raw.metadata_retry || {},
-      promoted_dailies: Array.isArray(raw.promoted_dailies) ? raw.promoted_dailies : [],
+      // Map { name: wordCount }. A legacy array (or anything non-object) resets
+      // to {} so in-window days are re-promoted once to capture their fingerprint
+      // (the LLM dedup makes that a safe no-op for already-promoted atoms).
+      promoted_dailies:
+        raw.promoted_dailies && typeof raw.promoted_dailies === "object" && !Array.isArray(raw.promoted_dailies)
+          ? raw.promoted_dailies
+          : {},
     };
   } catch {
     return defaultState();
@@ -499,16 +512,17 @@ async function main() {
   const counts = { create: 0, update: 0, skip: 0, error: 0 };
   let promotedDocs = 0;
 
-  // Active window bookkeeping. promotedSet tracks dailies already promoted
-  // to knowledge that stay ENABLED for the window (so they aren't promoted
-  // again as they accumulate / re-appear in the enabled list). --force
-  // ignores it so an operator can reprocess everything.
+  // Active window bookkeeping. `promoted` maps an already-promoted day's name to
+  // the word_count it had when promoted; the day stays ENABLED for the window
+  // and is NOT re-promoted unless its word_count changes (a late/detached worker
+  // appended more atoms). --force resets it so an operator can reprocess
+  // everything. Mutated in place; persisted via writeState.
   const todayUtc = todayUtcDate();
-  const promotedSet = new Set(FORCE ? [] : (state.promoted_dailies || []));
-  const syncPromoted = () => { state.promoted_dailies = [...promotedSet]; };
+  if (FORCE) state.promoted_dailies = {};
+  const promoted = state.promoted_dailies;
 
   for (const daily of sorted) {
-    const verb = classifyDaily({ name: daily.name, todayUtc, activeDays: ACTIVE_DAYS, promotedSet });
+    const verb = classifyDaily({ name: daily.name, todayUtc, activeDays: ACTIVE_DAYS, promoted, wordCount: daily.wordCount });
 
     // Today's (or future-dated) doc is still accumulating sessions; leave it
     // enabled and untouched until it is a complete day.
@@ -524,7 +538,7 @@ async function main() {
     }
 
     const retire = verb === "retire"; // older than the active window -> disable after this
-    const alreadyPromoted = promotedSet.has(daily.name);
+    const alreadyPromoted = Object.prototype.hasOwnProperty.call(promoted, daily.name);
 
     // Aged out and already promoted: just retire it (no re-read/re-promote).
     if (retire && alreadyPromoted) {
@@ -534,8 +548,7 @@ async function main() {
       if (!DRY_RUN) {
         try {
           await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
-          promotedSet.delete(daily.name);
-          syncPromoted();
+          delete promoted[daily.name];
         } catch (err) {
           counts.error += 1;
           appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
@@ -571,10 +584,11 @@ async function main() {
             appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
           }
         } else {
-          // Within the window: keep enabled but mark promoted so we don't
-          // re-read an empty/marker-only daily on every compile.
-          promotedSet.add(daily.name);
-          syncPromoted();
+          // Within the window: keep enabled but record it (with its current
+          // word_count) so we don't re-read an empty/marker-only daily on every
+          // compile; if atoms are later appended, word_count changes and it is
+          // re-promoted.
+          promoted[daily.name] = daily.wordCount ?? null;
           appendCompileLog({ event: "skip-empty-keep-enabled", document: daily.name });
         }
       }
@@ -711,17 +725,16 @@ async function main() {
         try {
           await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
           appendCompileLog({ event: "retire-after-promote", document: daily.name });
-          promotedSet.delete(daily.name);
-          syncPromoted();
+          delete promoted[daily.name];
         } catch (err) {
           counts.error += 1;
           appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
         }
       } else {
-        // Within the window: keep the raw daily enabled/searchable; record
-        // it as promoted so it is not promoted again while it stays active.
-        promotedSet.add(daily.name);
-        syncPromoted();
+        // Within the window: keep the raw daily enabled/searchable; record it
+        // with its current word_count so it is not promoted again UNLESS a later
+        // worker appends more atoms (which changes word_count -> re-promote).
+        promoted[daily.name] = daily.wordCount ?? null;
         appendCompileLog({ event: "promote-keep-enabled", document: daily.name });
       }
     } else if (!allOk && !DRY_RUN) {
@@ -744,14 +757,12 @@ async function main() {
               attempts,
               reason: `${attempts} consecutive failed attempts; disabling aged-out daily to avoid duplicate-create loop`,
             });
-            promotedSet.delete(daily.name);
-            syncPromoted();
+            delete promoted[daily.name];
           } catch (err) {
             appendCompileLog({ event: "give-up-disable-error", document: daily.name, error: err.message || String(err) });
           }
         } else {
-          promotedSet.add(daily.name);
-          syncPromoted();
+          promoted[daily.name] = daily.wordCount ?? null;
           appendCompileLog({
             event: "give-up-keep-enabled",
             document: daily.name,
