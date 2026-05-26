@@ -4,35 +4,91 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./discipline.js";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  buildDatasetMap,
-  buildMetadataCondition,
-  canonicalFilterKey,
-  createDataset,
-  createDatasetMetadataField,
-  createDocumentByText,
-  deleteDocument,
-  disableDocument,
-  enableDocument,
-  getConfig,
-  listAllDatasets,
-  listAllDocuments,
-  maskSecret,
-  requireDifyWriteConfig,
-  resolveDatasetId,
-  retrieveChunks,
-  upsertDocumentByName,
-} from "./dify.js";
-import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
-import { lessonDocName } from "./slug.js";
-import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
-import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } from "./workspace.js";
-import {
-  findStalePlans,
-  findMissingMetadata,
-  findStaleProjectLore,
-  findDuplicateErrorPatternLessons,
-} from "./audit.js";
+import { fileURLToPath } from "node:url";
+
+// ---- in-process hot reload ----
+// The bridge's logic modules are held in module-scoped `let` bindings that
+// loadLib() reassigns. The tool handlers reference these bindings, so a reload
+// swaps the implementation IN PLACE without restarting this stdio process (the
+// initialize handshake + stdin/stdout pipe stay intact) and without editing the
+// 60+ call sites. With mcp-server/src mounted into the container (compose), a
+// plain `git pull` on the host is picked up live. discipline.js (INSTRUCTIONS)
+// stays a static import: it is sent once at initialize and cannot hot-reload.
+let buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, createDatasetMetadataField,
+  createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
+  listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName;
+let findFiles, defaultGlobs, mergeIgnore, relPathToDocName;
+let lessonDocName;
+let PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
+let WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters;
+let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons;
+
+let reloadSeq = 0;
+async function loadLib() {
+  const v = reloadSeq; // monotonic: busts the ESM cache so a changed file re-evaluates
+  const [dify, glob, slug, schema, workspace, audit] = await Promise.all([
+    import(`./dify.js?v=${v}`),
+    import(`./glob.js?v=${v}`),
+    import(`./slug.js?v=${v}`),
+    import(`./schema.js?v=${v}`),
+    import(`./workspace.js?v=${v}`),
+    import(`./audit.js?v=${v}`),
+  ]);
+  ({ buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, createDatasetMetadataField,
+    createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
+    listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName } = dify);
+  ({ findFiles, defaultGlobs, mergeIgnore, relPathToDocName } = glob);
+  ({ lessonDocName } = slug);
+  ({ PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } = schema);
+  ({ WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } = workspace);
+  ({ findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = audit);
+}
+await loadLib();
+
+// Flat src dir (no nested subdirs), so a non-recursive watch suffices and is
+// cross-platform. Only the reloadable logic modules trigger a reload; a change
+// to index.js or discipline.js needs a restart (logged, not silently ignored).
+const RELOADABLE = new Set(["dify.js", "glob.js", "slug.js", "schema.js", "workspace.js", "audit.js"]);
+const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+function watchForReload() {
+  let timer = null;
+  let lastBase = null;
+  let chain = Promise.resolve(); // serialise reloads so two bursts never overlap
+  const onChange = (_event, filename) => {
+    const base = filename ? path.basename(filename) : null;
+    if (base && !RELOADABLE.has(base)) {
+      process.stderr.write(
+        `[memory-mcp] '${base}' changed; restart required to pick it up (hot-reload covers ${[...RELOADABLE].join("/")})\n`,
+      );
+      return;
+    }
+    lastBase = base;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      chain = chain.then(async () => {
+        try {
+          reloadSeq += 1;
+          await loadLib();
+          // stderr ONLY: stdout carries the JSON-RPC protocol stream.
+          process.stderr.write(
+            lastBase
+              ? `[memory-mcp] hot-reloaded after change to ${lastBase}\n`
+              : "[memory-mcp] hot-reloaded after a file change (filename unavailable; best-effort)\n",
+          );
+        } catch (err) {
+          process.stderr.write(`[memory-mcp] hot-reload failed, keeping previous code: ${err?.message || err}\n`);
+        }
+      });
+    }, 200);
+  };
+  const watchers = [];
+  try {
+    watchers.push(fs.watch(SRC_DIR, onChange));
+  } catch (err) {
+    process.stderr.write(`[memory-mcp] watch failed for ${SRC_DIR}: ${err?.message || err}\n`);
+  }
+  return watchers;
+}
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
@@ -1037,3 +1093,7 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+// Module-level binding keeps the FSWatcher handles reachable for the process
+// lifetime (an unreferenced watcher can be GC'd, stopping hot reload).
+const activeWatchers = watchForReload();
+void activeWatchers;

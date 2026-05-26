@@ -64,6 +64,11 @@ services:
     restart: unless-stopped
     volumes:
       - ${WORKSPACE_DIR:?Set WORKSPACE_DIR via scripts/lib.sh}:/workspace:ro
+      # Mount the host bridge source over the image's baked /app/src (read-only),
+      # so a `git pull` on the host takes effect without an image rebuild: the
+      # in-process hot reload (mcp-server/src/index.js) re-imports changed modules
+      # live, and any new `docker exec node src/index.js` session loads fresh code.
+      - ${MEMORY_DIR:?Set MEMORY_DIR via scripts/up.sh}/mcp-server/src:/app/src:ro
     # env_file forwards every line of the canonical settings/.env into the
     # container, so any DIFY_DATASET_<NAME>_ID line the user adds is
     # auto-propagated. The
