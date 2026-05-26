@@ -117,6 +117,11 @@ function watchForReload() {
   const watchers = [];
   try {
     const w = fs.watch(SRC_DIR, onChange);
+    // unref so the watcher never keeps the process alive on its own. The bridge
+    // runs as `docker exec -i ... node src/index.js`; when the client closes
+    // stdin (session ends) the process must exit, but a referenced FSWatcher
+    // would hold the event loop open and leak a lingering process per session.
+    w.unref();
     // An FSWatcher can emit 'error' asynchronously (inotify limits, transient
     // mount issues). Without a listener that becomes an unhandled 'error' that
     // crashes the process; log it instead so hot reload degrades gracefully.
