@@ -112,7 +112,7 @@ If you cloned the boilerplate during pre-release development (i.e. from a commit
 - New integration smoke `scripts/plan-capture-smoke.sh` exercises the create + metadata + dedupe-delete write path end-to-end against a running bridge. Skips with a clear message when the bridge or `plans` slot is not configured. Designed for opt-in use during install verification (write-path coverage gap that `mcp-smoke.sh` intentionally skips).
 - Flush-determinism fix added `test/reentry.test.mjs` (re-entry guard presence + back-compat), `test/llm-claude-args.test.mjs` (`buildClaudeArgs` no-MCP / no-tools isolation flags + a source lock that both CLI distillers spawn with the re-entry guard env), and `test/flush-render.test.mjs` (the always-record renderers: atoms, the `nothing-durable` marker, and the raw-context fallback fenced as untrusted). Extended `test/env.test.mjs` with `parseEnvValue` cases (inline-comment and quote stripping).
 - Routing-discipline change added `test/discipline.test.mjs` (host vs bridge `INSTRUCTIONS` byte-parity, the attempt-first rule content, and `buildSessionStartContext`). Test suite grew from 391 to 395 tests.
-- Bridge hot reload added `test/hot-reload.test.mjs` (cache-busted re-import observes a changed module; `let`-rebinding routes existing call sites to the reloaded code). Test suite grew from 395 to 397 tests.
+- Bridge hot reload added `test/hot-reload.test.mjs` (cache-busted re-import observes a changed module; `let`-rebinding routes existing call sites to the reloaded code; the load-time guard rejects a module missing an expected export). Test suite grew from 395 to 398 tests.
 
 ---
 

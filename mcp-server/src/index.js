@@ -40,14 +40,39 @@ async function loadLib() {
     import(`./workspace.js?v=${v}`),
     import(`./audit.js?v=${v}`),
   ]);
+  // Stage the new bindings, then validate EVERY expected export is present
+  // before committing them. A successful import that is missing an export (a
+  // rename, or a half-written file caught mid-save) must not half-apply
+  // `undefined` bindings that handlers would then call. On any miss we throw,
+  // and the caller keeps the previous bindings (onChange catches it; at startup
+  // the failure surfaces immediately, which is correct: a broken module should
+  // not boot silently).
+  const next = {
+    buildDatasetMap: dify.buildDatasetMap, buildMetadataCondition: dify.buildMetadataCondition,
+    canonicalFilterKey: dify.canonicalFilterKey, createDataset: dify.createDataset,
+    createDatasetMetadataField: dify.createDatasetMetadataField, createDocumentByText: dify.createDocumentByText,
+    deleteDocument: dify.deleteDocument, disableDocument: dify.disableDocument, enableDocument: dify.enableDocument,
+    getConfig: dify.getConfig, listAllDatasets: dify.listAllDatasets, listAllDocuments: dify.listAllDocuments,
+    maskSecret: dify.maskSecret, requireDifyWriteConfig: dify.requireDifyWriteConfig, resolveDatasetId: dify.resolveDatasetId,
+    retrieveChunks: dify.retrieveChunks, upsertDocumentByName: dify.upsertDocumentByName,
+    findFiles: glob.findFiles, defaultGlobs: glob.defaultGlobs, mergeIgnore: glob.mergeIgnore, relPathToDocName: glob.relPathToDocName,
+    lessonDocName: slug.lessonDocName,
+    PER_DOC_METADATA_FIELDS: schema.PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE: schema.LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES: schema.KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    WORKSPACE_MOUNT: workspace.WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES: workspace.ABSORB_MAX_FILE_BYTES,
+    DEFAULT_PROJECT_MODULE: workspace.DEFAULT_PROJECT_MODULE, computeInjectedFilters: workspace.computeInjectedFilters,
+    findStalePlans: audit.findStalePlans, findMissingMetadata: audit.findMissingMetadata,
+    findStaleProjectLore: audit.findStaleProjectLore, findDuplicateErrorPatternLessons: audit.findDuplicateErrorPatternLessons,
+  };
+  for (const [k, val] of Object.entries(next)) {
+    if (val === undefined) throw new Error(`hot reload aborted: module export '${k}' is missing`);
+  }
   ({ buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, createDatasetMetadataField,
     createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
-    listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName } = dify);
-  ({ findFiles, defaultGlobs, mergeIgnore, relPathToDocName } = glob);
-  ({ lessonDocName } = slug);
-  ({ PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } = schema);
-  ({ WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } = workspace);
-  ({ findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = audit);
+    listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName,
+    findFiles, defaultGlobs, mergeIgnore, relPathToDocName, lessonDocName,
+    PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters,
+    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = next);
 }
 await loadLib();
 
@@ -91,7 +116,12 @@ function watchForReload() {
   };
   const watchers = [];
   try {
-    watchers.push(fs.watch(SRC_DIR, onChange));
+    const w = fs.watch(SRC_DIR, onChange);
+    // An FSWatcher can emit 'error' asynchronously (inotify limits, transient
+    // mount issues). Without a listener that becomes an unhandled 'error' that
+    // crashes the process; log it instead so hot reload degrades gracefully.
+    w.on("error", (err) => process.stderr.write(`[memory-mcp] watcher error (hot reload may stop until restart): ${err?.message || err}\n`));
+    watchers.push(w);
   } catch (err) {
     process.stderr.write(`[memory-mcp] watch failed for ${SRC_DIR}: ${err?.message || err}\n`);
   }
