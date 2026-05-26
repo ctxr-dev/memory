@@ -402,15 +402,17 @@ export function mergeDailyText(existing, incoming) {
 // per-day lock. On lock starvation, falls back to a standalone legacy-named
 // daily doc (daily-<full-timestamp>.md) so atoms are never lost; compile
 // parses that format too.
-async function appendToDaily({ datasetName, name, text, date }) {
+async function appendToDaily({ datasetName, text, now = new Date() }) {
+  // Everything derives from ONE Date so the day-name, lock key, and fallback
+  // can never disagree (no UTC-midnight straddle).
+  const ts = timestampUtc(now); // "YYYY-MM-DD-HHMMSSmmm"
+  const date = dateUtc(now); // "YYYY-MM-DD"
+  const name = dailyDocName(now); // "daily-<date>.md"
   const lock = await acquireDailyLock(date);
   if (!lock) {
-    // Standalone fallback for the SAME UTC day as `date`: keep the intended day
-    // and append a legacy HH MM SS mmm time suffix (parseDailyDocName accepts
-    // daily-<date>-<HHMMSSmmm>.md). Building it from `date` (not a fresh full
-    // timestamp) avoids a day mismatch if the bounded lock wait crossed midnight.
-    const timeSuffix = timestampUtc().slice(11); // "HHMMSSmmm" (dateUtc prefix is 10 chars + dash)
-    const fallbackName = `daily-${date}-${timeSuffix}.md`;
+    // Standalone fallback for the SAME UTC day: <date> + a legacy HHMMSSmmm time
+    // suffix from the same timestamp (parseDailyDocName accepts this form).
+    const fallbackName = `daily-${date}-${ts.slice(11)}.md`;
     await writeMemory({ name: fallbackName, text, datasetId: datasetName });
     logBreadcrumb(`daily lock busy for ${date}; wrote standalone ${fallbackName}`);
     return { name: fallbackName, accumulated: false };
@@ -539,14 +541,9 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
     const ds = flushDatasetName();
     if (flushSlotBound(ds)) {
       try {
-        // One timestamp so the lock-key date and the doc name cannot straddle a
-        // UTC-midnight flip (dailyDocName derives its date from the same Date).
-        const now = new Date();
         await appendToDaily({
           datasetName: ds,
-          name: dailyDocName(now),
           text: renderErrorMarker({ sessionId, mode, reason: err?.message || String(err) }),
-          date: dateUtc(now),
         });
       } catch (markerErr) {
         logBreadcrumb(`${tag}: could not record context-unreadable marker (${markerErr?.message || markerErr})`);
@@ -595,15 +592,10 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
   // Persist. The write is the one step that genuinely cannot proceed if the
   // bridge is down. On failure nothing was persisted; the per-session lock is
   // released in runWorker's finally, so a later hook event can retry.
-  // One timestamp so the lock-key date and the doc name cannot straddle a
-  // UTC-midnight flip (dailyDocName derives its date from the same Date).
-  const now = new Date();
-  const date = dateUtc(now);
-  const docName = dailyDocName(now);
   try {
-    const result = await appendToDaily({ datasetName, name: docName, text, date });
+    const result = await appendToDaily({ datasetName, text });
     cleanupContext(ctxFile);
-    logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${result?.name || docName} (accumulated=${result?.accumulated === true})`);
+    logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${result?.name} (accumulated=${result?.accumulated === true})`);
   } catch (err) {
     // Delete the staged context on any write failure: nothing was persisted, so
     // there is nothing to recover from it (the source transcript still exists in

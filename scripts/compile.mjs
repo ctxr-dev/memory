@@ -117,11 +117,13 @@ export function parseAtomsFromMarkdown(text) {
   // Atom heading delimiter. Rendered as "### Atom · <type> · <title>", but
   // Dify's segment read-back strips the leading "###" from the heading that
   // begins a chunk (in practice the first atom after each session header),
-  // while atoms deeper in the chunk keep it. Accept 0-6 leading "#" so atoms
-  // survive the round-trip either way. The "Atom · " token (with the middot)
-  // anchored at line start is specific enough to avoid matching body text.
-  const ATOM_HEADING = /^#{0,6} ?Atom · /;
-  const blocks = text.split(/\n(?=#{0,6} ?Atom · )/);
+  // while atoms deeper in the chunk keep it. Match EITHER "#{1,6} Atom · "
+  // (hashes + a space) OR a column-0 "Atom · " (the Dify-stripped form) — but
+  // NOT a bare leading-space "Atom · ", because Dify collapses body-line indent
+  // to a single space and a body line literally starting "Atom · " must not be
+  // mistaken for a heading.
+  const ATOM_HEADING = /^(?:#{1,6} )?Atom · /;
+  const blocks = text.split(/\n(?=(?:#{1,6} )?Atom · )/);
   for (const block of blocks) {
     if (!ATOM_HEADING.test(block)) continue;
     const lines = block.split(/\r?\n/);
