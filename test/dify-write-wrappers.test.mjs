@@ -1,8 +1,9 @@
 // Lock the thin-wrapper contracts in scripts/lib/dify-write.mjs.
 //
 // Each wrapper (disableDocument / enableDocument / deleteDocument /
-// listDocuments / readDocument / searchMemoryFiltered / setBuiltInMetadata
-// / updateDocMetadata / listDatasets / saveDocument / writeMemory) is
+// listDocuments / readDocument / findByName / searchMemoryFiltered /
+// setBuiltInMetadata / updateDocMetadata / listDatasets / saveDocument /
+// writeMemory) is
 // a one-liner that hands a specific (subcommand, flags) pair to
 // execCli. A silent rename of either the subcommand name (e.g.
 // "disable" → "disable-document") or a flag key (e.g. "documentId" →
@@ -110,6 +111,7 @@ const WRAPPER_TABLE = [
   { wrapper: "deleteDocument",     subcommand: "delete",  flags: { documentId: "doc1", datasetId: "ds1" } },
   { wrapper: "listDocuments",      subcommand: "list",    flags: { prefix: "plan-", enabled: "true", datasetId: "ds1" } },
   { wrapper: "readDocument",       subcommand: "read",    flags: { documentId: "doc1", datasetId: "ds1" } },
+  { wrapper: "findByName",         subcommand: "find-by-name", flags: { name: "daily-2026-05-26.md", datasetId: "ds1" } },
   { wrapper: "searchMemoryFiltered", subcommand: "search", flags: { query: "q", datasetId: "ds1", limit: "5" } },
   { wrapper: "setBuiltInMetadata", subcommand: "set-built-in-metadata", flags: { datasetId: "ds1", enabled: "true" } },
   { wrapper: "updateDocMetadata",  subcommand: "update-doc-metadata",   flags: { datasetId: "ds1", documentId: "doc1", metadata: '{"a":1}' } },

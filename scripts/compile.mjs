@@ -518,7 +518,10 @@ async function main() {
   // appended more atoms). --force resets it so an operator can reprocess
   // everything. Mutated in place; persisted via writeState.
   const todayUtc = todayUtcDate();
-  if (FORCE) state.promoted_dailies = {};
+  // Reset only on a REAL --force run. Guarding on !DRY_RUN keeps `--dry-run
+  // --force` from persistently wiping promoted_dailies (state is written even in
+  // dry-run; all other promoted_dailies mutations are already !DRY_RUN-gated).
+  if (FORCE && !DRY_RUN) state.promoted_dailies = {};
   const promoted = state.promoted_dailies;
 
   for (const daily of sorted) {

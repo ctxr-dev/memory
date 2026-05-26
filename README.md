@@ -62,7 +62,7 @@ Dumping raw transcripts into a vector store turns a signal-to-noise problem into
 This boilerplate replaces the dump with a two-stage pipeline:
 
 1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default; Codex, Anthropic, or OpenAI also supported) to extract typed atoms (decisions, bug root causes, feedback rules, lore, references, gotchas) and append them to that UTC day's single `daily-<YYYY-MM-DD>.md` document — every session of a day accumulates into one doc.
-2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It promotes each *completed* day (date before today) exactly once, dedup-merging atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip). Promoted dailies stay enabled (searchable) for `MEMORY_DAILY_ACTIVE_DAYS` (default 7) UTC days, then are disabled (kept for audit, hidden from search).
+2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It promotes each *completed* day (date before today), dedup-merging atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip); a promoted day is re-promoted only if its content changes (a late/detached worker appended more atoms, tracked by `word_count`), so accumulation across midnight is never lost. Promoted dailies stay enabled (searchable) for `MEMORY_DAILY_ACTIVE_DAYS` (default 7) UTC days, then are disabled (kept for audit, hidden from search).
 
 Most sessions contribute 0 to 3 small atoms, dedup-merged across history, with metadata that makes retrieval boringly correct.
 
