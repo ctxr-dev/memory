@@ -61,8 +61,8 @@ Dumping raw transcripts into a vector store turns a signal-to-noise problem into
 
 This boilerplate replaces the dump with a two-stage pipeline:
 
-1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default; Codex, Anthropic, or OpenAI also supported) to extract typed atoms (decisions, bug root causes, feedback rules, lore, references, gotchas) into one `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document per flush.
-2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It reads enabled `daily-*.md` docs, dedup-merges atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip), then disables the source dailies (kept for audit, hidden from search).
+1. **Flush.** Lifecycle hooks (`PreCompact`, `PostCompact`, `SessionEnd`) call your local LLM (Claude Code CLI by default; Codex, Anthropic, or OpenAI also supported) to extract typed atoms (decisions, bug root causes, feedback rules, lore, references, gotchas) and append them to that UTC day's single `daily-<YYYY-MM-DD>.md` document — every session of a day accumulates into one doc.
+2. **Compile.** The first `SessionStart` of each new UTC day spawns `compile.mjs` in the background. It promotes each *completed* day (date before today) exactly once, dedup-merging atoms against existing `knowledge-*.md` docs (LLM decides create / update / skip). Promoted dailies stay enabled (searchable) for `MEMORY_DAILY_ACTIVE_DAYS` (default 7) UTC days, then are disabled (kept for audit, hidden from search).
 
 Most sessions contribute 0 to 3 small atoms, dedup-merged across history, with metadata that makes retrieval boringly correct.
 
@@ -337,19 +337,19 @@ flowchart TB
     Flush --> LLM1["LLM extract (typed atoms)"]
   end
 
-  LLM1 --> DailyDataset[("Dify dataset 'daily'<br/>daily-&lt;ts&gt;.md")]
+  LLM1 --> DailyDataset[("Dify dataset 'daily'<br/>daily-&lt;date&gt;.md (one per UTC day)")]
 
   subgraph Promote["② Promote (lazy, once/UTC day)"]
     direction TB
     Start["SessionStart"] --> Compile["scripts/compile.mjs"]
-    Compile --> ReadDaily["Read enabled daily-*.md"]
+    Compile --> ReadDaily["Read completed-day daily-*.md (not today)"]
     ReadDaily --> LLM2["LLM dedup-merge vs 'knowledge'"]
   end
 
   DailyDataset --> ReadDaily
   LLM2 --> KnowledgeDataset[("Dify dataset 'knowledge'<br/>knowledge-&lt;slug&gt;-&lt;ts&gt;.md")]
   LLM2 --> SelfImprovement[("Dify dataset 'self_improvement'<br/>lesson-&lt;slug&gt;-&lt;ts&gt;.md")]
-  Compile --> DisableDaily["Disable processed daily-*.md"]
+  Compile --> DisableDaily["Disable dailies older than MEMORY_DAILY_ACTIVE_DAYS"]
 
   subgraph OnDemand["③ On-demand (any session)"]
     direction TB
@@ -379,12 +379,12 @@ flowchart TB
 - **Named slots**: each `DIFY_DATASET_<NAME>_ID=` line in `./.memory/settings/.env` declares one slot. Defaults: `daily`, `knowledge`, `plans`, `investigations`, `self_improvement`. Add lines to add slots (`DIFY_DATASET_RUNBOOKS_ID=`, ...). No second list to maintain.
 - **Per-atom-type routing**: compile sends `self-improvement-lesson` atoms to `self_improvement` and everything else to `knowledge`. Inline `save_lesson` hits `self_improvement` directly.
 - **Naming inside Dify**:
-  - `daily-<YYYY-MM-DD-HHMMSSmmm>.md`: one per flush event (dedup-merged out by compile).
+  - `daily-<YYYY-MM-DD>.md`: one per UTC day; every session that day appends to it (legacy `daily-<…-HHMMSSmmm>.md` per-event docs are still recognised by compile).
   - `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: one per deduped fact (compile may write a new version with the same `<slug>` and a new `<ts>`, then disable the prior).
   - `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md`: self-improvement lessons in `self_improvement`.
   - `<relative_path_with_underscores>.md`: absorbed user docs (`docs/auth/jwt.md` becomes `docs_auth_jwt.md`).
   - `<your-name>.md`: anything you upsert via `save_to_dataset` (plans, investigations, decisions). Same name overwrites; iterate freely.
-- **Daily docs are kept after promotion** but disabled (audit trail in UI, hidden from `search_memory`).
+- **Daily docs stay enabled (searchable) for `MEMORY_DAILY_ACTIVE_DAYS`** (default 7) UTC days after promotion, then are disabled (audit trail in UI, hidden from `search_memory`). So recent context is findable as both the raw daily and the distilled knowledge during the window.
 - **No local memory files.** Only on-disk state is `./.memory/src/.compile-state.json` (last compile attempt date).
 - **Recursion guard**: `CLAUDE_INVOKED_BY=memory_compile` prevents compile from triggering its own compile.
 - **Failure modes are explicit**: missing LLM provider, missing Dify keys, or stopped MCP container all cause flush/compile/absorb to skip with a stderr message and exit 0. Hooks never block your session and never write fallback files.
@@ -566,7 +566,7 @@ Today the boilerplate ships three skills: `self-improvement.md` (the `recall_les
 | Event | Script | Effect |
 |---|---|---|
 | `SessionStart` | `scripts/hooks/session-start.mjs` | Emits an `additionalContext` reminder; lazily spawns compile in the background once per UTC day. |
-| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; writes ONE new `daily-<ts>.md` doc to the Dify daily dataset. Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
+| `PreCompact` | `scripts/hooks/flush.mjs pre-compact` | Distils the recent transcript into typed atoms; appends them to the day's `daily-<date>.md` doc in the Dify daily dataset (under a per-day lock). Skips if fewer than `MEMORY_HOOK_PRECOMPACT_MIN_TURNS` turns. |
 | `PostCompact` | `scripts/hooks/flush.mjs post-compact` | Distils Claude Code's `compact_summary` into atoms. Min-turns check bypassed for compact_summary input. |
 | `SessionEnd` | `scripts/hooks/flush.mjs session-end` | Same as PreCompact, with `MEMORY_HOOK_SESSION_END_MIN_TURNS` floor. |
 | `PostToolUse` (matcher `ExitPlanMode`) | `scripts/hooks/exit-plan-mode.mjs` | When the user approves a plan, upserts `plan-<slug>.md` into the `plans` dataset slot (deterministic, no LLM, no timestamp; same title overwrites). Body is redacted + wrapped in an untrusted-content fence. Skips cleanly (exit 0) with a stderr message on rejection, empty plan, oversized plan (`MEMORY_HOOK_EXITPLANMODE_MAX_BYTES`, default 256KB), unbound slot, bridge failure, or `MEMORY_HOOK_EXITPLANMODE_DISABLE=true`. See [`plan-capture` skill](templates/skills/plan-capture.md). |
@@ -696,7 +696,7 @@ Everything the boilerplate touches lives under one gitignored directory, so your
 └── settings/                       # canonical .env (API key + dataset bindings) + .dify-version
 
 # Memory is stored entirely in Dify, organised by named slot, named:
-#   daily-<YYYY-MM-DD-HHMMSSmmm>.md             (one per flush event, daily slot)
+#   daily-<YYYY-MM-DD>.md                       (one per UTC day, sessions accumulate, daily slot)
 #   knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md  (one per deduped fact, knowledge slot)
 #   lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md     (one per deduped lesson, self_improvement slot)
 ```

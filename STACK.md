@@ -439,7 +439,7 @@ Current hook events:
 What they do (deeper detail in [README](README.md#how-memory-is-built)):
 
 - `SessionStart`: emits an `additionalContext` reminder. Lazily spawns `scripts/compile.mjs` once per UTC day to dedup-merge any unprocessed daily logs into Dify in the background.
-- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and writes them as ONE `daily-<YYYY-MM-DD-HHMMSSmmm>.md` document to Dify per event. The lazy compile pass later routes each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Source dailies are disabled after their atoms are promoted.
+- `PreCompact` / `PostCompact` / `SessionEnd`: invoke `scripts/hooks/flush.mjs`. Flush calls the configured LLM provider with `prompts/flush.md` to extract typed atoms and appends them to that UTC day's single `daily-<YYYY-MM-DD>.md` document in Dify (every session of the day accumulates into the same doc). The lazy compile pass promotes each *completed* day (date before today) once, routing each atom by `atom_type` to the right slot — `self-improvement-lesson` atoms become `lesson-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` documents in the `self_improvement` dataset; everything else becomes `knowledge-<slug>-<YYYY-MM-DD-HHMMSSmmm>.md` in the `knowledge` dataset. Promoted dailies stay enabled (searchable) for `MEMORY_DAILY_ACTIVE_DAYS` (default 7) UTC days, then are disabled (retired from search).
 - `PostToolUse` (matcher `ExitPlanMode`): when the user approves a plan, `scripts/hooks/exit-plan-mode.mjs` upserts `plan-<slug>.md` into the `plans` slot (deterministic, no LLM, several bridge round-trips: find + create + metadata + re-list + dedupe-delete; 30s timeout). Skips cleanly (exit 0) with a stderr message on rejection, empty plan body, unbound `plans` slot, or bridge failure. See [README → Saving plans](README.md#saving-plans-investigations-or-other-artefacts-manually) and the [`plan-capture` skill](templates/skills/plan-capture.md) for the agent-facing contract.
 
 If the LLM provider is unavailable, the MCP bridge container is down, or `./.memory/settings/.env` is missing required keys, hooks skip cleanly with a stderr message and exit 0. They never block your session and never write fallback files.
@@ -450,13 +450,13 @@ Manual flush test (extracts and writes a `daily-<ts>.md` document to Dify if you
 printf '%s\n' '{"session_id":"manual","hook_event_name":"PostCompact","compact_summary":"Decision: use Dify as __PROJECT_TITLE__ project memory because flat markdown does not scale."}' |
   ./.memory/src/scripts/hooks/post-compact.sh
 # Find the doc in the Dify UI under your write dataset:
-#   daily-2026-05-09-120530123.md
+#   daily-2026-05-09.md   (one per UTC day; sessions accumulate into it)
 ```
 
 Manual compile (after `./.memory/settings/.env` is configured and the stack is up):
 
 ```bash
-node ./.memory/src/scripts/compile.mjs              # promote any enabled daily-* docs
+node ./.memory/src/scripts/compile.mjs              # promote completed days; retire dailies older than MEMORY_DAILY_ACTIVE_DAYS
 node ./.memory/src/scripts/compile.mjs --dry-run    # see decisions without writing to Dify
 node ./.memory/src/scripts/compile.mjs --force      # also re-process disabled daily-* docs
                                                # (recovery pass; useful after a failed run)

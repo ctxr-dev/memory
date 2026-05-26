@@ -47,9 +47,14 @@ test("timestampUtc: deterministic format", () => {
   assert.equal(a, "2026-05-09-130405678");
 });
 
-test("dailyDocName: identical across runtimes", () => {
+test("dailyDocName: identical across runtimes, date-only (one doc per UTC day)", () => {
   assert.equal(host.dailyDocName(FIXED_DATE), container.dailyDocName(FIXED_DATE));
-  assert.equal(host.dailyDocName(FIXED_DATE), "daily-2026-05-09-130405678.md");
+  assert.equal(host.dailyDocName(FIXED_DATE), "daily-2026-05-09.md");
+});
+
+test("dateUtc: identical across runtimes", () => {
+  assert.equal(host.dateUtc(FIXED_DATE), container.dateUtc(FIXED_DATE));
+  assert.equal(host.dateUtc(FIXED_DATE), "2026-05-09");
 });
 
 test("knowledgeDocName: identical across runtimes", () => {
@@ -80,9 +85,15 @@ test("lessonDocName: identical across runtimes", () => {
   );
 });
 
-test("parseDailyDocName: roundtrips dailyDocName output", () => {
+test("parseDailyDocName: roundtrips date-only dailyDocName output", () => {
   const name = host.dailyDocName(FIXED_DATE);
+  assert.equal(name, "daily-2026-05-09.md");
   const parsed = host.parseDailyDocName(name);
+  assert.deepEqual(parsed, { date: "2026-05-09", time: null, ms: null });
+});
+
+test("parseDailyDocName: still parses legacy per-event names", () => {
+  const parsed = host.parseDailyDocName("daily-2026-05-09-130405678.md");
   assert.deepEqual(parsed, { date: "2026-05-09", time: "130405", ms: "678" });
 });
 
@@ -116,7 +127,7 @@ test("parseLessonDocName: roundtrips lessonDocName output", () => {
 test("parse helpers: reject malformed names", () => {
   assert.equal(host.parseDailyDocName(""), null);
   assert.equal(host.parseDailyDocName("daily.md"), null);
-  assert.equal(host.parseDailyDocName("daily-2026-05-09.md"), null);
+  assert.equal(host.parseDailyDocName("daily-2026-5-9.md"), null);
   assert.equal(host.parseKnowledgeDocName("knowledge-no-timestamp.md"), null);
   assert.equal(host.parseLessonDocName("lesson-only-name.md"), null);
   assert.equal(host.parseLessonDocName(null), null);

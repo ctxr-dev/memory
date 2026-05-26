@@ -23,8 +23,13 @@ export function timestampUtc(date = new Date()) {
   );
 }
 
+export function dateUtc(date = new Date()) {
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
 export function dailyDocName(date = new Date()) {
-  return `daily-${timestampUtc(date)}.md`;
+  return `daily-${dateUtc(date)}.md`;
 }
 
 export function knowledgeDocName(slugOrTitle, date = new Date()) {

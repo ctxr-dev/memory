@@ -18,8 +18,13 @@ export function timestampUtc(date = new Date()) {
   );
 }
 
+export function dateUtc(date = new Date()) {
+  const pad = (n, w = 2) => String(n).padStart(w, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
 export function dailyDocName(date = new Date()) {
-  return `daily-${timestampUtc(date)}.md`;
+  return `daily-${dateUtc(date)}.md`;
 }
 
 export function knowledgeDocName(slugOrTitle, date = new Date()) {
@@ -32,7 +37,10 @@ export function lessonDocName(slugOrTitle, date = new Date()) {
   return `lesson-${slug}-${timestampUtc(date)}.md`;
 }
 
-const DAILY_RE = /^daily-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
+// Accepts the per-day name (daily-YYYY-MM-DD.md) and the legacy per-event
+// name (daily-YYYY-MM-DD-HHMMSSmmm.md). The time/ms groups are optional so
+// pre-accumulation dailies still parse during the migration window.
+const DAILY_RE = /^daily-(\d{4})-(\d{2})-(\d{2})(?:-(\d{6})(\d{3}))?\.md$/;
 const KNOWLEDGE_RE = /^knowledge-(.+)-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
 const LESSON_RE = /^lesson-(.+)-(\d{4})-(\d{2})-(\d{2})-(\d{6})(\d{3})\.md$/;
 
@@ -40,7 +48,7 @@ export function parseDailyDocName(name) {
   const m = String(name || "").match(DAILY_RE);
   if (!m) return null;
   const [, y, mo, d, hms, ms] = m;
-  return { date: `${y}-${mo}-${d}`, time: hms, ms };
+  return { date: `${y}-${mo}-${d}`, time: hms ?? null, ms: ms ?? null };
 }
 
 export function parseKnowledgeDocName(name) {

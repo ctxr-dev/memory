@@ -32,6 +32,39 @@ const METADATA_RETRY_LIMIT = envInt("MEMORY_COMPILE_METADATA_RETRY_LIMIT", 3);
 // the knowledge store. Opt in via MEMORY_COMPILE_QUALITY_STRICT=true once
 // the rubric is tuned.
 const QUALITY_STRICT = String(envValue("MEMORY_COMPILE_QUALITY_STRICT", "")).toLowerCase() === "true";
+// How many UTC calendar days of raw daily docs stay enabled (searchable)
+// before compile retires (disables) them. Default one week. A daily older
+// than this is aged out: promoted if not already, then disabled.
+const ACTIVE_DAYS = envInt("MEMORY_DAILY_ACTIVE_DAYS", 7);
+
+// Whole UTC days between two YYYY-MM-DD strings (toDate - fromDate).
+export function daysBetweenUtc(fromDate, toDate) {
+  const a = Date.parse(`${fromDate}T00:00:00Z`);
+  const b = Date.parse(`${toDate}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
+  return Math.round((b - a) / 86_400_000);
+}
+
+// Pure decision for one daily doc, by its date vs today and the active
+// window. The window covers the most recent `activeDays` UTC days counting
+// today, so a daily stays enabled while ageDays < activeDays and is retired
+// once ageDays >= activeDays. With the default 7, today plus the previous 6
+// days stay searchable; a daily that reaches 7 days old is disabled.
+// Returned verbs drive the compile loop:
+//   skip-today    -> today's (or future) doc, still accumulating; leave enabled
+//   promote       -> complete & within window, not yet promoted; promote, keep enabled
+//   skip-promoted -> complete & within window, already promoted; do nothing
+//   retire        -> at/over the window age; promote-if-needed then disable
+export function classifyDaily({ name, todayUtc, activeDays, promotedSet }) {
+  const parsed = parseDailyDocName(name);
+  // Unparseable names are left untouched (never auto-disabled): safest default.
+  if (!parsed) return "skip-today";
+  const ageDays = daysBetweenUtc(parsed.date, todayUtc);
+  if (!Number.isFinite(ageDays) || ageDays <= 0) return "skip-today";
+  if (ageDays >= activeDays) return "retire";
+  const promoted = promotedSet instanceof Set ? promotedSet : new Set(promotedSet || []);
+  return promoted.has(name) ? "skip-promoted" : "promote";
+}
 
 function defaultState() {
   return {
@@ -39,6 +72,7 @@ function defaultState() {
     last_run_iso: "",
     actions: { create: 0, update: 0, skip: 0, error: 0 },
     metadata_retry: {},   // dailyDocId -> attempt count
+    promoted_dailies: [],  // names of dailies already promoted (kept enabled within the active window)
   };
 }
 
@@ -46,7 +80,12 @@ function readState() {
   if (!fs.existsSync(COMPILE_STATE_PATH)) return defaultState();
   try {
     const raw = JSON.parse(fs.readFileSync(COMPILE_STATE_PATH, "utf8"));
-    return { ...defaultState(), ...raw, metadata_retry: raw.metadata_retry || {} };
+    return {
+      ...defaultState(),
+      ...raw,
+      metadata_retry: raw.metadata_retry || {},
+      promoted_dailies: Array.isArray(raw.promoted_dailies) ? raw.promoted_dailies : [],
+    };
   } catch {
     return defaultState();
   }
@@ -75,17 +114,33 @@ function todayUtcDate() {
 
 export function parseAtomsFromMarkdown(text) {
   const atoms = [];
-  const blocks = text.split(/\n(?=### Atom )/);
+  // Atom heading delimiter. Rendered as "### Atom · <type> · <title>", but
+  // Dify's segment read-back strips the leading "###" from the heading that
+  // begins a chunk (in practice the first atom after each session header),
+  // while atoms deeper in the chunk keep it. Accept 0-6 leading "#" so atoms
+  // survive the round-trip either way. The "Atom · " token (with the middot)
+  // anchored at line start is specific enough to avoid matching body text.
+  const ATOM_HEADING = /^#{0,6} ?Atom · /;
+  const blocks = text.split(/\n(?=#{0,6} ?Atom · )/);
   for (const block of blocks) {
-    if (!block.startsWith("### Atom")) continue;
+    if (!ATOM_HEADING.test(block)) continue;
     const lines = block.split(/\r?\n/);
     let type, title, tags = [], body = "", evidence;
     let metadata = {};
     let inBody = false;
     for (const line of lines) {
       if (inBody) {
-        if (line.startsWith("    ")) {
-          body += (body ? "\n" : "") + line.slice(4);
+        // Body lines are rendered with a 4-space indent. Dify's segments
+        // read-back collapses leading whitespace (4 spaces -> 1), so a daily
+        // round-tripped through Dify presents body lines with a single
+        // leading space. Accept any leading-whitespace line as a body
+        // continuation and strip up to 4 leading spaces: slice(4)-equivalent
+        // for pristine text (preserves deeper intentional indentation) and
+        // also recovers the collapsed single-space form. Field lines
+        // (`- type:` ...) and the header stay at column 0, so they still
+        // terminate the body correctly.
+        if (/^[ \t]/.test(line)) {
+          body += (body ? "\n" : "") + line.replace(/^ {1,4}/, "");
           continue;
         }
         if (line.trim() === "" || line.startsWith("- ")) {
@@ -442,7 +497,49 @@ async function main() {
   const counts = { create: 0, update: 0, skip: 0, error: 0 };
   let promotedDocs = 0;
 
+  // Active window bookkeeping. promotedSet tracks dailies already promoted
+  // to knowledge that stay ENABLED for the window (so they aren't promoted
+  // again as they accumulate / re-appear in the enabled list). --force
+  // ignores it so an operator can reprocess everything.
+  const todayUtc = todayUtcDate();
+  const promotedSet = new Set(FORCE ? [] : (state.promoted_dailies || []));
+  const syncPromoted = () => { state.promoted_dailies = [...promotedSet]; };
+
   for (const daily of sorted) {
+    const verb = classifyDaily({ name: daily.name, todayUtc, activeDays: ACTIVE_DAYS, promotedSet });
+
+    // Today's (or future-dated) doc is still accumulating sessions; leave it
+    // enabled and untouched until it is a complete day.
+    if (verb === "skip-today") {
+      appendCompileLog({ event: "skip-today", document: daily.name });
+      continue;
+    }
+    // Already promoted and still inside the active window: keep it enabled
+    // and searchable, do not re-promote (no duplicate knowledge, no LLM cost).
+    if (verb === "skip-promoted") {
+      appendCompileLog({ event: "skip-promoted", document: daily.name });
+      continue;
+    }
+
+    const retire = verb === "retire"; // older than the active window -> disable after this
+    const alreadyPromoted = promotedSet.has(daily.name);
+
+    // Aged out and already promoted: just retire it (no re-read/re-promote).
+    if (retire && alreadyPromoted) {
+      if (!DRY_RUN) {
+        try {
+          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+          appendCompileLog({ event: "retire", document: daily.name });
+          promotedSet.delete(daily.name);
+          syncPromoted();
+        } catch (err) {
+          counts.error += 1;
+          appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+        }
+      }
+      continue;
+    }
+
     let docText;
     try {
       const r = await readDocument({ documentId: daily.id, datasetId: dailyDataset });
@@ -460,12 +557,21 @@ async function main() {
     const atoms = parseAtomsFromMarkdown(docText);
     if (atoms.length === 0) {
       if (!DRY_RUN) {
-        try {
-          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
-          appendCompileLog({ event: "disable-empty", document: daily.name });
-        } catch (err) {
-          counts.error += 1;
-          appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+        if (retire) {
+          // Aged out with nothing to promote: disable it.
+          try {
+            await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+            appendCompileLog({ event: "disable-empty", document: daily.name });
+          } catch (err) {
+            counts.error += 1;
+            appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+          }
+        } else {
+          // Within the window: keep enabled but mark promoted so we don't
+          // re-read an empty/marker-only daily on every compile.
+          promotedSet.add(daily.name);
+          syncPromoted();
+          appendCompileLog({ event: "skip-empty-keep-enabled", document: daily.name });
         }
       }
       continue;
@@ -591,39 +697,65 @@ async function main() {
     }
 
     if (allOk && !DRY_RUN) {
-      try {
-        await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
-        appendCompileLog({ event: "disable", document: daily.name });
-        promotedDocs += 1;
-        // Clear any retry counter for this daily on success.
-        if (state.metadata_retry?.[daily.id]) {
-          delete state.metadata_retry[daily.id];
+      promotedDocs += 1;
+      // Clear any retry counter for this daily on success.
+      if (state.metadata_retry?.[daily.id]) {
+        delete state.metadata_retry[daily.id];
+      }
+      if (retire) {
+        // Aged out: promoted cleanly, now retire from the active window.
+        try {
+          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+          appendCompileLog({ event: "retire-after-promote", document: daily.name });
+          promotedSet.delete(daily.name);
+          syncPromoted();
+        } catch (err) {
+          counts.error += 1;
+          appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
         }
-      } catch (err) {
-        counts.error += 1;
-        appendCompileLog({ event: "disable-error", document: daily.name, error: err.message || String(err) });
+      } else {
+        // Within the window: keep the raw daily enabled/searchable; record
+        // it as promoted so it is not promoted again while it stays active.
+        promotedSet.add(daily.name);
+        syncPromoted();
+        appendCompileLog({ event: "promote-keep-enabled", document: daily.name });
       }
     } else if (!allOk && !DRY_RUN) {
-      // Bounded retry for metadata-write failures: after N attempts, give
-      // up and disable the daily anyway so we don't accumulate duplicate
-      // knowledge-* docs forever. Atom-level errors (LLM, network) get
-      // the same cap because we can't tell them apart at this layer.
+      // Bounded retry for metadata-write failures: after N attempts, stop
+      // retrying so we don't accumulate duplicate knowledge-* docs forever.
+      // Atom-level errors (LLM, network) get the same cap because we can't
+      // tell them apart here. On give-up: an aged-out daily is disabled; a
+      // within-window daily is kept enabled but marked promoted so it is not
+      // retried (it stays searchable as raw until it ages out).
       const attempts = (state.metadata_retry?.[daily.id] || 0) + 1;
       state.metadata_retry = state.metadata_retry || {};
       state.metadata_retry[daily.id] = attempts;
       if (attempts >= METADATA_RETRY_LIMIT) {
-        try {
-          await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+        if (retire) {
+          try {
+            await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
+            appendCompileLog({
+              event: "give-up-disable",
+              document: daily.name,
+              attempts,
+              reason: `${attempts} consecutive failed attempts; disabling aged-out daily to avoid duplicate-create loop`,
+            });
+            promotedSet.delete(daily.name);
+            syncPromoted();
+          } catch (err) {
+            appendCompileLog({ event: "give-up-disable-error", document: daily.name, error: err.message || String(err) });
+          }
+        } else {
+          promotedSet.add(daily.name);
+          syncPromoted();
           appendCompileLog({
-            event: "give-up-disable",
+            event: "give-up-keep-enabled",
             document: daily.name,
             attempts,
-            reason: `${attempts} consecutive failed attempts; disabling daily to avoid duplicate-create loop`,
+            reason: `${attempts} consecutive failed attempts; marking promoted to stop the retry loop (kept enabled, within active window)`,
           });
-          delete state.metadata_retry[daily.id];
-        } catch (err) {
-          appendCompileLog({ event: "give-up-disable-error", document: daily.name, error: err.message || String(err) });
         }
+        delete state.metadata_retry[daily.id];
       } else {
         appendCompileLog({
           event: "kept-enabled",

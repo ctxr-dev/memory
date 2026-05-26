@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { MEMORY_DIR, PROMPTS_DIR, envInt, envValue, slotEnvKey, atomBodyMaxChars } from "../lib/env.mjs";
 import { redact } from "../lib/redact.mjs";
-import { dailyDocName } from "../lib/slug.mjs";
+import { dailyDocName, dateUtc, timestampUtc } from "../lib/slug.mjs";
 import { ATOM_TYPES, TASK_TYPES } from "../lib/datasets.mjs";
 import { callLLMWithRetry, LLMOutputInvalid } from "../lib/llm.mjs";
-import { writeMemory, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
+import { writeMemory, listDocuments, readDocument, saveDocument, DifyBridgeUnavailable } from "../lib/dify-write.mjs";
 import { isReentrant, reentryEnv } from "../lib/reentry.mjs";
 import { acquireLock, installLockReleaseHandlers } from "../lib/lock.mjs";
 
@@ -43,6 +43,16 @@ const FLUSH_LOG_PATH = path.join(MEMORY_DIR, ".flush.log");
 // A worker that crashed mid-distill should have its session lock reclaimed
 // after this; comfortably longer than the LLM timeout + bridge write timeout.
 const FLUSH_LOCK_STALE_MS = envInt("MEMORY_FLUSH_LOCK_STALE_MS", 300_000);
+
+// All sessions on a given UTC day accumulate into one `daily-<date>.md`
+// doc, so the read-append-upsert is a cross-session critical section. A
+// second lock, keyed by date (not session), serialises it. The window is
+// short (it runs after distillation, at persist time), so a brief bounded
+// wait suffices; if the lock can't be taken we fall back to a standalone
+// legacy-named doc so atoms are never dropped (compile reads both formats).
+const DAILY_LOCK_STALE_MS = envInt("MEMORY_DAILY_LOCK_STALE_MS", 120_000);
+const DAILY_LOCK_WAIT_MS = envInt("MEMORY_DAILY_LOCK_WAIT_MS", 30_000);
+const DAILY_LOCK_POLL_MS = 500;
 
 function shortId(id) {
   return String(id || "").slice(0, 8);
@@ -344,6 +354,72 @@ function flushLockPath(sessionId) {
   return path.join(MEMORY_DIR, `.flush-${safe}.lock`);
 }
 
+// Per-day lock path. Keyed by UTC date so every session writing into the
+// same `daily-<date>.md` is serialised, while different days never contend.
+function dailyLockPath(date) {
+  const safe = String(date || "").replace(/[^0-9-]/g, "");
+  return path.join(MEMORY_DIR, `.flush-daily-${safe}.lock`);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Acquire the per-day lock, waiting (bounded) on contention rather than
+// skipping: skipping would drop a session's atoms. Returns the lock handle
+// (with .release) on success, or null if the wait budget is exhausted.
+async function acquireDailyLock(date) {
+  const lockPath = dailyLockPath(date);
+  installLockReleaseHandlers(lockPath);
+  const deadline = Date.now() + DAILY_LOCK_WAIT_MS;
+  for (;;) {
+    const lock = acquireLock(lockPath, { staleMs: DAILY_LOCK_STALE_MS, label: "flush-daily" });
+    if (lock.ok) return lock;
+    if (Date.now() >= deadline) return null;
+    await sleep(DAILY_LOCK_POLL_MS);
+  }
+}
+
+// Pure: concatenate a new session block onto the existing day-doc body.
+// The first write of the day has no existing content, so it is returned
+// verbatim. Subsequent sessions are appended after a blank-line separator;
+// compile.mjs:parseAtomsFromMarkdown keys on `### Atom` lines and ignores
+// the repeated `# Daily flush ...` session headers, so all atoms parse.
+export function mergeDailyText(existing, incoming) {
+  const base = String(existing || "").trim();
+  if (!base) return incoming;
+  return `${base}\n\n${incoming}`;
+}
+
+// Accumulate a session's rendered block into the single per-day daily doc.
+// Reads the current day-doc (if any), appends, and upserts by name under a
+// per-day lock. On lock starvation, falls back to a standalone legacy-named
+// daily doc (daily-<full-timestamp>.md) so atoms are never lost; compile
+// parses that format too.
+async function appendToDaily({ datasetName, name, text, date }) {
+  const lock = await acquireDailyLock(date);
+  if (!lock) {
+    const fallbackName = `daily-${timestampUtc()}.md`;
+    await writeMemory({ name: fallbackName, text, datasetId: datasetName });
+    logBreadcrumb(`daily lock busy for ${date}; wrote standalone ${fallbackName}`);
+    return { name: fallbackName, accumulated: false };
+  }
+  try {
+    const listed = await listDocuments({ prefix: name.replace(/\.md$/, ""), datasetId: datasetName });
+    const existingDoc = Array.isArray(listed?.documents)
+      ? listed.documents.find((d) => d?.name === name)
+      : null;
+    let existingText = "";
+    if (existingDoc?.id) {
+      const r = await readDocument({ documentId: existingDoc.id, datasetId: datasetName });
+      existingText = r?.text || "";
+    }
+    const merged = mergeDailyText(existingText, text);
+    await saveDocument({ name, text: merged, datasetId: datasetName });
+    return { name, accumulated: Boolean(existingDoc) };
+  } finally {
+    lock.release();
+  }
+}
+
 function cleanupContext(ctxFile) {
   try {
     if (ctxFile) fs.rmSync(ctxFile, { force: true });
@@ -452,10 +528,11 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
     const ds = flushDatasetName();
     if (flushSlotBound(ds)) {
       try {
-        await writeMemory({
+        await appendToDaily({
+          datasetName: ds,
           name: dailyDocName(),
           text: renderErrorMarker({ sessionId, mode, reason: err?.message || String(err) }),
-          datasetId: ds,
+          date: dateUtc(),
         });
       } catch (markerErr) {
         logBreadcrumb(`${tag}: could not record context-unreadable marker (${markerErr?.message || markerErr})`);
@@ -504,11 +581,12 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
   // Persist. The write is the one step that genuinely cannot proceed if the
   // bridge is down. On failure nothing was persisted; the per-session lock is
   // released in runWorker's finally, so a later hook event can retry.
+  const date = dateUtc();
   const docName = dailyDocName();
   try {
-    const result = await writeMemory({ name: docName, text, datasetId: datasetName });
+    const result = await appendToDaily({ datasetName, name: docName, text, date });
     cleanupContext(ctxFile);
-    logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${docName} (datasetId=${result?.datasetId || "?"})`);
+    logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${result?.name || docName} (accumulated=${result?.accumulated === true})`);
   } catch (err) {
     // Delete the staged context on any write failure: nothing was persisted, so
     // there is nothing to recover from it (the source transcript still exists in
@@ -571,4 +649,5 @@ export {
   renderNothingMarker,
   renderRawFallback,
   renderErrorMarker,
+  appendToDaily,
 };
