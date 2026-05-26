@@ -23,9 +23,15 @@ let PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
 let WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters;
 let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons;
 
+// Monotonic, not Date.now(): each value busts the ESM cache so a changed file
+// re-evaluates. Node's ESM loader retains prior specifiers, so every reload
+// keeps an extra copy of these small modules in memory. Reloads fire only on an
+// actual file change (a git pull), which is rare for a memory bridge, so the
+// retained-module growth is negligible (and the bridge holds no heavy in-process
+// state such as an embedding model that a restart would otherwise re-initialise).
 let reloadSeq = 0;
 async function loadLib() {
-  const v = reloadSeq; // monotonic: busts the ESM cache so a changed file re-evaluates
+  const v = reloadSeq;
   const [dify, glob, slug, schema, workspace, audit] = await Promise.all([
     import(`./dify.js?v=${v}`),
     import(`./glob.js?v=${v}`),
@@ -48,6 +54,8 @@ await loadLib();
 // Flat src dir (no nested subdirs), so a non-recursive watch suffices and is
 // cross-platform. Only the reloadable logic modules trigger a reload; a change
 // to index.js or discipline.js needs a restart (logged, not silently ignored).
+// When fs.watch does NOT report a filename (platform-dependent), we cannot tell
+// which file changed, so we reload best-effort and say so in the log.
 const RELOADABLE = new Set(["dify.js", "glob.js", "slug.js", "schema.js", "workspace.js", "audit.js"]);
 const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
 function watchForReload() {
