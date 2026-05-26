@@ -528,10 +528,12 @@ async function main() {
 
     // Aged out and already promoted: just retire it (no re-read/re-promote).
     if (retire && alreadyPromoted) {
+      // Log the decision in BOTH modes so `compile.mjs --dry-run` surfaces the
+      // planned retirement (consistent with skip-today / skip-promoted).
+      appendCompileLog({ event: "retire", document: daily.name, dryRun: DRY_RUN });
       if (!DRY_RUN) {
         try {
           await disableDocument({ documentId: daily.id, datasetId: dailyDataset });
-          appendCompileLog({ event: "retire", document: daily.name });
           promotedSet.delete(daily.name);
           syncPromoted();
         } catch (err) {

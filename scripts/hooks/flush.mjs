@@ -593,7 +593,11 @@ async function flushSession({ ctxFile, sessionId, mode, tag }) {
   // bridge is down. On failure nothing was persisted; the per-session lock is
   // released in runWorker's finally, so a later hook event can retry.
   try {
-    const result = await appendToDaily({ datasetName, text });
+    // Use the CAPTURE time (set in the hook front) to choose the UTC day, not
+    // persist time: the worker runs later (and can cross midnight), and this
+    // matches the rendered daily header's captured_at_utc.
+    const capturedAt = source.capturedAtMs ? new Date(source.capturedAtMs) : new Date();
+    const result = await appendToDaily({ datasetName, text, now: capturedAt });
     cleanupContext(ctxFile);
     logBreadcrumb(`${tag}: ${outcome} -> ${datasetName}/${result?.name} (accumulated=${result?.accumulated === true})`);
   } catch (err) {
