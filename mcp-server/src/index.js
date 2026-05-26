@@ -4,35 +4,134 @@ import { z } from "zod";
 import { INSTRUCTIONS } from "./discipline.js";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  buildDatasetMap,
-  buildMetadataCondition,
-  canonicalFilterKey,
-  createDataset,
-  createDatasetMetadataField,
-  createDocumentByText,
-  deleteDocument,
-  disableDocument,
-  enableDocument,
-  getConfig,
-  listAllDatasets,
-  listAllDocuments,
-  maskSecret,
-  requireDifyWriteConfig,
-  resolveDatasetId,
-  retrieveChunks,
-  upsertDocumentByName,
-} from "./dify.js";
-import { findFiles, defaultGlobs, mergeIgnore, relPathToDocName } from "./glob.js";
-import { lessonDocName } from "./slug.js";
-import { PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "./schema.js";
-import { WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters } from "./workspace.js";
-import {
-  findStalePlans,
-  findMissingMetadata,
-  findStaleProjectLore,
-  findDuplicateErrorPatternLessons,
-} from "./audit.js";
+import { fileURLToPath } from "node:url";
+
+// ---- in-process hot reload ----
+// The bridge's logic modules are held in module-scoped `let` bindings that
+// loadLib() reassigns. The tool handlers reference these bindings, so a reload
+// swaps the implementation IN PLACE without restarting this stdio process (the
+// initialize handshake + stdin/stdout pipe stay intact) and without editing the
+// 60+ call sites. With mcp-server/src mounted into the container (compose), a
+// plain `git pull` on the host is picked up live. discipline.js (INSTRUCTIONS)
+// stays a static import: it is sent once at initialize and cannot hot-reload.
+let buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, createDatasetMetadataField,
+  createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
+  listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName;
+let findFiles, defaultGlobs, mergeIgnore, relPathToDocName;
+let lessonDocName;
+let PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
+let WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters;
+let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons;
+
+// Monotonic, not Date.now(): each value busts the ESM cache so a changed file
+// re-evaluates. Node's ESM loader retains prior specifiers, so every reload
+// keeps an extra copy of these small modules in memory. Reloads fire only on an
+// actual file change (a git pull), which is rare for a memory bridge, so the
+// retained-module growth is negligible (and the bridge holds no heavy in-process
+// state such as an embedding model that a restart would otherwise re-initialise).
+let reloadSeq = 0;
+async function loadLib() {
+  const v = reloadSeq;
+  const [dify, glob, slug, schema, workspace, audit] = await Promise.all([
+    import(`./dify.js?v=${v}`),
+    import(`./glob.js?v=${v}`),
+    import(`./slug.js?v=${v}`),
+    import(`./schema.js?v=${v}`),
+    import(`./workspace.js?v=${v}`),
+    import(`./audit.js?v=${v}`),
+  ]);
+  // Stage the new bindings, then validate EVERY expected export is present
+  // before committing them. A successful import that is missing an export (a
+  // rename, or a half-written file caught mid-save) must not half-apply
+  // `undefined` bindings that handlers would then call. On any miss we throw,
+  // and the caller keeps the previous bindings (onChange catches it; at startup
+  // the failure surfaces immediately, which is correct: a broken module should
+  // not boot silently).
+  const next = {
+    buildDatasetMap: dify.buildDatasetMap, buildMetadataCondition: dify.buildMetadataCondition,
+    canonicalFilterKey: dify.canonicalFilterKey, createDataset: dify.createDataset,
+    createDatasetMetadataField: dify.createDatasetMetadataField, createDocumentByText: dify.createDocumentByText,
+    deleteDocument: dify.deleteDocument, disableDocument: dify.disableDocument, enableDocument: dify.enableDocument,
+    getConfig: dify.getConfig, listAllDatasets: dify.listAllDatasets, listAllDocuments: dify.listAllDocuments,
+    maskSecret: dify.maskSecret, requireDifyWriteConfig: dify.requireDifyWriteConfig, resolveDatasetId: dify.resolveDatasetId,
+    retrieveChunks: dify.retrieveChunks, upsertDocumentByName: dify.upsertDocumentByName,
+    findFiles: glob.findFiles, defaultGlobs: glob.defaultGlobs, mergeIgnore: glob.mergeIgnore, relPathToDocName: glob.relPathToDocName,
+    lessonDocName: slug.lessonDocName,
+    PER_DOC_METADATA_FIELDS: schema.PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE: schema.LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES: schema.KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    WORKSPACE_MOUNT: workspace.WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES: workspace.ABSORB_MAX_FILE_BYTES,
+    DEFAULT_PROJECT_MODULE: workspace.DEFAULT_PROJECT_MODULE, computeInjectedFilters: workspace.computeInjectedFilters,
+    findStalePlans: audit.findStalePlans, findMissingMetadata: audit.findMissingMetadata,
+    findStaleProjectLore: audit.findStaleProjectLore, findDuplicateErrorPatternLessons: audit.findDuplicateErrorPatternLessons,
+  };
+  for (const [k, val] of Object.entries(next)) {
+    if (val === undefined) throw new Error(`hot reload aborted: module export '${k}' is missing`);
+  }
+  ({ buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, createDatasetMetadataField,
+    createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
+    listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName,
+    findFiles, defaultGlobs, mergeIgnore, relPathToDocName, lessonDocName,
+    PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters,
+    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = next);
+}
+await loadLib();
+
+// Flat src dir (no nested subdirs), so a non-recursive watch suffices and is
+// cross-platform. Only the reloadable logic modules trigger a reload; a change
+// to index.js or discipline.js needs a restart (logged, not silently ignored).
+// When fs.watch does NOT report a filename (platform-dependent), we cannot tell
+// which file changed, so we reload best-effort and say so in the log.
+const RELOADABLE = new Set(["dify.js", "glob.js", "slug.js", "schema.js", "workspace.js", "audit.js"]);
+const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
+function watchForReload() {
+  let timer = null;
+  let lastBase = null;
+  let chain = Promise.resolve(); // serialise reloads so two bursts never overlap
+  const onChange = (_event, filename) => {
+    const base = filename ? path.basename(filename) : null;
+    if (base && !RELOADABLE.has(base)) {
+      process.stderr.write(
+        `[memory-mcp] '${base}' changed; restart required to pick it up (hot-reload covers ${[...RELOADABLE].join("/")})\n`,
+      );
+      return;
+    }
+    lastBase = base;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      chain = chain.then(async () => {
+        try {
+          reloadSeq += 1;
+          await loadLib();
+          // stderr ONLY: stdout carries the JSON-RPC protocol stream.
+          process.stderr.write(
+            lastBase
+              ? `[memory-mcp] hot-reloaded after change to ${lastBase}\n`
+              : "[memory-mcp] hot-reloaded after a file change (filename unavailable; best-effort)\n",
+          );
+        } catch (err) {
+          process.stderr.write(`[memory-mcp] hot-reload failed, keeping previous code: ${err?.message || err}\n`);
+        }
+      });
+    }, 200);
+  };
+  const watchers = [];
+  try {
+    const w = fs.watch(SRC_DIR, onChange);
+    // unref so the watcher never keeps the process alive on its own. The bridge
+    // runs as `docker exec -i ... node src/index.js`; when the client closes
+    // stdin (session ends) the process must exit, but a referenced FSWatcher
+    // would hold the event loop open and leak a lingering process per session.
+    w.unref();
+    // An FSWatcher can emit 'error' asynchronously (inotify limits, transient
+    // mount issues). Without a listener that becomes an unhandled 'error' that
+    // crashes the process; log it instead so hot reload degrades gracefully.
+    w.on("error", (err) => process.stderr.write(`[memory-mcp] watcher error (hot reload may stop until restart): ${err?.message || err}\n`));
+    watchers.push(w);
+  } catch (err) {
+    process.stderr.write(`[memory-mcp] watch failed for ${SRC_DIR}: ${err?.message || err}\n`);
+  }
+  return watchers;
+}
 
 const FilterSchema = z.object({
   atom_type: z.string().trim().min(1).optional(),
@@ -1037,3 +1136,7 @@ server.registerTool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+// Module-level binding keeps the FSWatcher handles reachable for the process
+// lifetime (an unreferenced watcher can be GC'd, stopping hot reload).
+const activeWatchers = watchForReload();
+void activeWatchers;
