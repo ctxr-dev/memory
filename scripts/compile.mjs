@@ -133,13 +133,13 @@ export function parseAtomsFromMarkdown(text) {
         // Body lines are rendered with a 4-space indent. Dify's segments
         // read-back collapses leading whitespace (4 spaces -> 1), so a daily
         // round-tripped through Dify presents body lines with a single
-        // leading space. Accept any leading-whitespace line as a body
-        // continuation and strip up to 4 leading spaces: slice(4)-equivalent
-        // for pristine text (preserves deeper intentional indentation) and
-        // also recovers the collapsed single-space form. Field lines
-        // (`- type:` ...) and the header stay at column 0, so they still
-        // terminate the body correctly.
-        if (/^[ \t]/.test(line)) {
+        // leading SPACE. Accept a leading-space line as a body continuation and
+        // strip up to 4 leading spaces: slice(4)-equivalent for pristine text
+        // (preserves deeper intentional indentation) and also recovers the
+        // collapsed single-space form. Detection and stripping are both
+        // space-only (the renderer never emits tabs); field lines (`- type:`)
+        // and the header stay at column 0, so they still terminate the body.
+        if (/^ /.test(line)) {
           body += (body ? "\n" : "") + line.replace(/^ {1,4}/, "");
           continue;
         }

@@ -405,7 +405,12 @@ export function mergeDailyText(existing, incoming) {
 async function appendToDaily({ datasetName, name, text, date }) {
   const lock = await acquireDailyLock(date);
   if (!lock) {
-    const fallbackName = `daily-${timestampUtc()}.md`;
+    // Standalone fallback for the SAME UTC day as `date`: keep the intended day
+    // and append a legacy HH MM SS mmm time suffix (parseDailyDocName accepts
+    // daily-<date>-<HHMMSSmmm>.md). Building it from `date` (not a fresh full
+    // timestamp) avoids a day mismatch if the bounded lock wait crossed midnight.
+    const timeSuffix = timestampUtc().slice(11); // "HHMMSSmmm" (dateUtc prefix is 10 chars + dash)
+    const fallbackName = `daily-${date}-${timeSuffix}.md`;
     await writeMemory({ name: fallbackName, text, datasetId: datasetName });
     logBreadcrumb(`daily lock busy for ${date}; wrote standalone ${fallbackName}`);
     return { name: fallbackName, accumulated: false };
