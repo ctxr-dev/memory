@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/session-start.sh",
+            "command": "bash -c ': ctxr-memory-hook-v1; DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; HOOK=\"$DIR/.memory/src/scripts/hooks/session-start.sh\"; [ -x \"$HOOK\" ] && exec \"$HOOK\" || { mkdir -p \"$DIR/.memory/src\" 2>/dev/null; printf \"%s hook-launcher: missing %s (CLAUDE_PROJECT_DIR=%s)\\n\" \"$(date -u +%FT%T)\" \"$HOOK\" \"${CLAUDE_PROJECT_DIR:-<unset>}\" >>\"$DIR/.memory/src/.hook-launcher.log\" 2>/dev/null; exit 0; }'",
             "timeout": 15
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/pre-compact.sh",
+            "command": "bash -c ': ctxr-memory-hook-v1; DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; HOOK=\"$DIR/.memory/src/scripts/hooks/pre-compact.sh\"; [ -x \"$HOOK\" ] && exec \"$HOOK\" || { mkdir -p \"$DIR/.memory/src\" 2>/dev/null; printf \"%s hook-launcher: missing %s (CLAUDE_PROJECT_DIR=%s)\\n\" \"$(date -u +%FT%T)\" \"$HOOK\" \"${CLAUDE_PROJECT_DIR:-<unset>}\" >>\"$DIR/.memory/src/.hook-launcher.log\" 2>/dev/null; exit 0; }'",
             "timeout": 130
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/post-compact.sh",
+            "command": "bash -c ': ctxr-memory-hook-v1; DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; HOOK=\"$DIR/.memory/src/scripts/hooks/post-compact.sh\"; [ -x \"$HOOK\" ] && exec \"$HOOK\" || { mkdir -p \"$DIR/.memory/src\" 2>/dev/null; printf \"%s hook-launcher: missing %s (CLAUDE_PROJECT_DIR=%s)\\n\" \"$(date -u +%FT%T)\" \"$HOOK\" \"${CLAUDE_PROJECT_DIR:-<unset>}\" >>\"$DIR/.memory/src/.hook-launcher.log\" 2>/dev/null; exit 0; }'",
             "timeout": 130
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/session-end.sh",
+            "command": "bash -c ': ctxr-memory-hook-v1; DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; HOOK=\"$DIR/.memory/src/scripts/hooks/session-end.sh\"; [ -x \"$HOOK\" ] && exec \"$HOOK\" || { mkdir -p \"$DIR/.memory/src\" 2>/dev/null; printf \"%s hook-launcher: missing %s (CLAUDE_PROJECT_DIR=%s)\\n\" \"$(date -u +%FT%T)\" \"$HOOK\" \"${CLAUDE_PROJECT_DIR:-<unset>}\" >>\"$DIR/.memory/src/.hook-launcher.log\" 2>/dev/null; exit 0; }'",
             "timeout": 130
           }
         ]
@@ -54,7 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/exit-plan-mode.sh",
+            "command": "bash -c ': ctxr-memory-hook-v1; DIR=\"${CLAUDE_PROJECT_DIR:-$(pwd)}\"; HOOK=\"$DIR/.memory/src/scripts/hooks/exit-plan-mode.sh\"; [ -x \"$HOOK\" ] && exec \"$HOOK\" || { mkdir -p \"$DIR/.memory/src\" 2>/dev/null; printf \"%s hook-launcher: missing %s (CLAUDE_PROJECT_DIR=%s)\\n\" \"$(date -u +%FT%T)\" \"$HOOK\" \"${CLAUDE_PROJECT_DIR:-<unset>}\" >>\"$DIR/.memory/src/.hook-launcher.log\" 2>/dev/null; exit 0; }'",
             "timeout": 30
           }
         ]

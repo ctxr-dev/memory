@@ -36,36 +36,40 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Stable identity markers for inner hook commands we own. Every command
-// we generate from templates/{claude/settings,agents/hooks}.json has the
-// literal signature
-//   "$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/
-// after JSON-decoding (the templates ship the escaped form
-// `\"$CLAUDE_PROJECT_DIR\"/.memory/src/scripts/hooks/`). This signature is
-// distinctive: it bundles a Claude-Code-specific env var, the closing
-// quote pattern from our template renderer, AND the install path. A user
-// writing their own hook is overwhelmingly unlikely to reproduce this
-// exact byte sequence, so a substring match is sound.
+// Stable identity markers for inner hook commands we own. We match an
+// ARRAY of signatures across THREE template generations so a re-bootstrap
+// on any older install correctly strips the stale entries:
 //
-// We match an ARRAY of signatures: the current `.memory/src/...` form AND
-// the pre-0.4.0 `memory/...` form. The legacy entry lets a re-bootstrap
-// after the documented `mv ./memory ./.memory/src` migration STRIP the
-// stale hook entries instead of leaving duplicates next to the freshly
-// rendered ones. The two strings do not overlap as substrings (one has
-// `/.memory/src/scripts`, the other `/memory/scripts`), so an array match
+//   1. `: ctxr-memory-hook-v1` — current (the no-op `:` builtin with a
+//      sentinel arg, embedded at the start of every `bash -c '...'`
+//      launcher we ship). Distinctive enough that user paths cannot
+//      false-match. Introduced to support the defensive launcher that
+//      resolves `$CLAUDE_PROJECT_DIR` with a `$(pwd)` fallback; the
+//      previous form silently no-op'd when the env var wasn't propagated
+//      to the hook subprocess (the actual real-world failure mode that
+//      kept approved plans out of Dify for months).
+//   2. `"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/` — pre-v1 form
+//      from the 0.4.x line. Re-bootstrap strips it cleanly.
+//   3. `"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/` — legacy pre-0.4.0;
+//      the documented `mv ./memory ./.memory/src` migration left these
+//      orphaned, this entry strips them.
+//
+// None of the three strings overlap as substrings, so an array match
 // never double-counts an entry.
 //
 // Rejected alternative: anchoring on `scripts/hooks/` with a leading `/`
 // or `"` boundary still false-positives on user paths like
-// `./tools/memory/scripts/hooks/custom.sh`. The full env-var signature
+// `./tools/memory/scripts/hooks/custom.sh`. The full sentinel signature
 // avoids this trap.
 //
-// To change the install root, update both these constants AND the
-// templates. Tests in test/merge-config.test.mjs lock the contract
-// (positive: our commands match; negative: nested user paths do not).
+// To change the install root or the sentinel, update both these
+// constants AND the templates. Tests in test/merge-config.test.mjs lock
+// the contract (positive: our commands match; negative: nested user
+// paths do not).
 const HOOK_OWNERSHIP_SIGNATURES = [
-  '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/',
-  '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/', // legacy pre-0.4.0; strip on upgrade
+  ': ctxr-memory-hook-v1',                              // current
+  '"$CLAUDE_PROJECT_DIR"/.memory/src/scripts/hooks/',   // pre-v1, 0.4.x
+  '"$CLAUDE_PROJECT_DIR"/memory/scripts/hooks/',        // legacy pre-0.4.0
 ];
 
 // Predicate: is this individual inner hook one of OURS? Operates on a
