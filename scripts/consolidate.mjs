@@ -802,7 +802,13 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     passes: Object.fromEntries(report),
     totals,
   };
-  if (!dryRun) {
+  // Advance the --if-due throttle (last_run_utc) ONLY on a clean run. If any pass
+  // or slot list errored, leave the prior state untouched so the NEXT scheduled
+  // --if-due run RETRIES instead of skipping the whole cadence after a partial
+  // failure: self-heal, mirroring how a failed cron attempt stays unresolved in
+  // the attempts log. A persistent error keeps retrying hourly (each attempt is
+  // logged for cron_health) rather than going silent for a full cadence.
+  if (!dryRun && totals.errors === 0) {
     D.writeState({ last_run_utc: toIso(now), durationMs: Date.now() - startMs, dryRun: false, totals, passes: Object.fromEntries(report) });
   }
   return result;

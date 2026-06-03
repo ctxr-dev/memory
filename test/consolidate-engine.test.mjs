@@ -388,6 +388,29 @@ test("staleness-flag: stamps stale=true on an old never-recalled lesson", async 
   assert.equal(res.passes["staleness-flag"].touched, 1);
 });
 
+test("a run with errors does NOT advance the --if-due throttle (self-heal)", async () => {
+  // Regression (Copilot): writing state after a partial failure let the next
+  // --if-due run skip the whole cadence, masking the failure and blocking retry.
+  const slotsDocs = { knowledge: [{ documentId: "a", name: "a.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "x" }] };
+  // failList makes the slot list throw -> slotErrors -> totals.errors > 0.
+  const { deps } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}), failList: true });
+  let stateWritten = false;
+  deps.writeState = () => { stateWritten = true; };
+  const res = await consolidateMemory({ now: NOW, deps });
+  assert.equal(res.totals.errors > 0, true, "the failed slot list is counted as an error");
+  assert.equal(stateWritten, false, "no state write on an errored run, so --if-due retries next tick");
+});
+
+test("a clean run DOES advance the throttle (writes state)", async () => {
+  const slotsDocs = { knowledge: [{ documentId: "a", name: "a.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "x" }] };
+  const { deps } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  let written = null;
+  deps.writeState = (s) => { written = s; };
+  const res = await consolidateMemory({ now: NOW, deps });
+  assert.equal(res.totals.errors, 0);
+  assert.ok(written && written.last_run_utc, "clean run advances last_run_utc");
+});
+
 test("refresh: archive disables the doc; rewrite saves a new body", async () => {
   const slotsDocs = {
     knowledge: [
