@@ -705,7 +705,9 @@ fi
 # MCP tool reads it). Idempotent: re-running replaces the prior job cleanly.
 schedule_job() {
   local action="$1"
-  local data_dir="$WORKSPACE_DIR/.memory"
+  # Honor a relocated durable data dir; fall back to the default. Mirrors
+  # scripts/lib.sh + env.mjs (${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}).
+  local data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
   local node_bin
   node_bin="$(command -v node || echo node)"
   local job_cmd="\"$node_bin\" \"$MEMORY_DIR/scripts/cron-job.mjs\""
@@ -792,7 +794,7 @@ WRAPPER
 # Create the state dir up front (owned by the invoking user) so the compose
 # read-only bind mount (${MEMORY_DATA_DIR}/state -> /app/state) does not get a
 # root-owned dir auto-created by docker, which the host cron could not write to.
-mkdir -p "$WORKSPACE_DIR/.memory/state"
+mkdir -p "${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}/state"
 
 case "${schedule:-}" in
   "") : ;;

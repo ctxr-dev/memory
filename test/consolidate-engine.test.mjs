@@ -14,7 +14,7 @@ const MONTH_SEC = 2_629_800; // ~30.4 days in seconds
 const nowSec = Math.floor(NOW.getTime() / 1000);
 
 // Build an injectable deps object backed by in-memory slot documents.
-function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch }) {
+function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch, failList }) {
   const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [], searchQueries: [] };
   let saveN = 0;
   let stateValue = null;
@@ -28,6 +28,7 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
     writeState: (s) => { stateValue = s; },
     listForConsolidate: async ({ datasetId }) => {
       calls.list.push(datasetId);
+      if (failList) throw new Error("list down");
       const docs = (slotsDocs[datasetId] || []).map((d) => ({
         documentId: d.documentId,
         name: d.name,
@@ -273,6 +274,14 @@ test("onlyDataset scopes the run to one dataset and bypasses policy", async () =
   assert.equal(res.ok, true);
   assert.deepEqual(res.refine, ["knowledge"]);
   assert.deepEqual(calls.list, ["knowledge"], "only the scoped dataset was listed");
+});
+
+test("slot list-consolidate failure counts as ONE error, not one-per-pass", async () => {
+  // Regression (Copilot): incrementing every pass report on a slot-level list
+  // failure multiplied totals.errors by the pass count.
+  const { deps } = makeDeps({ slotsDocs: { knowledge: [] }, env: KNOWLEDGE_ENV, failList: true, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  const res = await consolidateMemory({ now: NOW, llm: false, deps });
+  assert.equal(res.totals.errors, 1, "one slot failure -> one error, not one per pass");
 });
 
 test("compress-archived disables the REWRITTEN doc (new upsert id), not the deleted old id", async () => {

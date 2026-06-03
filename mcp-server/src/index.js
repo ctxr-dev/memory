@@ -1166,6 +1166,14 @@ function envIntDefault(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Float variant: the host runner reads MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS with
+// envFloat (fractional months allowed), so the projector must too or it would
+// floor a fractional threshold and project a different staleness set than a real run.
+function envFloatDefault(name, fallback) {
+  const n = Number.parseFloat(process.env[name] || "");
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 // consolidate_memory: READ-ONLY in-container projection. The real mutating +
 // LLM consolidate runs host-side (cron + scripts/consolidate.mjs). This tool
 // resolves the per-slot policy (refusing on an undeclared bound slot) and, for
@@ -1195,7 +1203,7 @@ server.registerTool(
       const walk = requested ? refine.filter((s) => requested.has(s)) : refine;
 
       const now = Date.now();
-      const staleMonths = envIntDefault("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
+      const staleMonths = envFloatDefault("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
       const archiveAgeDays = envIntDefault("MEMORY_CONSOLIDATE_ARCHIVE_AGE_DAYS", 180);
       const DAY = 24 * 60 * 60 * 1000;
 

@@ -614,6 +614,10 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
   const topK = consolidateClusterTopK();
   const clusterScore = consolidateClusterScoreThreshold();
   let workingSetSize = 0;
+  // Slot-level failures (e.g. list-consolidate threw) are NOT pass-specific;
+  // count them once here rather than incrementing every pass report (which would
+  // multiply a single failure by the pass count in totals.errors).
+  let slotErrors = 0;
 
   try {
     for (const slot of refine) {
@@ -623,7 +627,7 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
         rows = Array.isArray(r?.documents) ? r.documents : [];
       } catch (err) {
         process.stderr.write(`[consolidate] list-consolidate failed for slot=${slot}: ${err?.message || err}\n`);
-        for (const rep of report.values()) rep.errors++;
+        slotErrors += 1;
         continue;
       }
       const all = rows.map((row) => toLeaf(row, slot));
@@ -662,7 +666,7 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     }
   }
 
-  const totals = { archived: 0, merged: 0, refreshed: 0, flagged: 0, touched: 0, errors: 0, freedBytes: 0 };
+  const totals = { archived: 0, merged: 0, refreshed: 0, flagged: 0, touched: 0, errors: slotErrors, freedBytes: 0 };
   for (const rep of report.values()) {
     totals.archived += rep.archived;
     totals.merged += rep.merged;
