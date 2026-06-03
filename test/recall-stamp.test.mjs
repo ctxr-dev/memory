@@ -87,6 +87,20 @@ test("stampRecalls: recall_count seeds from the PERSISTED value on a cold cache"
   }, { responseFn: responder({ docs }) });
 });
 
+test("stampRecalls: reuses the dataset metadata map within the TTL (no repeat full list)", () => {
+  _resetStampCache();
+  const docs = [
+    { id: "d1", doc_metadata: [{ name: "atom_type", value: "x" }] },
+    { id: "d2", doc_metadata: [{ name: "atom_type", value: "y" }] },
+  ];
+  return withFetchStub(async (calls) => {
+    await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d1", datasetId: DATASET }], nowMs: 1000 });
+    await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d2", datasetId: DATASET }], nowMs: 1000 + 5000 }); // +5s, within the 60s TTL
+    const lists = calls.filter((c) => /\/documents\?/.test(c.url));
+    assert.equal(lists.length, 1, "second stamp run within the TTL reuses the cached metadata map");
+  }, { responseFn: responder({ docs }) });
+});
+
 test("stampRecalls: dataset missing last_recalled_at field -> zero POSTs and no list GET", () => {
   _resetStampCache();
   return withFetchStub(async (calls) => {

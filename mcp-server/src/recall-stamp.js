@@ -23,8 +23,26 @@ const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "
 
 // Per-document debounce cache: documentId -> { lastStampMs, recallCount }.
 // Module-scoped, so it resets on a hot-reload / restart (cold cache re-stamps
-// once, which is harmless — the stamp is idempotent-enough).
+// once, which is harmless; the stamp is idempotent-enough). Bounded so the
+// long-lived bridge process cannot grow it without limit: Map preserves
+// insertion order, so we evict the oldest entries past the cap.
+const STAMP_CACHE_MAX = 5000;
 const stampCache = new Map();
+
+// Per-dataset cache of the doc-metadata map (id -> {name:value}) with a short
+// TTL, so a burst of recalls does not re-list the whole dataset on every stamp
+// run. Keyed by resolved datasetId. Also bounded.
+const METADATA_MAP_TTL_MS = 60_000;
+const METADATA_MAP_CACHE_MAX = 16;
+const metadataMapCache = new Map();
+
+function cacheSet(map, key, value, max) {
+  map.set(key, value);
+  if (map.size > max) {
+    const oldest = map.keys().next().value;
+    map.delete(oldest);
+  }
+}
 
 function debounceHoursFromEnv() {
   const n = Number.parseInt(process.env.MEMORY_RECALL_STAMP_DEBOUNCE_HOURS || "", 10);
@@ -81,23 +99,30 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
 
     // Dify's documents/metadata POST REPLACES a document's full custom-metadata
     // set, so we MUST carry every existing custom field on the write or it is
-    // wiped (atom_type / project_module / error_pattern lost). Read current
-    // metadata for the dataset once (one list, paginated) and build id -> {name:
-    // value}. If this read fails we DO NOT stamp (better to skip the staleness
-    // signal than to corrupt classifying metadata).
+    // wiped (atom_type / project_module / error_pattern lost). Read the dataset's
+    // current metadata map (id -> {name:value}); reuse a recent cached map within
+    // METADATA_MAP_TTL_MS so a burst of recalls does not re-list the whole
+    // dataset every run. If the read fails we DO NOT stamp (better to skip the
+    // staleness signal than to corrupt classifying metadata).
     let metaById;
-    try {
-      const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
-      metaById = new Map();
-      for (const d of docs || []) {
-        const m = {};
-        const fields = Array.isArray(d?.doc_metadata) ? d.doc_metadata : [];
-        for (const f of fields) if (f?.name) m[f.name] = f.value;
-        metaById.set(d.id, m);
+    const cachedMap = metadataMapCache.get(selectedDatasetId);
+    if (cachedMap && now - cachedMap.at < METADATA_MAP_TTL_MS) {
+      metaById = cachedMap.byId;
+    } else {
+      try {
+        const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
+        metaById = new Map();
+        for (const d of docs || []) {
+          const m = {};
+          const fields = Array.isArray(d?.doc_metadata) ? d.doc_metadata : [];
+          for (const f of fields) if (f?.name) m[f.name] = f.value;
+          metaById.set(d.id, m);
+        }
+        cacheSet(metadataMapCache, selectedDatasetId, { at: now, byId: metaById }, METADATA_MAP_CACHE_MAX);
+      } catch (err) {
+        process.stderr.write(`[recall-stamp] skip stamping ${selectedDatasetId}: could not read current metadata (would risk a wipe): ${err?.message || err}\n`);
+        return summary;
       }
-    } catch (err) {
-      process.stderr.write(`[recall-stamp] skip stamping ${selectedDatasetId}: could not read current metadata (would risk a wipe): ${err?.message || err}\n`);
-      return summary;
     }
 
     const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(selectedDatasetId)}/documents/metadata`;
@@ -111,7 +136,7 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
       // document that Dify already records as recently recalled.
       if (!shouldStamp(existing.last_recalled_at, now, debounce)) {
         summary.skipped++;
-        stampCache.set(id, { lastStampMs: Date.parse(existing.last_recalled_at) || now, recallCount: Number(existing.recall_count) || 0 });
+        cacheSet(stampCache, id, { lastStampMs: Date.parse(existing.last_recalled_at) || now, recallCount: Number(existing.recall_count) || 0 }, STAMP_CACHE_MAX);
         continue;
       }
       // Seed the counter from the in-process cache if present, otherwise from the
@@ -142,7 +167,7 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
           },
           config.timeoutMs,
         );
-        stampCache.set(id, { lastStampMs: now, recallCount: nextCount });
+        cacheSet(stampCache, id, { lastStampMs: now, recallCount: nextCount }, STAMP_CACHE_MAX);
         summary.stamped++;
       } catch (err) {
         summary.errors++;
@@ -186,4 +211,5 @@ export function stampRecallsFireAndForget(config, records, nowMs) {
 // Test-only: reset the in-process debounce cache between cases.
 export function _resetStampCache() {
   stampCache.clear();
+  metadataMapCache.clear();
 }
