@@ -403,7 +403,9 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
         } catch (err) {
           mergeReport.errors++;
           process.stderr.write(`[consolidate] merge-write failed for keeper=${p.keeper.documentId}: ${err?.message || err}\n`);
-          // Fall through to archive the loser against the OLD keeper id.
+          // Do NOT archive the loser: the merged body never landed, so archiving
+          // it would drop its unique content. Leave both active; retry next run.
+          continue;
         }
       } else {
         mergeReport.merged++;

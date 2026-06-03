@@ -14,7 +14,7 @@ const MONTH_SEC = 2_629_800; // ~30.4 days in seconds
 const nowSec = Math.floor(NOW.getTime() / 1000);
 
 // Build an injectable deps object backed by in-memory slot documents.
-function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch, failList, lockHeld }) {
+function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch, failList, lockHeld, failSave }) {
   const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [], searchQueries: [] };
   let saveN = 0;
   let stateValue = null;
@@ -56,6 +56,7 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
       return { records };
     },
     saveDoc: async ({ name, text, datasetId, metadata }) => {
+      if (failSave) throw new Error("save down");
       const id = `save-${++saveN}`;
       calls.saveDoc.push({ id, name, text, datasetId, metadata });
       return { id };
@@ -142,6 +143,28 @@ test("keep-keeper-unchanged: no keeper rewrite; loser archived against the origi
   assert.deepEqual(calls.disableDoc, ["old"]);
   assert.equal(res.totals.merged, 0);
   assert.equal(res.totals.archived, 1);
+});
+
+test("merge-write failure does NOT archive the loser (no data loss; retried next run)", async () => {
+  // Regression (Copilot): if the merged keeper body fails to save, archiving the
+  // loser would drop its unique content. Leave both active instead.
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "old", name: "dup.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision" }, body: "same body" },
+      { documentId: "new", name: "dup.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "same body" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    failSave: true,
+    mergeResponder: (o) => ({ action: "merge", merged_body: "merged!", keeper_id: o.keeper.documentId, loser_id: o.loser.documentId, reason: "x" }),
+    refreshResponder: () => ({}),
+  });
+  const res = await consolidateMemory({ now: NOW, passes: ["dedupe-by-sha256", "llm-merge-near-duplicates"], deps });
+  assert.equal(calls.disableDoc.length, 0, "loser must not be archived when the merge-write failed");
+  assert.equal(res.totals.archived, 0);
+  assert.ok(res.passes["llm-merge-near-duplicates"].errors >= 1);
 });
 
 test("skip: neither doc archived", async () => {
