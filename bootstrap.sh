@@ -809,9 +809,12 @@ esac
 # cleanly and we print the manual command to run once the stack is up.
 echo
 echo "Installing consolidate/recall metadata fields on bound datasets (best-effort)..."
-if node "$MEMORY_DIR/scripts/install-metadata-fields.mjs" 2>/dev/null; then
+# Do NOT suppress stderr: a real failure (bridge auth, misconfig, syntax error)
+# must be visible, not hidden behind the generic fallback message below.
+if node "$MEMORY_DIR/scripts/install-metadata-fields.mjs"; then
   :
 else
-  echo "  (bridge not reachable yet) After the stack is up, run:"
-  echo "    node \"$MEMORY_DIR/scripts/install-metadata-fields.mjs\""
+  echo "  install-metadata-fields did not complete (see the error above)." >&2
+  echo "  If the stack simply is not up yet, re-run once it is:" >&2
+  echo "    node \"$MEMORY_DIR/scripts/install-metadata-fields.mjs\"" >&2
 fi

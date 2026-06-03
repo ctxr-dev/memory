@@ -1233,7 +1233,10 @@ server.registerTool(
       }
 
       return jsonToolResponse({
-        ok: refusals.length === 0,
+        // ok reflects BOTH policy refusals AND per-slot projection failures
+        // (e.g. listAllDocuments errored for a slot), so a partial projection is
+        // not reported as fully ok.
+        ok: refusals.length === 0 && errors.length === 0,
         readOnly: true,
         policies,
         refine,
