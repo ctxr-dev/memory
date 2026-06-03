@@ -373,6 +373,25 @@ test("refresh daysSinceRecall is 'never' (not NaN/null) for an unparseable last_
   assert.equal(u.document.daysSinceRecall, "never");
 });
 
+test("refresh keep without stale_after does NOT clear stale (defaults to keeping it)", async () => {
+  // Regression (Copilot): a missing/invalid stale_after must not unintentionally
+  // clear the stale flag (callLLMWithRetry has no schema validation).
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "s", name: "s.md", createdAtSec: nowSec - 9 * MONTH_SEC, metadata: { atom_type: "self-improvement-lesson" }, body: "rule body" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    mergeResponder: () => ({}),
+    refreshResponder: (o) => ({ action: "keep", leaf_id: o.document.documentId, reason: "no stale_after field" }),
+  });
+  await consolidateMemory({ now: NOW, passes: ["llm-semantic-refresh"], deps });
+  const stamp = calls.updateMeta.find((u) => u.documentId === "s");
+  assert.equal(stamp.metadata.stale, "true", "missing stale_after must leave stale=true, not clear it");
+});
+
 test("provider failure mid-merge falls back to deterministic archive", async () => {
   const slotsDocs = {
     knowledge: [

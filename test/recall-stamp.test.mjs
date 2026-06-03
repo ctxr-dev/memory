@@ -109,6 +109,17 @@ test("stampRecalls: list (metadata read) failure SKIPS stamping (never risks a w
   } });
 });
 
+test("stampRecalls: persisted last_recalled_at debounces a cold cache (no re-stamp after restart)", () => {
+  _resetStampCache(); // simulate a fresh process (cold cache)
+  const recentIso = new Date(1_000 * HOUR - 1 * HOUR).toISOString(); // stamped 1h ago, within the 24h window
+  const docs = [{ id: "d1", doc_metadata: [{ name: "atom_type", value: "bug-root-cause" }, { name: "last_recalled_at", value: recentIso }] }];
+  return withFetchStub(async (calls) => {
+    const summary = await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d1", datasetId: DATASET }], nowMs: 1_000 * HOUR, debounceHours: 24 });
+    assert.equal(calls.filter((c) => c.url.includes("/documents/metadata")).length, 0, "persisted-recent doc not re-stamped on a cold cache");
+    assert.equal(summary.skipped, 1);
+  }, { responseFn: responder({ docs }) });
+});
+
 test("stampRecalls: per-doc POST failure is swallowed (resolves, errors counted)", () => {
   _resetStampCache();
   return withFetchStub(async () => {

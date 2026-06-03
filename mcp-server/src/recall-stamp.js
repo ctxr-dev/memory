@@ -106,6 +106,14 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
     for (const id of targets) {
       const prev = stampCache.get(id);
       const existing = metaById.get(id) || {};
+      // Persisted debounce: also honor the doc's stored last_recalled_at, so a
+      // cold in-process cache (after a restart / hot-reload) does not re-stamp a
+      // document that Dify already records as recently recalled.
+      if (!shouldStamp(existing.last_recalled_at, now, debounce)) {
+        summary.skipped++;
+        stampCache.set(id, { lastStampMs: Date.parse(existing.last_recalled_at) || now, recallCount: Number(existing.recall_count) || 0 });
+        continue;
+      }
       // Seed the counter from the in-process cache if present, otherwise from the
       // PERSISTED recall_count (so a process restart / cold cache does not reset
       // the count back to 1 and lose history).

@@ -508,7 +508,11 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
     }
     try {
       if (decision.action === "keep") {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: decision.stale_after === true ? "true" : "false" }) });
+        // Only CLEAR the stale flag when the model EXPLICITLY says stale_after:false.
+        // A missing/invalid stale_after must NOT unintentionally clear it (callLLMWithRetry
+        // does not validate the schema) -- default to leaving it stale for a later revisit.
+        const staleAfter = decision.stale_after === false ? "false" : "true";
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: staleAfter }) });
         r.touched++;
       } else if (decision.action === "rewrite") {
         let nb = String(decision.rewritten_body || "");
@@ -520,7 +524,9 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
         await deps.saveDoc({ name: leaf.name, text: nb, datasetId: slot, metadata: stampMeta(leaf, { stale: "false", last_refreshed_at: toIso(now), consolidated_at: toIso(now) }) });
         r.refreshed++;
       } else if (decision.action === "archive") {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { consolidated_at: toIso(now) }) });
+        // An archive IS a stale outcome (per the prompt: stale_after=true for archive),
+        // so stamp stale=true for consistency/forensics even though the doc is disabled.
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: "true", consolidated_at: toIso(now) }) });
         await deps.disableDoc({ documentId: leaf.documentId, datasetId: slot });
         r.archived++;
       }
