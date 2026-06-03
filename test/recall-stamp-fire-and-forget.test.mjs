@@ -37,7 +37,7 @@ test("stampRecallsFireAndForget: ignores records without documentId or datasetId
   }, { responseFn: () => ({ ok: true, status: 200, statusText: "OK", text: async () => '{"doc_metadata":[]}' }) });
 });
 
-test("stampRecallsFireAndForget: groups by dataset (one field GET per dataset)", async () => {
+test("stampRecallsFireAndForget: groups by dataset (one field-index GET per dataset)", async () => {
   _resetStampCache();
   await withFetchStub(async (calls) => {
     const records = [
@@ -46,11 +46,13 @@ test("stampRecallsFireAndForget: groups by dataset (one field GET per dataset)",
       { documentId: "d3", datasetId: DS_B },
     ];
     await stampRecallsFireAndForget(CONFIG, records, 1000);
-    const gets = calls.filter((c) => !c.url.includes("/documents/metadata"));
-    // one field-index GET per distinct dataset (A, B)
-    assert.equal(gets.length, 2);
+    // one field-index GET per distinct dataset (A, B); the list GET ends in
+    // /documents?... and the POST in /documents/metadata, so exclude both.
+    const fieldGets = calls.filter((c) => c.url.endsWith("/metadata") && !c.url.includes("/documents"));
+    assert.equal(fieldGets.length, 2);
   }, { responseFn: (call) => {
     if (call.url.includes("/documents/metadata")) return { ok: true, status: 200, statusText: "OK", text: async () => '{"result":"ok"}' };
+    if (/\/documents\?/.test(call.url)) return { ok: true, status: 200, statusText: "OK", text: async () => '{"data":[],"has_more":false}' };
     return { ok: true, status: 200, statusText: "OK", text: async () => '{"doc_metadata":[{"id":"f","name":"last_recalled_at","type":"string"}]}' };
   } });
 });

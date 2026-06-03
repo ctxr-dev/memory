@@ -67,6 +67,30 @@ import {
 // near-duplicate signal anyway.
 const DIFY_QUERY_MAX_CHARS = 240;
 
+// Dify's documents/metadata POST REPLACES a document's full custom-metadata set
+// (it is not a per-field merge). So every consolidate stamp MUST carry the
+// document's existing custom fields too, or they are wiped (atom_type /
+// project_module / error_pattern lost -> the doc becomes unfilterable). We carry
+// only this allow-list of consolidate-relevant custom fields; Dify built-ins
+// (document_name / uploader / upload_date / last_update_date / source) are
+// auto-managed and must NOT be echoed back.
+const CONSOLIDATE_META_FIELDS = [
+  "atom_type", "tags", "project_module", "language", "task_type", "error_pattern",
+  "last_recalled_at", "recall_count", "superseded_by", "consolidated_at", "stale",
+  "last_refreshed_at", "consolidate_truncated_at",
+];
+
+// Merge a stamp `patch` onto a leaf's EXISTING custom metadata (preserving every
+// field Dify would otherwise drop on a partial write).
+function stampMeta(leaf, patch) {
+  const out = {};
+  const m = leaf?.metadata || {};
+  for (const k of CONSOLIDATE_META_FIELDS) {
+    if (m[k] != null && m[k] !== "") out[k] = m[k];
+  }
+  return { ...out, ...patch };
+}
+
 export const ALL_PASS_NAMES = Object.freeze([
   SOURCE_PASSES.SHA256,
   SOURCE_PASSES.LESSON_KEY,
@@ -272,7 +296,7 @@ async function archiveLoser({ loser, keeperId, slot, deps, now, report, sourcePa
     await deps.updateMeta({
       datasetId: slot,
       documentId: loser.documentId,
-      metadata: { superseded_by: keeperId, consolidated_at: toIso(now) },
+      metadata: stampMeta(loser, { superseded_by: keeperId, consolidated_at: toIso(now) }),
     });
     await deps.disableDoc({ documentId: loser.documentId, datasetId: slot });
     report.get(sourcePass).archived++;
@@ -353,7 +377,7 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
       }
       if (!dryRun) {
         try {
-          const saved = await deps.saveDoc({ name: p.keeper.name, text: body, datasetId: slot, metadata: { ...p.keeper.metadata, consolidated_at: toIso(now) } });
+          const saved = await deps.saveDoc({ name: p.keeper.name, text: body, datasetId: slot, metadata: stampMeta(p.keeper, { consolidated_at: toIso(now) }) });
           keeperId = requireNewId(saved, `merge keeper ${p.keeper.documentId}`);
           mergeReport.merged++;
         } catch (err) {
@@ -383,7 +407,7 @@ async function runStalenessFlag({ leaves, slot, deps, now, report, dryRun }) {
     r.touched++;
     if (!dryRun) {
       try {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: stale ? "true" : "false" } });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: stale ? "true" : "false" }) });
       } catch (err) {
         r.errors++;
         process.stderr.write(`[consolidate] staleness stamp failed for ${leaf.documentId}: ${err?.message || err}\n`);
@@ -458,7 +482,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
     }
     try {
       if (decision.action === "keep") {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: decision.stale_after === true ? "true" : "false" } });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: decision.stale_after === true ? "true" : "false" }) });
         r.touched++;
       } else if (decision.action === "rewrite") {
         let nb = String(decision.rewritten_body || "");
@@ -467,10 +491,10 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
           continue;
         }
         if (nb.length > cap) nb = nb.slice(0, cap).replace(/\s+$/, "") + `\n\n[truncated by consolidate at ${toIso(now)}]\n`;
-        await deps.saveDoc({ name: leaf.name, text: nb, datasetId: slot, metadata: { ...leaf.metadata, stale: "false", last_refreshed_at: toIso(now), consolidated_at: toIso(now) } });
+        await deps.saveDoc({ name: leaf.name, text: nb, datasetId: slot, metadata: stampMeta(leaf, { stale: "false", last_refreshed_at: toIso(now), consolidated_at: toIso(now) }) });
         r.refreshed++;
       } else if (decision.action === "archive") {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { consolidated_at: toIso(now) } });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { consolidated_at: toIso(now) }) });
         await deps.disableDoc({ documentId: leaf.documentId, datasetId: slot });
         r.archived++;
       }
@@ -504,7 +528,7 @@ async function runCompressArchived({ disabled, slot, deps, now, report, dryRun }
       continue;
     }
     try {
-      await deps.saveDoc({ name: leaf.name, text: truncated, datasetId: slot, metadata: { ...leaf.metadata, consolidate_truncated_at: toIso(now) } });
+      await deps.saveDoc({ name: leaf.name, text: truncated, datasetId: slot, metadata: stampMeta(leaf, { consolidate_truncated_at: toIso(now) }) });
       // Re-disable: upsert re-creates the doc enabled; keep archived state.
       await deps.disableDoc({ documentId: leaf.documentId, datasetId: slot });
       r.touched++;

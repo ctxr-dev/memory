@@ -15,7 +15,11 @@
 // Lives under mcp-server/src so the container sees it; reads its own env (the
 // host env.mjs is not importable in-container). Imports dify.js primitives.
 
-import { loadMetadataFieldIndex, requireDifyWriteConfig, fetchJsonWithTimeout } from "./dify.js";
+import { loadMetadataFieldIndex, requireDifyWriteConfig, fetchJsonWithTimeout, listAllDocuments } from "./dify.js";
+
+// Dify built-in metadata keys appear in a document's doc_metadata but are
+// auto-managed; never echo them back on a write.
+const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "last_update_date", "source"]);
 
 // Per-document debounce cache: documentId -> { lastStampMs, recallCount }.
 // Module-scoped, so it resets on a hot-reload / restart (cold cache re-stamps
@@ -75,13 +79,44 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
     if (!recalledField) return summary; // dataset not migrated; nothing to do
     const countField = fieldIndex.get("recall_count");
 
+    // Dify's documents/metadata POST REPLACES a document's full custom-metadata
+    // set, so we MUST carry every existing custom field on the write or it is
+    // wiped (atom_type / project_module / error_pattern lost). Read current
+    // metadata for the dataset once (one list, paginated) and build id -> {name:
+    // value}. If this read fails we DO NOT stamp (better to skip the staleness
+    // signal than to corrupt classifying metadata).
+    let metaById;
+    try {
+      const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
+      metaById = new Map();
+      for (const d of docs || []) {
+        const m = {};
+        const fields = Array.isArray(d?.doc_metadata) ? d.doc_metadata : [];
+        for (const f of fields) if (f?.name) m[f.name] = f.value;
+        metaById.set(d.id, m);
+      }
+    } catch (err) {
+      process.stderr.write(`[recall-stamp] skip stamping ${selectedDatasetId}: could not read current metadata (would risk a wipe): ${err?.message || err}\n`);
+      return summary;
+    }
+
     const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(selectedDatasetId)}/documents/metadata`;
     const iso = new Date(now).toISOString();
 
     for (const id of targets) {
       const prev = stampCache.get(id);
       const nextCount = (prev?.recallCount || 0) + 1;
-      const metadataList = [{ id: recalledField.id, name: "last_recalled_at", value: iso }];
+      const existing = metaById.get(id) || {};
+      // Preserve every existing custom field (those defined on the dataset),
+      // overriding only the two recall fields. Skip Dify built-ins.
+      const metadataList = [];
+      for (const [name, f] of fieldIndex) {
+        if (name === "last_recalled_at" || name === "recall_count") continue;
+        if (DIFY_BUILTIN_META.has(name)) continue;
+        const v = existing[name];
+        if (v != null && v !== "") metadataList.push({ id: f.id, name, value: String(v) });
+      }
+      metadataList.push({ id: recalledField.id, name: "last_recalled_at", value: iso });
       if (countField) metadataList.push({ id: countField.id, name: "recall_count", value: String(nextCount) });
       try {
         await fetchJsonWithTimeout(
