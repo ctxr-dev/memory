@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { MEMORY_DIR, MEMORY_DATA_DIR, CONSOLIDATE_ATTEMPTS_LOG_PATH } from "./lib/env.mjs";
+import { MEMORY_DIR, MEMORY_DATA_DIR, CONSOLIDATE_ATTEMPTS_LOG_PATH, envInt } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 
 const MAX_LOG_LINES = 200;
@@ -26,11 +26,10 @@ const STDERR_CAP_BYTES = 2000;
 // `docker exec` to the bridge) would let cron-job run forever holding the cron
 // lock, starving every future hourly attempt and leaving cron_health with a
 // stale lastAttempt. On timeout spawnSync kills the child (SIGTERM) and the step
-// is recorded as a failure. Override via MEMORY_CRON_STEP_TIMEOUT_MS (default 30m).
-const STEP_TIMEOUT_MS = (() => {
-  const v = Number(process.env.MEMORY_CRON_STEP_TIMEOUT_MS);
-  return Number.isFinite(v) && v > 0 ? v : 30 * 60 * 1000;
-})();
+// is recorded as a failure. Override via MEMORY_CRON_STEP_TIMEOUT_MS (default
+// 30m). Read through envInt -> envValue so the canonical settings/.env applies
+// (cron/launchd run with a minimal process env that would not carry the var).
+const STEP_TIMEOUT_MS = envInt("MEMORY_CRON_STEP_TIMEOUT_MS", 30 * 60 * 1000);
 // Serialises cron-job runs so two overlapping invocations (launchd/cron can
 // start a new run before the previous finishes) never race appendAttempt's
 // read-rewrite log truncation.
