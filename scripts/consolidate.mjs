@@ -597,6 +597,23 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
   const allowed = resolveAllowedPasses(passes);
   const llmRequested = consolidateLlmEnabled() && llm !== false;
 
+  // Empty allow-list (e.g. an accidental `--passes=`): do NOTHING and, crucially,
+  // do NOT write state. Otherwise this no-op run would stamp last_run_utc and let
+  // --if-due suppress the next real scheduled run for a whole cadence.
+  if (allowed.size === 0) {
+    return {
+      ok: true,
+      skipped: "no-passes",
+      llmRequested,
+      llm: false,
+      policies: {},
+      refine: [],
+      workingSetSize: 0,
+      passes: {},
+      totals: { archived: 0, merged: 0, refreshed: 0, flagged: 0, touched: 0, errors: 0, freedBytes: 0 },
+    };
+  }
+
   // 1. Policy gate: refuse on any undeclared bound slot. When `onlyDataset` is
   // given (an id or slot name), scope the run to JUST that dataset and bypass
   // policy resolution (used for targeted runs / testing a single dataset; a raw

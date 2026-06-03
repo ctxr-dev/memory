@@ -282,6 +282,20 @@ test("held lock is a benign skip: ok:true (so the CLI exits 0 and the cron is no
   assert.equal(calls.list.length, 0, "no work done while locked");
 });
 
+test("empty --passes is a no-op skip that does NOT write state (won't suppress next --if-due)", async () => {
+  // Regression (Copilot): an empty allow-list did zero work but still stamped
+  // last_run_utc, letting --if-due suppress the next real scheduled run.
+  const slotsDocs = { knowledge: [{ documentId: "a", name: "a.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "x" }] };
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  let stateWritten = false;
+  deps.writeState = () => { stateWritten = true; };
+  const res = await consolidateMemory({ now: NOW, passes: "", deps });
+  assert.equal(res.ok, true);
+  assert.equal(res.skipped, "no-passes");
+  assert.equal(stateWritten, false, "a no-op run must not write state");
+  assert.equal(calls.list.length, 0, "no work done");
+});
+
 test("undeclared bound slot refuses before any list/write", async () => {
   const { deps, calls } = makeDeps({
     slotsDocs: { knowledge: [], runbooks: [] },
