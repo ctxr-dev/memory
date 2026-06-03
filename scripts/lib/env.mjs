@@ -164,8 +164,10 @@ export function consolidateClusterTopK() {
 
 // A doc whose last activity (max of last_recalled_at, created_at) is older than
 // this many months is flagged stale (then refreshed/archived by the LLM pass).
+// envFloat (not envInt) so fractional months are allowed: useful for finer
+// tuning and for testing the staleness path against a freshly-seeded store.
 export function consolidateStaleAfterMonths() {
-  return envInt("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
+  return envFloat("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
 }
 
 // Per-run cap on LLM semantic-refresh calls (bounds token cost + write volume);
