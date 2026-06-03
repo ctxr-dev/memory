@@ -254,7 +254,7 @@ async function buildPairsForSlot({ slot, leaves, allowed, deps, simThreshold, to
   // lookup failure to an ENABLED pass (not always similarity, which may be off).
   const clusterErrorPass = wantSim ? SOURCE_PASSES.SIMILARITY : wantSha ? SOURCE_PASSES.SHA256 : SOURCE_PASSES.LESSON_KEY;
 
-  const sorted = [...leaves].sort((a, b) => (a.documentId < b.documentId ? -1 : 1));
+  const sorted = [...leaves].sort((a, b) => (a.documentId < b.documentId ? -1 : a.documentId > b.documentId ? 1 : 0));
   const allPairs = [];
 
   for (const leaf of sorted) {
