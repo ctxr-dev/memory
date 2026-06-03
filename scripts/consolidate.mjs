@@ -242,6 +242,10 @@ async function buildPairsForSlot({ slot, leaves, allowed, deps, simThreshold, to
   const wantSim = allowed.has(SOURCE_PASSES.SIMILARITY);
   if (!wantSha && !wantLesson && !wantSim) return [];
 
+  // The cluster lookup feeds whichever dedup passes are enabled, so attribute a
+  // lookup failure to an ENABLED pass (not always similarity, which may be off).
+  const clusterErrorPass = wantSim ? SOURCE_PASSES.SIMILARITY : wantSha ? SOURCE_PASSES.SHA256 : SOURCE_PASSES.LESSON_KEY;
+
   const sorted = [...leaves].sort((a, b) => (a.documentId < b.documentId ? -1 : 1));
   const allPairs = [];
 
@@ -256,7 +260,7 @@ async function buildPairsForSlot({ slot, leaves, allowed, deps, simThreshold, to
         scoreThreshold: clusterScore,
       });
     } catch (err) {
-      report.get(SOURCE_PASSES.SIMILARITY).errors++;
+      report.get(clusterErrorPass).errors++;
       process.stderr.write(`[consolidate] cluster lookup failed for ${leaf.documentId}: ${err?.message || err}\n`);
       continue;
     }
@@ -452,7 +456,13 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
       .slice(0, topK)
       .map((rec, i) => ({ n: i + 1, documentId: rec.documentId, score: Number(rec.score?.toFixed?.(4) ?? rec.score), content: String(rec.content || "").slice(0, 600) }));
     const lastRecalled = leaf.metadata?.last_recalled_at || "";
-    const daysSinceRecall = lastRecalled ? Math.max(0, Math.round((nowMs(now) - Date.parse(lastRecalled)) / 86_400_000)) : "never";
+    // Guard against an unparseable last_recalled_at: Date.parse -> NaN would
+    // serialize to null in the prompt JSON (schema expects a number or "never").
+    let daysSinceRecall = "never";
+    if (lastRecalled) {
+      const t = Date.parse(lastRecalled);
+      if (Number.isFinite(t)) daysSinceRecall = Math.max(0, Math.round((nowMs(now) - t) / 86_400_000));
+    }
     const user = JSON.stringify({
       document: { documentId: leaf.documentId, created_at: new Date(leaf.createdAtMs).toISOString(), last_recalled_at: lastRecalled || "never", daysSinceRecall, metadata: leaf.metadata, body: String(body || "") },
       cluster: clusterBundle,
@@ -528,9 +538,14 @@ async function runCompressArchived({ disabled, slot, deps, now, report, dryRun }
       continue;
     }
     try {
-      await deps.saveDoc({ name: leaf.name, text: truncated, datasetId: slot, metadata: stampMeta(leaf, { consolidate_truncated_at: toIso(now) }) });
-      // Re-disable: upsert re-creates the doc enabled; keep archived state.
-      await deps.disableDoc({ documentId: leaf.documentId, datasetId: slot });
+      // saveDoc is upsert-by-name: it CREATES a new document id and deletes the
+      // old one. So we must disable the NEW id to keep the doc archived;
+      // disabling leaf.documentId (now deleted) would fail and leave the
+      // truncated doc ENABLED (un-archiving it). Capture the new id from saveDoc.
+      const saved = await deps.saveDoc({ name: leaf.name, text: truncated, datasetId: slot, metadata: stampMeta(leaf, { consolidate_truncated_at: toIso(now) }) });
+      const newId = saved?.id;
+      if (!newId) throw new Error(`compress: saveDoc returned no document id for ${leaf.documentId}`);
+      await deps.disableDoc({ documentId: newId, datasetId: slot });
       r.touched++;
       r.freedBytes += Math.max(0, oldLen - truncated.length);
     } catch (err) {

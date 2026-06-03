@@ -14,7 +14,7 @@ const MONTH_SEC = 2_629_800; // ~30.4 days in seconds
 const nowSec = Math.floor(NOW.getTime() / 1000);
 
 // Build an injectable deps object backed by in-memory slot documents.
-function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm }) {
+function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch }) {
   const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [], searchQueries: [] };
   let saveN = 0;
   let stateValue = null;
@@ -40,6 +40,7 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
     readBody: async ({ documentId }) => bodyOf(documentId),
     searchSimilar: async ({ datasetId, query }) => {
       calls.searchQueries.push(query);
+      if (failSearch) throw new Error("search down");
       const docs = (slotsDocs[datasetId] || []).filter((d) => d.enabled !== false);
       // Tolerant reverse-lookup: the engine caps the query to a prefix of the
       // body, so match on prefix in either direction.
@@ -272,6 +273,48 @@ test("onlyDataset scopes the run to one dataset and bypasses policy", async () =
   assert.equal(res.ok, true);
   assert.deepEqual(res.refine, ["knowledge"]);
   assert.deepEqual(calls.list, ["knowledge"], "only the scoped dataset was listed");
+});
+
+test("compress-archived disables the REWRITTEN doc (new upsert id), not the deleted old id", async () => {
+  // Regression (Copilot): saveDoc is upsert-by-name -> new id + old deleted, so
+  // disabling the old id would fail and leave the truncated doc ENABLED.
+  const big = "x".repeat(2000);
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "arch", name: "arch.md", enabled: false, createdAtSec: nowSec - 200 * 86400, metadata: { atom_type: "decision" }, body: big },
+    ],
+  };
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  const res = await consolidateMemory({ now: NOW, llm: false, passes: ["compress-archived"], deps });
+  assert.equal(calls.saveDoc.length, 1, "rewrote the archived doc once");
+  const newId = calls.saveDoc[0].id;
+  assert.deepEqual(calls.disableDoc, [newId], "disabled the NEW upsert id, keeping it archived");
+  assert.notEqual(newId, "arch");
+  assert.equal(res.passes["compress-archived"].touched, 1);
+});
+
+test("cluster lookup failure is attributed to an ENABLED dedup pass, not always similarity", async () => {
+  const slotsDocs = {
+    knowledge: [{ documentId: "k1", name: "k.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "b" }],
+  };
+  const { deps } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, failSearch: true, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  const res = await consolidateMemory({ now: NOW, llm: false, passes: ["dedupe-by-sha256"], deps });
+  assert.equal(res.passes["dedupe-by-sha256"].errors, 1, "error lands on the enabled pass");
+  assert.equal(res.passes["dedupe-by-similarity"].errors, 0, "similarity (disabled) not blamed");
+});
+
+test("refresh daysSinceRecall is 'never' (not NaN/null) for an unparseable last_recalled_at", async () => {
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "s", name: "s.md", createdAtSec: nowSec - 9 * MONTH_SEC, metadata: { atom_type: "self-improvement-lesson", last_recalled_at: "not-a-date" }, body: "stale body" },
+    ],
+  };
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: (o) => ({ action: "keep", leaf_id: o.document.documentId, stale_after: true, reason: "x" }) });
+  await consolidateMemory({ now: NOW, passes: ["llm-semantic-refresh"], deps });
+  const refreshCall = calls.llm.find((c) => /semantic-refresh/.test(c.systemPrompt));
+  assert.ok(refreshCall, "refresh LLM was called");
+  const u = JSON.parse(refreshCall.userPrompt);
+  assert.equal(u.document.daysSinceRecall, "never");
 });
 
 test("provider failure mid-merge falls back to deterministic archive", async () => {
