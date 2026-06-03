@@ -250,10 +250,13 @@ export function defaultDeps() {
       return { id, raw: r };
     },
     disableDoc: (a) => disableDocument(a),
-    // The engine always builds the COMPLETE custom-metadata set via stampMeta
-    // (every existing non-builtin field from the working-set snapshot + the
-    // patch), so it asserts replace:true to skip the bridge-side read-merge.
-    updateMeta: (a) => updateDocMetadata({ ...a, replace: true }),
+    // updateMeta targets EXISTING docs and passes only the changed fields (the
+    // patch): it relies on the bridge-side read-merge (replace omitted) to
+    // preserve every other custom field from a FRESH read. This avoids rolling
+    // back a field another writer changed after the working-set snapshot,
+    // notably recall-stamp's last_recalled_at / recall_count. (saveDoc paths
+    // create a NEW doc and DO pass the full set via stampMeta + replace:true.)
+    updateMeta: (a) => updateDocMetadata(a),
     llm: (a) => callLLMWithRetry(a),
     // Shared with compile so the two never race / share one LLM window. Injected
     // so tests pass a no-op lock (avoids cross-test-file contention on the real
@@ -359,7 +362,8 @@ async function archiveLoser({ loser, keeperId, slot, deps, now, report, sourcePa
     await deps.updateMeta({
       datasetId: slot,
       documentId: loser.documentId,
-      metadata: stampMeta(loser, { superseded_by: keeperId, consolidated_at: toIso(now) }),
+      // Patch only; the bridge read-merge preserves the loser's other fields.
+      metadata: { superseded_by: keeperId, consolidated_at: toIso(now) },
     });
     await deps.disableDoc({ documentId: loser.documentId, datasetId: slot });
     report.get(sourcePass).archived++;
@@ -480,7 +484,7 @@ async function runStalenessFlag({ leaves, slot, deps, now, report, dryRun }) {
     r.touched++;
     if (!dryRun) {
       try {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: stale ? "true" : "false" }) });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: stale ? "true" : "false" } });
       } catch (err) {
         r.errors++;
         process.stderr.write(`[consolidate] staleness stamp failed for ${leaf.documentId}: ${err?.message || err}\n`);
@@ -565,7 +569,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
         // A missing/invalid stale_after must NOT unintentionally clear it (callLLMWithRetry
         // does not validate the schema) -- default to leaving it stale for a later revisit.
         const staleAfter = decision.stale_after === false ? "false" : "true";
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: staleAfter }) });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: staleAfter } });
         r.touched++;
       } else if (decision.action === "rewrite") {
         let nb = String(decision.rewritten_body || "");
@@ -579,7 +583,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
       } else if (decision.action === "archive") {
         // An archive IS a stale outcome (per the prompt: stale_after=true for archive),
         // so stamp stale=true for consistency/forensics even though the doc is disabled.
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: stampMeta(leaf, { stale: "true", consolidated_at: toIso(now) }) });
+        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: "true", consolidated_at: toIso(now) } });
         await deps.disableDoc({ documentId: leaf.documentId, datasetId: slot });
         r.archived++;
       }

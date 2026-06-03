@@ -62,7 +62,7 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
       return { id };
     },
     disableDoc: async ({ documentId }) => { calls.disableDoc.push(documentId); },
-    updateMeta: async ({ documentId, metadata }) => { calls.updateMeta.push({ documentId, metadata }); },
+    updateMeta: async ({ documentId, metadata, replace }) => { calls.updateMeta.push({ documentId, metadata, replace }); },
     llm: async ({ systemPrompt, userPrompt }) => {
       calls.llm.push({ systemPrompt, userPrompt });
       if (failLlm) {
@@ -137,9 +137,14 @@ test("keep-keeper-unchanged: no keeper rewrite; loser archived against the origi
   assert.equal(calls.saveDoc.length, 0, "keeper not rewritten");
   const stamp = calls.updateMeta.find((u) => u.documentId === "old");
   assert.equal(stamp.metadata.superseded_by, "new");
-  assert.equal(stamp.metadata.atom_type, "decision", "existing metadata preserved on the stamp (Dify replaces the full set)");
-  assert.equal(stamp.metadata.custom_extra, "keepme", "non-allowlisted custom field preserved");
-  assert.equal("document_name" in stamp.metadata, false, "Dify built-in not echoed back");
+  assert.ok(stamp.metadata.consolidated_at, "consolidated_at stamped");
+  // The loser's OTHER fields (atom_type, custom_extra) are preserved by the
+  // bridge-side read-merge from a FRESH read (replace omitted), NOT carried by
+  // consolidate. This avoids rolling back a field a concurrent writer changed
+  // (e.g. recall-stamp). Field preservation itself is locked in
+  // test/update-doc-metadata.test.mjs.
+  assert.notEqual(stamp.replace, true, "updateMeta uses read-merge, not a full-set replace");
+  assert.equal("atom_type" in stamp.metadata, false, "consolidate sends only the patch; the helper preserves the rest");
   assert.deepEqual(calls.disableDoc, ["old"]);
   assert.equal(res.totals.merged, 0);
   assert.equal(res.totals.archived, 1);
@@ -376,7 +381,10 @@ test("staleness-flag: stamps stale=true on an old never-recalled lesson", async 
   const stamp = calls.updateMeta.find((u) => u.documentId === "stale1");
   assert.ok(stamp, "stale doc stamped");
   assert.equal(stamp.metadata.stale, "true");
-  assert.equal(stamp.metadata.atom_type, "self-improvement-lesson", "existing metadata preserved on the stale stamp");
+  // Patch-only via read-merge: atom_type is preserved by the bridge from a fresh
+  // read, not carried by consolidate (avoids rolling back concurrent writes).
+  assert.notEqual(stamp.replace, true, "staleness stamp uses read-merge, not replace");
+  assert.equal("atom_type" in stamp.metadata, false, "consolidate sends only the {stale} patch");
   assert.equal(res.passes["staleness-flag"].touched, 1);
 });
 
