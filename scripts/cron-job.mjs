@@ -100,6 +100,13 @@ export async function runCronJob() {
 
   // Skip (don't append) if another cron-job run holds the lock: it logs its own
   // attempt; appending from a second instance would race the log truncation.
+  // Ensure the state dir exists first (cron-job can run before bootstrap creates
+  // it, or after a manual cleanup) so the atomic-create lock does not ENOENT.
+  try {
+    fs.mkdirSync(path.dirname(CRON_LOCK_PATH), { recursive: true });
+  } catch {
+    /* best-effort; acquireLock surfaces a real failure */
+  }
   installLockReleaseHandlers(CRON_LOCK_PATH);
   const cronLock = acquireLock(CRON_LOCK_PATH, { label: "cron-job" });
   if (!cronLock.ok) {
@@ -142,7 +149,10 @@ export async function runCronJob() {
             entry.error = `consolidate completed with ${errs} error(s)`;
           }
         } catch {
-          /* exit 0 but unparseable stdout: leave summary unset */
+          // Exit 0 but unparseable --json stdout means something is wrong
+          // (stray stdout logging, partial output); treat it as an error so
+          // cron-health does not record a misleading clean run.
+          entry.error = `consolidate exited 0 but produced unparseable --json stdout: ${String(r.stdout).slice(0, 200)}`;
         }
       } else {
         entry.error = `consolidate exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
