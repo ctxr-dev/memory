@@ -116,11 +116,24 @@ function emptyReport(name) {
   return { name, archived: 0, merged: 0, refreshed: 0, flagged: 0, touched: 0, errors: 0, freedBytes: 0, ms: 0 };
 }
 
+const ALL_PASS_SET = new Set(ALL_PASS_NAMES);
+
+// Drop any pass name not in ALL_PASS_NAMES and warn (a typo in --passes= or
+// MEMORY_CONSOLIDATE_PASSES would otherwise silently select nothing / the wrong
+// set). Returns the filtered set of known names.
+function filterKnownPasses(names) {
+  const unknown = [...names].filter((n) => !ALL_PASS_SET.has(n));
+  if (unknown.length) {
+    process.stderr.write(`[consolidate] ignoring unknown pass name(s): ${unknown.join(", ")} (valid: ${ALL_PASS_NAMES.join(", ")})\n`);
+  }
+  return new Set([...names].filter((n) => ALL_PASS_SET.has(n)));
+}
+
 export function resolveAllowedPasses(passesArg) {
   const fromCsv = (raw) => {
     const parts = String(raw).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
     if (parts.length === 0 || parts.includes("all")) return new Set(ALL_PASS_NAMES);
-    return new Set(parts);
+    return filterKnownPasses(new Set(parts));
   };
   if (passesArg == null) {
     const raw = consolidatePassesEnv();
@@ -130,7 +143,7 @@ export function resolveAllowedPasses(passesArg) {
   if (Array.isArray(passesArg)) {
     const parts = passesArg.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
     if (parts.includes("all")) return new Set(ALL_PASS_NAMES);
-    return new Set(parts);
+    return filterKnownPasses(new Set(parts));
   }
   const str = String(passesArg).trim();
   if (str === "") return new Set();
@@ -706,7 +719,7 @@ function handleNoLlmCounts(_fuzzyCount) {
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const out = { dryRun: false, ifDue: false, force: false, llm: true, json: false, passes: undefined, onlyDataset: undefined };
+  const out = { dryRun: false, ifDue: false, force: false, llm: true, json: false, passes: undefined, onlyDataset: undefined, unknown: [] };
   for (const a of argv) {
     if (a === "--dry-run") out.dryRun = true;
     else if (a === "--if-due") out.ifDue = true;
@@ -715,12 +728,16 @@ export function parseArgs(argv) {
     else if (a === "--json") out.json = true;
     else if (a.startsWith("--passes=")) out.passes = a.slice("--passes=".length);
     else if (a.startsWith("--only-dataset=")) out.onlyDataset = a.slice("--only-dataset=".length);
+    else out.unknown.push(a); // unrecognised: surfaced by the caller (don't silently ignore a typo)
   }
   return out;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.unknown.length) {
+    process.stderr.write(`consolidate: ignoring unknown argument(s): ${args.unknown.join(", ")} (valid: --dry-run --if-due --force --no-llm --json --passes=<csv> --only-dataset=<id>)\n`);
+  }
   const result = await consolidateMemory({ dryRun: args.dryRun, ifDue: args.ifDue, force: args.force, llm: args.llm, passes: args.passes, onlyDataset: args.onlyDataset });
   if (args.json) {
     process.stdout.write(JSON.stringify(result) + "\n");

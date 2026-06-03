@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { consolidateMemory } from "../scripts/consolidate.mjs";
+import { consolidateMemory, resolveAllowedPasses, parseArgs, ALL_PASS_NAMES } from "../scripts/consolidate.mjs";
 
 const SEC = 1; // createdAt in seconds
 const NOW = new Date("2026-06-03T00:00:00Z");
@@ -77,6 +77,21 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
 }
 
 const KNOWLEDGE_ENV = { DIFY_DATASET_KNOWLEDGE_ID: "k" };
+
+test("resolveAllowedPasses: drops unknown pass names (typo), keeps valid ones", () => {
+  const set = resolveAllowedPasses("dedupe-by-sha256,bogus-pass");
+  assert.ok(set.has("dedupe-by-sha256"));
+  assert.ok(!set.has("bogus-pass"));
+  assert.equal(set.size, 1);
+  // "all" still expands to the full set
+  assert.equal(resolveAllowedPasses("all").size, ALL_PASS_NAMES.length);
+});
+
+test("parseArgs: collects unknown flags instead of silently ignoring them", () => {
+  const out = parseArgs(["--dry-run", "--ifdue", "--pass=x"]);
+  assert.equal(out.dryRun, true);
+  assert.deepEqual(out.unknown, ["--ifdue", "--pass=x"]);
+});
 
 test("merge: keeper rewritten; loser superseded_by points at the POST-rewrite keeper id", async () => {
   const slotsDocs = {
