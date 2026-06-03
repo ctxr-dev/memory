@@ -123,7 +123,17 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
 
     for (const id of targets) {
       const prev = stampCache.get(id);
-      const existing = metaById.get(id) || {};
+      // The doc MUST be present in the snapshot to stamp safely: metaById.get()
+      // returns {} for a found doc with no custom fields, but also `undefined`
+      // for a doc absent from the listing (eventual-consistency / indexing lag).
+      // Stamping an absent doc would POST only the recall fields, and since Dify
+      // REPLACES the full custom set, that wipes atom_type / project_module / etc.
+      // Skip rather than risk a wipe; a later recall re-stamps once it is indexed.
+      if (!metaById.has(id)) {
+        summary.skipped++;
+        continue;
+      }
+      const existing = metaById.get(id);
       // Persisted debounce: also honor the doc's stored last_recalled_at, so a
       // cold in-process cache (after a restart / hot-reload) does not re-stamp a
       // document that Dify already records as recently recalled.

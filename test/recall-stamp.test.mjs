@@ -123,6 +123,25 @@ test("stampRecalls: list (metadata read) failure SKIPS stamping (never risks a w
   } });
 });
 
+test("stampRecalls: a recalled doc ABSENT from the listing is skipped (never a partial wipe)", () => {
+  // Regression (Copilot): metaById.get(missingId) was {} (same as a doc with no
+  // custom fields), so an indexing-lagged doc would be stamped with ONLY the
+  // recall fields, wiping atom_type/project_module (Dify replaces the full set).
+  _resetStampCache();
+  const docs = [{ id: "present", doc_metadata: [{ name: "atom_type", value: "bug-root-cause" }] }];
+  return withFetchStub(async (calls) => {
+    const summary = await stampRecalls(CONFIG, {
+      datasetId: DATASET,
+      records: [{ documentId: "ghost", datasetId: DATASET }], // not in the snapshot
+      nowMs: 1_000 * HOUR,
+      debounceHours: 24,
+    });
+    assert.equal(calls.filter((c) => c.url.includes("/documents/metadata")).length, 0, "no POST for a doc absent from the listing");
+    assert.equal(summary.stamped, 0);
+    assert.equal(summary.skipped, 1);
+  }, { responseFn: responder({ docs }) });
+});
+
 test("stampRecalls: persisted last_recalled_at debounces a cold cache (no re-stamp after restart)", () => {
   _resetStampCache(); // simulate a fresh process (cold cache)
   const recentIso = new Date(1_000 * HOUR - 1 * HOUR).toISOString(); // stamped 1h ago, within the 24h window

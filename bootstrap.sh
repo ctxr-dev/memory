@@ -823,7 +823,7 @@ case "${schedule:-}" in
   "") : ;;
   daily) schedule_job daily ;;
   off) schedule_job off ;;
-  *) echo "Unknown --schedule '$schedule' (use 'daily' or 'off')." >&2 ;;
+  *) echo "Unknown --schedule '$schedule' (use 'daily' or 'off')." >&2; exit 2 ;;
 esac
 
 # Best-effort backfill of the consolidate/recall metadata fields on EXISTING
