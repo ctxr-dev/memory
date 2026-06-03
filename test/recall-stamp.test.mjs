@@ -76,6 +76,17 @@ test("stampRecalls: one field GET + one list GET per dataset; multi-chunk docs c
   }, { responseFn: responder({ docs: DOCS }) });
 });
 
+test("stampRecalls: recall_count seeds from the PERSISTED value on a cold cache", () => {
+  _resetStampCache();
+  const docs = [{ id: "d1", doc_metadata: [{ name: "atom_type", value: "bug-root-cause" }, { name: "recall_count", value: "5" }] }];
+  return withFetchStub(async (calls) => {
+    await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d1", datasetId: DATASET }], nowMs: 1_000 * HOUR });
+    const post = calls.find((c) => c.url.includes("/documents/metadata"));
+    const list = JSON.parse(post.body).operation_data[0].metadata_list;
+    assert.equal(list.find((m) => m.name === "recall_count").value, "6", "seeded from persisted 5 -> 6, not reset to 1");
+  }, { responseFn: responder({ docs }) });
+});
+
 test("stampRecalls: dataset missing last_recalled_at field -> zero POSTs and no list GET", () => {
   _resetStampCache();
   return withFetchStub(async (calls) => {

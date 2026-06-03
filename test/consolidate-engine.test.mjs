@@ -107,7 +107,7 @@ test("merge: keeper rewritten; loser superseded_by points at the POST-rewrite ke
 test("keep-keeper-unchanged: no keeper rewrite; loser archived against the original keeper id", async () => {
   const slotsDocs = {
     knowledge: [
-      { documentId: "old", name: "dup.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision" }, body: "same body" },
+      { documentId: "old", name: "dup.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision", custom_extra: "keepme", document_name: "dup.md" }, body: "same body" },
       { documentId: "new", name: "dup.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "same body" },
     ],
   };
@@ -122,6 +122,8 @@ test("keep-keeper-unchanged: no keeper rewrite; loser archived against the origi
   const stamp = calls.updateMeta.find((u) => u.documentId === "old");
   assert.equal(stamp.metadata.superseded_by, "new");
   assert.equal(stamp.metadata.atom_type, "decision", "existing metadata preserved on the stamp (Dify replaces the full set)");
+  assert.equal(stamp.metadata.custom_extra, "keepme", "non-allowlisted custom field preserved");
+  assert.equal("document_name" in stamp.metadata, false, "Dify built-in not echoed back");
   assert.deepEqual(calls.disableDoc, ["old"]);
   assert.equal(res.totals.merged, 0);
   assert.equal(res.totals.archived, 1);

@@ -105,8 +105,14 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
 
     for (const id of targets) {
       const prev = stampCache.get(id);
-      const nextCount = (prev?.recallCount || 0) + 1;
       const existing = metaById.get(id) || {};
+      // Seed the counter from the in-process cache if present, otherwise from the
+      // PERSISTED recall_count (so a process restart / cold cache does not reset
+      // the count back to 1 and lose history).
+      const cachedCount = prev?.recallCount;
+      const persistedCount = Number(existing.recall_count);
+      const baseCount = Number.isFinite(cachedCount) ? cachedCount : Number.isFinite(persistedCount) ? persistedCount : 0;
+      const nextCount = baseCount + 1;
       // Preserve every existing custom field (those defined on the dataset),
       // overriding only the two recall fields. Skip Dify built-ins.
       const metadataList = [];

@@ -68,25 +68,20 @@ import {
 const DIFY_QUERY_MAX_CHARS = 240;
 
 // Dify's documents/metadata POST REPLACES a document's full custom-metadata set
-// (it is not a per-field merge). So every consolidate stamp MUST carry the
-// document's existing custom fields too, or they are wiped (atom_type /
-// project_module / error_pattern lost -> the doc becomes unfilterable). We carry
-// only this allow-list of consolidate-relevant custom fields; Dify built-ins
-// (document_name / uploader / upload_date / last_update_date / source) are
-// auto-managed and must NOT be echoed back.
-const CONSOLIDATE_META_FIELDS = [
-  "atom_type", "tags", "project_module", "language", "task_type", "error_pattern",
-  "last_recalled_at", "recall_count", "superseded_by", "consolidated_at", "stale",
-  "last_refreshed_at", "consolidate_truncated_at",
-];
+// (it is not a per-field merge). So every consolidate stamp MUST carry ALL of the
+// document's existing custom fields too, or they are wiped. We preserve every
+// existing field EXCEPT Dify's auto-managed built-ins (which must not be echoed
+// back) -- this also keeps any user-added custom fields beyond our own set.
+const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "last_update_date", "source"]);
 
 // Merge a stamp `patch` onto a leaf's EXISTING custom metadata (preserving every
-// field Dify would otherwise drop on a partial write).
+// non-built-in field Dify would otherwise drop on a partial write).
 function stampMeta(leaf, patch) {
   const out = {};
   const m = leaf?.metadata || {};
-  for (const k of CONSOLIDATE_META_FIELDS) {
-    if (m[k] != null && m[k] !== "") out[k] = m[k];
+  for (const [k, v] of Object.entries(m)) {
+    if (DIFY_BUILTIN_META.has(k)) continue;
+    if (v != null && v !== "") out[k] = v;
   }
   return { ...out, ...patch };
 }
