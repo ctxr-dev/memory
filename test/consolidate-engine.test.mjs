@@ -148,6 +148,28 @@ test("skip: neither doc archived", async () => {
   assert.equal(res.totals.archived, 0);
 });
 
+test("merge: unexpected/typo'd LLM action is a safe no-op (loser NOT archived)", async () => {
+  // Regression (Copilot): callLLMWithRetry has no schema validation, so an
+  // action outside {merge, keep-keeper-unchanged, skip} must not fall through
+  // and archive the loser.
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "old", name: "dup.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision" }, body: "same body" },
+      { documentId: "new", name: "dup.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "same body" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    mergeResponder: (o) => ({ action: "keep", keeper_id: o.keeper.documentId, loser_id: o.loser.documentId, reason: "typo'd action" }),
+    refreshResponder: () => ({}),
+  });
+  const res = await consolidateMemory({ now: NOW, passes: ["dedupe-by-sha256", "llm-merge-near-duplicates"], deps });
+  assert.equal(calls.disableDoc.length, 0, "unexpected action must not archive");
+  assert.equal(calls.saveDoc.length, 0, "unexpected action must not rewrite");
+  assert.equal(res.totals.archived, 0);
+});
+
 test("no-LLM: exact dup archived; fuzzy similarity flagged-only (never archived)", async () => {
   const slotsDocs = {
     knowledge: [

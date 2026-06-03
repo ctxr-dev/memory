@@ -364,6 +364,14 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
       mergeReport.flagged++;
       continue;
     }
+    // Allow-list the archive actions: callLLMWithRetry has no schema validation,
+    // so an unexpected/typo'd action must NOT fall through and archive the loser.
+    // Treat anything other than merge / keep-keeper-unchanged as a safe no-op.
+    if (decision.action !== "merge" && decision.action !== "keep-keeper-unchanged") {
+      mergeReport.errors++;
+      process.stderr.write(`[consolidate] merge LLM returned unexpected action='${decision.action}' for ${p.keeper.documentId}|${p.loser.documentId}; leaving both active\n`);
+      continue;
+    }
     let keeperId = p.keeper.documentId;
     if (decision.action === "merge") {
       let body = String(decision.merged_body || "");
