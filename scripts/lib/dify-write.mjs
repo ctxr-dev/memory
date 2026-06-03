@@ -227,3 +227,21 @@ export function updateDocMetadata({ datasetId, documentId, metadata } = {}) {
 export function listDatasets() {
   return execCli("list-datasets", {});
 }
+
+export function listMetadataFields({ datasetId } = {}) {
+  return execCli("list-metadata-fields", { datasetId });
+}
+
+export function createMetadataField({ datasetId, name, type } = {}) {
+  return execCli("create-metadata-field", { datasetId, name, type: type || "string" });
+}
+
+// Consolidate working-set listing: every document in a dataset (enabled AND
+// disabled) with its flattened per-doc metadata + created_at + enabled flag.
+// The plain `list` subcommand omits metadata, which the consolidate
+// orchestrator needs (atom_type / error_pattern / stale / created_at) to group
+// and age documents. Bodies are NOT included (fetched lazily per surviving
+// candidate via readDocument).
+export function listForConsolidate({ datasetId } = {}) {
+  return execCli("list-consolidate", { datasetId });
+}

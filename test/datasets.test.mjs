@@ -12,7 +12,7 @@ import {
   metadataForDify,
   routeAtomToDataset,
 } from "../scripts/lib/datasets.mjs";
-import { PER_DOC_METADATA_FIELDS, ATOM_TYPES as BRIDGE_ATOM_TYPES, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "../mcp-server/src/schema.js";
+import { PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA, ATOM_TYPES as BRIDGE_ATOM_TYPES, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES } from "../mcp-server/src/schema.js";
 
 test("ATOM_TYPES: stable known set", () => {
   const expected = [
@@ -182,18 +182,45 @@ test("KNOWLEDGE_CROSSREF_ATOM_TYPES: subset of host ATOM_TYPES, members route to
   }
 });
 
-test("METADATA_SCHEMA: every field is type=string", () => {
-  // Dify supports only string / number / time per-doc metadata types.
-  // Today every field is string. If a future change flips one to number
-  // without updating the bridge installer or the docs, dify-setup.sh and
-  // create_dataset would install mismatched types and metadata writes
-  // would silently skip the field. Lock the type alongside the name
-  // parity test above.
+test("METADATA_SCHEMA: every field type is a valid Dify type", () => {
+  // Dify supports only string / number / time per-doc metadata types. Every
+  // field today (including the consolidate/recall set) is `string` (ISO
+  // timestamps + numeric-string count, parsed client-side). Lock the allowed
+  // set so a typo'd type ("datetime", "int") is caught before it reaches
+  // create_dataset / dify-setup.sh (which would install a field Dify rejects).
+  const VALID = new Set(["string", "number", "time"]);
   for (const field of METADATA_SCHEMA) {
-    assert.equal(
-      field.type,
-      "string",
-      `METADATA_SCHEMA field '${field.name}' is type='${field.type}'; expected 'string'`,
+    assert.ok(
+      VALID.has(field.type),
+      `METADATA_SCHEMA field '${field.name}' has type='${field.type}'; expected one of string|number|time`,
     );
+  }
+});
+
+test("METADATA_SCHEMA cross-runtime TYPE parity: datasets.mjs == schema.js (name + type, in order)", () => {
+  // The name-parity test above locks the field names. This locks the TYPES
+  // too: create_dataset (bridge, PER_DOC_METADATA_SCHEMA) and dify-setup.sh
+  // must install the SAME type for each field, or a doc's metadata write for
+  // a time/number field silently no-ops against a string-typed field.
+  assert.deepEqual(
+    PER_DOC_METADATA_SCHEMA,
+    METADATA_SCHEMA,
+    "drift between mcp-server/src/schema.js:PER_DOC_METADATA_SCHEMA and scripts/lib/datasets.mjs:METADATA_SCHEMA: both must list the same {name,type} entries in the same order",
+  );
+});
+
+test("METADATA_SCHEMA: consolidate/recall fields present with expected types", () => {
+  const byName = Object.fromEntries(METADATA_SCHEMA.map((f) => [f.name, f.type]));
+  const expected = {
+    last_recalled_at: "string",
+    recall_count: "string",
+    superseded_by: "string",
+    consolidated_at: "string",
+    stale: "string",
+    last_refreshed_at: "string",
+    consolidate_truncated_at: "string",
+  };
+  for (const [name, type] of Object.entries(expected)) {
+    assert.equal(byName[name], type, `field '${name}' should be type='${type}'`);
   }
 });

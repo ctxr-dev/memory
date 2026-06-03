@@ -431,9 +431,17 @@ restart_bridge || { echo "FATAL: cannot proceed without a healthy bridge." >&2; 
 
 # ---------- install metadata schema on every BOUND slot ----------
 # Boilerplate's filtered-retrieve and per-document metadata writes assume
-# every slot has the six fields below. Idempotent: skipped if the field
+# every slot has the fields below. Idempotent: skipped if the field
 # already exists on the dataset.
-SCHEMA_FIELDS=(atom_type tags project_module language task_type error_pattern)
+#
+# Mirror of scripts/lib/datasets.mjs:METADATA_SCHEMA and
+# mcp-server/src/schema.js:PER_DOC_METADATA_SCHEMA (parity-locked by
+# test/datasets.test.mjs). The trailing seven back the consolidate
+# orchestrator + recall instrumentation; all are `string` (ISO timestamps +
+# numeric-string count, parsed client-side).
+SCHEMA_FIELDS=(atom_type tags project_module language task_type error_pattern \
+  last_recalled_at recall_count superseded_by consolidated_at stale \
+  last_refreshed_at consolidate_truncated_at)
 
 install_metadata_schema() {
   local slot="$1" dataset_id="$2"

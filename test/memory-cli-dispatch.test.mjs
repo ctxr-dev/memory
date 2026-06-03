@@ -34,6 +34,7 @@ const EXPECTED_SUBCOMMANDS = [
   "write",
   "save",
   "list",
+  "list-consolidate",
   "read",
   "disable",
   "enable",

@@ -26,6 +26,17 @@ export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
 export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
+// Durable cron/consolidate state lives under the gitignored data dir's
+// `state/` folder (NOT MEMORY_DIR/src, which is the read-only mounted bridge
+// source). compose.mcp.yaml mounts this folder read-only into the container so
+// the cron_health MCP tool can read the attempts log written host-side by the
+// cron. Both the dev clone (./memory) and the installed clone (.memory/src)
+// resolve MEMORY_DATA_DIR to the same <workspace>/.memory, so they share one
+// canonical state dir per workspace.
+export const STATE_DIR = path.join(MEMORY_DATA_DIR, "state");
+export const CONSOLIDATE_STATE_PATH = path.join(STATE_DIR, ".consolidate-state.json");
+export const CONSOLIDATE_ATTEMPTS_LOG_PATH = path.join(STATE_DIR, ".consolidate-attempts.log");
+
 // Parse one .env value. Deliberately small (NOT a full dotenv parser): it
 // trims, honours a simple pair of surrounding single or double quotes (the
 // content from the first quote to the next matching quote is taken literally,
@@ -82,6 +93,26 @@ export function envInt(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Float reader for the 0..1 similarity / score thresholds. Returns the parsed
+// value when finite and strictly positive, else the fallback. (Thresholds are
+// always > 0; a 0 or negative value is treated as "unset, use default" rather
+// than "match everything", which would archive aggressively.)
+export function envFloat(name, fallback) {
+  const raw = envValue(name, "");
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Boolean reader. Only the exact string "true"/"false" (case-insensitive)
+// flips the value; anything else (unset, "", garbage) returns the fallback.
+// Mirrors the `=== "true"` convention already used for MEMORY_COMPILE_QUALITY_STRICT.
+export function envBool(name, fallback) {
+  const raw = String(envValue(name, "")).trim().toLowerCase();
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return fallback;
+}
+
 // Maximum body length for typed atoms, both at flush-time validation and at
 // compile-time prompt rendering. Configurable via MEMORY_ATOM_BODY_MAX_CHARS;
 // default 700 to fit a structured atom (rule + Why + How to apply) without
@@ -100,4 +131,86 @@ export function atomBodyMaxChars() {
 export function slotEnvKey(slot) {
   const tag = String(slot || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   return `DIFY_DATASET_${tag}_ID`;
+}
+
+// ─── consolidate orchestrator knobs ──────────────────────────────────────────
+// All env-overridable; defaults documented in .env.example. Numeric readers
+// reuse envInt/envFloat (positive-or-fallback), so a blank or garbage value
+// silently falls back rather than disabling a pass.
+
+// Rolling-window cadence for the `--if-due` throttle: consolidate does heavy
+// work at most once per this many days (the hourly cron attempts up to 24x).
+export const CONSOLIDATE_INTERVAL_DAYS_DEFAULT = 1;
+export function consolidateIntervalDays() {
+  return envInt("MEMORY_CONSOLIDATE_INTERVAL_DAYS", CONSOLIDATE_INTERVAL_DAYS_DEFAULT);
+}
+
+// Dify hybrid score (NOT raw cosine) at/above which two docs are merge
+// candidates in the similarity pass. Higher = stricter (fewer merges).
+export function consolidateSimilarityThreshold() {
+  return envFloat("MEMORY_CONSOLIDATE_SIMILARITY_THRESHOLD", 0.88);
+}
+
+// Coarser score floor for the per-doc cluster lookup that feeds the
+// LLM-refresh prompt (wants surrounding context, not just near-duplicates).
+export function consolidateClusterScoreThreshold() {
+  return envFloat("MEMORY_CONSOLIDATE_CLUSTER_SCORE_THRESHOLD", 0.5);
+}
+
+// Top-K members fetched per cluster lookup.
+export function consolidateClusterTopK() {
+  return envInt("MEMORY_CONSOLIDATE_CLUSTER_TOP_K", 12);
+}
+
+// A doc whose last activity (max of last_recalled_at, created_at) is older than
+// this many months is flagged stale (then refreshed/archived by the LLM pass).
+export function consolidateStaleAfterMonths() {
+  return envInt("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
+}
+
+// Per-run cap on LLM semantic-refresh calls (bounds token cost + write volume);
+// remaining stale docs carry over to the next run.
+export function consolidateRefreshMaxPerRun() {
+  return envInt("MEMORY_CONSOLIDATE_REFRESH_MAX_PER_RUN", 25);
+}
+
+// An already-disabled doc untouched for this many days is a compress-archived
+// candidate (its body is truncated to free stored bytes).
+export function consolidateArchiveAgeDays() {
+  return envInt("MEMORY_CONSOLIDATE_ARCHIVE_AGE_DAYS", 180);
+}
+
+// Max body length for a compressed archived doc.
+export function consolidateArchiveBodyMax() {
+  return envInt("MEMORY_CONSOLIDATE_ARCHIVE_BODY_MAX", 1200);
+}
+
+// Max body length for a consolidated/refined (merge/rewrite) atom. Defaults to
+// the shared atom cap so merges stay the same size class as normal atoms.
+export function consolidateAtomBodyMaxChars() {
+  return envInt("MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS", atomBodyMaxChars());
+}
+
+// Master switch for the two LLM passes (merge + refresh). Off => deterministic
+// dedup/archive only (exact + lesson-key); fuzzy-similarity pairs are flag-only.
+export function consolidateLlmEnabled() {
+  return envBool("MEMORY_CONSOLIDATE_LLM", true);
+}
+
+// Schema-validation retry budget for an LLM pass call.
+export function consolidateLlmMaxRetries() {
+  return envInt("MEMORY_CONSOLIDATE_LLM_MAX_RETRIES", 2);
+}
+
+// CSV allow-list of pass names (or "all"). Resolution: explicit CLI/MCP arg >
+// this env > "all". Returns the raw string for the orchestrator to parse.
+export function consolidatePassesEnv() {
+  return String(envValue("MEMORY_CONSOLIDATE_PASSES", "all") || "all");
+}
+
+// Recall-stamp debounce: recall_lessons / search_memory skip re-stamping
+// last_recalled_at on a doc seen within this many hours (bounds write
+// amplification on hot docs). Consumed by mcp-server/src/recall-stamp.js.
+export function recallStampDebounceHours() {
+  return envInt("MEMORY_RECALL_STAMP_DEBOUNCE_HOURS", 24);
 }
