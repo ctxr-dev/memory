@@ -1,7 +1,9 @@
 // Lock the recall-stamp helper: the debounce predicate, the write-amplification
-// controls (one field-index GET + one list GET per dataset), the
-// metadata-PRESERVING merge (Dify's POST replaces the full set, so existing
-// custom fields must be carried), the missing-field no-op, and swallowed errors.
+// controls (one field-index GET + one list PASS per dataset, not a read per
+// returned doc; the list pass itself paginates via listAllDocuments for datasets
+// over the page size), the metadata-PRESERVING merge (Dify's POST replaces the
+// full set, so existing custom fields must be carried), the missing-field no-op,
+// and swallowed errors.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -48,7 +50,7 @@ test("shouldStamp: absent/within-window/older/boundary", () => {
   assert.equal(shouldStamp(new Date(now - 24 * HOUR).toISOString(), now, 24), true);
 });
 
-test("stampRecalls: one field GET + one list GET per dataset; multi-chunk docs collapse; existing fields preserved", () => {
+test("stampRecalls: one field-index GET + one list PASS per dataset (per-dataset, not per-record); multi-chunk docs collapse; existing fields preserved", () => {
   _resetStampCache();
   return withFetchStub(async (calls) => {
     const records = [
@@ -61,7 +63,13 @@ test("stampRecalls: one field GET + one list GET per dataset; multi-chunk docs c
     const listGets = calls.filter((c) => /\/documents\?/.test(c.url));
     const posts = calls.filter((c) => c.url.includes("/documents/metadata"));
     assert.equal(fieldGets.length, 1, "one field-index GET");
-    assert.equal(listGets.length, 1, "one list GET (to read current metadata)");
+    // The metadata read is ONE list pass per dataset, not a read per returned
+    // record. This single-page fixture (has_more:false) fits in one GET;
+    // listAllDocuments paginates into more GETs for datasets over the page size,
+    // so the invariant is "independent of record count", asserted here as < the
+    // number of records rather than a hard "== 1" production guarantee.
+    assert.equal(listGets.length, 1, "one list GET for this single-page fixture");
+    assert.ok(listGets.length < records.length, "list reads do not scale per-record (per-dataset, not per-doc)");
     assert.equal(posts.length, 2, "one POST per unique documentId");
     assert.equal(summary.stamped, 2);
     // d1's POST preserves atom_type AND sets last_recalled_at + recall_count, and
