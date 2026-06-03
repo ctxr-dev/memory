@@ -13,6 +13,7 @@
 //
 // Exit codes:
 //   0  success (fields installed or dry-run completed)
+//   1  partial failure (one or more field creations failed)
 //   2  preflight failure (no slots bound / bridge unavailable)
 //   3  user error (bad arg)
 
@@ -69,7 +70,7 @@ Options:
   --help, -h              This help.
 
 Exit codes:
-  0 success   2 preflight failure   3 user error
+  0 success   1 partial failure (some fields failed)   2 preflight failure   3 user error
 `);
 }
 

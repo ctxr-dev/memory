@@ -17,10 +17,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { MEMORY_DIR, CONSOLIDATE_ATTEMPTS_LOG_PATH } from "./lib/env.mjs";
+import { MEMORY_DIR, MEMORY_DATA_DIR, CONSOLIDATE_ATTEMPTS_LOG_PATH } from "./lib/env.mjs";
+import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 
 const MAX_LOG_LINES = 200;
 const STDERR_CAP_BYTES = 2000;
+// Serialises cron-job runs so two overlapping invocations (launchd/cron can
+// start a new run before the previous finishes) never race appendAttempt's
+// read-rewrite log truncation.
+const CRON_LOCK_PATH = path.join(MEMORY_DATA_DIR, "state", ".cron-job.lock");
 
 function appendAttempt(entry) {
   try {
@@ -93,51 +98,77 @@ export async function runCronJob() {
   const compileCli = path.join(MEMORY_DIR, "scripts", "compile.mjs");
   const consolidateCli = path.join(MEMORY_DIR, "scripts", "consolidate.mjs");
 
-  // 1. compile (per-UTC-day state; cheap no-op on re-run).
-  try {
-    const r = runStep(compileCli, []);
-    entry.compile = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
-    if (!r.ok) {
-      entry.error = `compile exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
-      entry.durationMs = Date.now() - start;
-      appendAttempt(entry);
-      return entry;
-    }
-  } catch (err) {
-    entry.error = `compile threw: ${err?.message || err}`;
-    entry.durationMs = Date.now() - start;
-    appendAttempt(entry);
-    return entry;
+  // Skip (don't append) if another cron-job run holds the lock: it logs its own
+  // attempt; appending from a second instance would race the log truncation.
+  installLockReleaseHandlers(CRON_LOCK_PATH);
+  const cronLock = acquireLock(CRON_LOCK_PATH, { label: "cron-job" });
+  if (!cronLock.ok) {
+    return { ...entry, ok: true, skipped: "overlap", durationMs: Date.now() - start };
   }
 
-  // 2. consolidate --if-due --json (self-throttles to once per cadence).
   try {
-    const r = runStep(consolidateCli, ["--if-due", "--json"]);
-    entry.consolidate = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
-    if (r.ok) {
-      try {
-        const body = JSON.parse(r.stdout);
-        entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null };
-      } catch {
-        /* exit 0 but unparseable stdout: leave summary unset */
+    // 1. compile (per-UTC-day state; cheap no-op on re-run).
+    try {
+      const r = runStep(compileCli, []);
+      entry.compile = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
+      if (!r.ok) {
+        entry.error = `compile exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
+        entry.durationMs = Date.now() - start;
+        appendAttempt(entry);
+        return entry;
       }
-    } else {
-      entry.error = `consolidate exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
+    } catch (err) {
+      entry.error = `compile threw: ${err?.message || err}`;
       entry.durationMs = Date.now() - start;
       appendAttempt(entry);
       return entry;
     }
-  } catch (err) {
-    entry.error = `consolidate threw: ${err?.message || err}`;
+
+    // 2. consolidate --if-due --json (self-throttles to once per cadence).
+    try {
+      const r = runStep(consolidateCli, ["--if-due", "--json"]);
+      entry.consolidate = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
+      if (r.ok) {
+        try {
+          const body = JSON.parse(r.stdout);
+          entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null };
+          // A zero exit code is not enough: consolidate can exit 0 while
+          // reporting ok:false or per-doc errors. Surface those so cron-health
+          // does not mask them as a clean run.
+          const errs = Number(body?.totals?.errors) || 0;
+          if (body && body.ok === false) {
+            entry.error = `consolidate not ok: ${body.error || "unknown"}`;
+          } else if (errs > 0) {
+            entry.error = `consolidate completed with ${errs} error(s)`;
+          }
+        } catch {
+          /* exit 0 but unparseable stdout: leave summary unset */
+        }
+      } else {
+        entry.error = `consolidate exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
+        entry.durationMs = Date.now() - start;
+        appendAttempt(entry);
+        return entry;
+      }
+    } catch (err) {
+      entry.error = `consolidate threw: ${err?.message || err}`;
+      entry.durationMs = Date.now() - start;
+      appendAttempt(entry);
+      return entry;
+    }
+
+    // ok unless a non-fatal consolidate error was surfaced above.
+    entry.ok = !entry.error;
     entry.durationMs = Date.now() - start;
     appendAttempt(entry);
     return entry;
+  } finally {
+    try {
+      cronLock.release && cronLock.release();
+    } catch {
+      /* best-effort */
+    }
   }
-
-  entry.ok = true;
-  entry.durationMs = Date.now() - start;
-  appendAttempt(entry);
-  return entry;
 }
 
 async function main() {
