@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { consolidateMemory, resolveAllowedPasses, parseArgs, ALL_PASS_NAMES } from "../scripts/consolidate.mjs";
+import { consolidateMemory, resolveAllowedPasses, allowListIsEffective, parseArgs, ALL_PASS_NAMES } from "../scripts/consolidate.mjs";
 
 const SEC = 1; // createdAt in seconds
 const NOW = new Date("2026-06-03T00:00:00Z");
@@ -296,6 +296,37 @@ test("empty --passes is a no-op skip that does NOT write state (won't suppress n
   assert.equal(calls.list.length, 0, "no work done");
   assert.equal(res.dryRun, false, "result carries dryRun");
   assert.ok(res.passes && res.passes["dedupe-by-sha256"], "result carries the per-pass report shape");
+});
+
+test("allowListIsEffective: only-LLM-pass lists that cannot run are ineffective", () => {
+  const set = (...names) => new Set(names);
+  // llm-merge alone: needs a source dedupe pass -> ineffective even with the LLM.
+  assert.equal(allowListIsEffective(set("llm-merge-near-duplicates"), true), false);
+  // llm-merge WITH a source pass and the LLM -> effective.
+  assert.equal(allowListIsEffective(set("llm-merge-near-duplicates", "dedupe-by-sha256"), true), true);
+  // llm-semantic-refresh: effective only when the LLM is enabled.
+  assert.equal(allowListIsEffective(set("llm-semantic-refresh"), false), false);
+  assert.equal(allowListIsEffective(set("llm-semantic-refresh"), true), true);
+  // any deterministic pass is always effective (sha256/lesson-key archive, similarity flags).
+  assert.equal(allowListIsEffective(set("dedupe-by-sha256"), false), true);
+  assert.equal(allowListIsEffective(set("staleness-flag"), false), true);
+  assert.equal(allowListIsEffective(set("compress-archived"), false), true);
+  assert.equal(allowListIsEffective(set("dedupe-by-similarity"), false), true);
+});
+
+test("ineffective non-empty --passes is a no-op skip that does NOT write state", async () => {
+  // Regression (Copilot): --passes=llm-semantic-refresh with the LLM disabled (or
+  // llm-merge alone) does zero work but used to stamp last_run_utc, letting
+  // --if-due suppress the next real scheduled run for a whole cadence.
+  const slotsDocs = { knowledge: [{ documentId: "a", name: "a.md", createdAtSec: nowSec, metadata: { atom_type: "self-improvement-lesson" }, body: "x" }] };
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  let stateWritten = false;
+  deps.writeState = () => { stateWritten = true; };
+  const res = await consolidateMemory({ now: NOW, passes: "llm-semantic-refresh", llm: false, deps });
+  assert.equal(res.ok, true);
+  assert.equal(res.skipped, "no-effective-passes");
+  assert.equal(stateWritten, false, "an ineffective run must not write state");
+  assert.equal(calls.list.length, 0, "no work done");
 });
 
 test("truncation honours the cap even when the marker alone exceeds it (pathological tiny cap)", async (t) => {

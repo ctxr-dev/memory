@@ -162,6 +162,36 @@ export function resolveAllowedPasses(passesArg) {
   return fromCsv(str);
 }
 
+// A non-empty allow-list can still be a GUARANTEED no-op under the current LLM
+// state, in which case running it would write .consolidate-state.json and let a
+// later --if-due run suppress the next real pass for a whole cadence with no work
+// ever possible. A pass can execute when:
+//   - it is deterministic (sha256 / lesson-key / similarity / staleness-flag /
+//     compress-archived) — always runnable (sha256/lesson-key archive without an
+//     LLM; similarity flags; staleness/compress are pure);
+//   - llm-semantic-refresh — only with the LLM;
+//   - llm-merge-near-duplicates — only with the LLM AND a source dedupe pass to
+//     produce pairs (alone it is always a no-op).
+// The allow-list is "effective" iff at least one of its passes can execute.
+export function allowListIsEffective(allowed, llmRequested) {
+  const hasSource =
+    allowed.has(SOURCE_PASSES.SHA256) ||
+    allowed.has(SOURCE_PASSES.LESSON_KEY) ||
+    allowed.has(SOURCE_PASSES.SIMILARITY);
+  for (const p of allowed) {
+    if (p === "llm-merge-near-duplicates") {
+      if (llmRequested && hasSource) return true;
+      continue;
+    }
+    if (p === "llm-semantic-refresh") {
+      if (llmRequested) return true;
+      continue;
+    }
+    return true; // any deterministic pass
+  }
+  return false;
+}
+
 // Normalise a list-consolidate document row into a core leaf. Dify created_at
 // is epoch SECONDS; the core wants epoch ms.
 function toLeaf(row, category) {
@@ -599,13 +629,17 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
   const allowed = resolveAllowedPasses(passes);
   const llmRequested = consolidateLlmEnabled() && llm !== false;
 
-  // Empty allow-list (e.g. an accidental `--passes=`): do NOTHING and, crucially,
-  // do NOT write state. Otherwise this no-op run would stamp last_run_utc and let
-  // --if-due suppress the next real scheduled run for a whole cadence.
-  if (allowed.size === 0) {
+  // An empty allow-list (e.g. an accidental `--passes=`) OR a non-empty list whose
+  // only passes cannot execute under the current LLM state (e.g.
+  // `--passes=llm-merge-near-duplicates` with no source pass, or
+  // `--passes=llm-semantic-refresh` with the LLM disabled) is a GUARANTEED no-op.
+  // Do NOTHING and, crucially, do NOT write state: otherwise this no-op run would
+  // stamp last_run_utc and let --if-due suppress the next real scheduled run for a
+  // whole cadence even though no work was ever possible.
+  if (allowed.size === 0 || !allowListIsEffective(allowed, llmRequested)) {
     return {
       ok: true,
-      skipped: "no-passes",
+      skipped: allowed.size === 0 ? "no-passes" : "no-effective-passes",
       dryRun: Boolean(dryRun),
       llmRequested,
       llm: false,
