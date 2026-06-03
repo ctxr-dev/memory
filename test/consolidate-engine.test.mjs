@@ -14,7 +14,7 @@ const MONTH_SEC = 2_629_800; // ~30.4 days in seconds
 const nowSec = Math.floor(NOW.getTime() / 1000);
 
 // Build an injectable deps object backed by in-memory slot documents.
-function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch, failList }) {
+function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm, failSearch, failList, lockHeld }) {
   const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [], searchQueries: [] };
   let saveN = 0;
   let stateValue = null;
@@ -23,7 +23,7 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
 
   const deps = {
     loadEnv: () => env,
-    acquireLock: () => ({ ok: true, release() {} }),
+    acquireLock: () => (lockHeld ? { ok: false, reason: "held by pid=999", owner: { pid: 999 } } : { ok: true, release() {} }),
     readState: () => stateValue,
     writeState: (s) => { stateValue = s; },
     listForConsolidate: async ({ datasetId }) => {
@@ -226,6 +226,14 @@ test("dry-run: zero writes, projection still counts", async () => {
   assert.equal(res.dryRun, true);
   assert.equal(res.totals.merged, 1);
   assert.equal(res.totals.archived, 1);
+});
+
+test("held lock is a benign skip: ok:true (so the CLI exits 0 and the cron is not marked failed)", async () => {
+  const { deps, calls } = makeDeps({ slotsDocs: { knowledge: [] }, env: KNOWLEDGE_ENV, lockHeld: true, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  const res = await consolidateMemory({ now: NOW, llm: false, deps });
+  assert.equal(res.ok, true, "locked-by must be ok:true (benign skip), not a failure");
+  assert.equal(res.skipped, "locked-by");
+  assert.equal(calls.list.length, 0, "no work done while locked");
 });
 
 test("undeclared bound slot refuses before any list/write", async () => {

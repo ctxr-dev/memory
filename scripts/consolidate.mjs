@@ -619,9 +619,13 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
   }
 
   // 3. Lock (shared with compile so the two never race / share one LLM window).
+  // A held lock is a BENIGN skip (compile or another consolidate is running),
+  // not a failure: return ok:true so the CLI exits 0 and the hourly cron does
+  // not record a false failure / flip cron-health to unhealthy. The next tick
+  // retries once the lock frees.
   const lock = D.acquireLock();
   if (!lock.ok) {
-    return { ok: false, skipped: "locked-by", reason: lock.reason, owner: lock.owner, llmRequested, llm: false };
+    return { ok: true, skipped: "locked-by", reason: lock.reason, owner: lock.owner, llmRequested, llm: false };
   }
 
   const ctx = { llmEnabled: llmRequested };
