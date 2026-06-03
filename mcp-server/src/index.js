@@ -24,7 +24,7 @@ let findFiles, defaultGlobs, mergeIgnore, relPathToDocName;
 let lessonDocName;
 let PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
 let WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters;
-let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons;
+let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons, indexDocMetadata;
 
 // Monotonic, not Date.now(): each value busts the ESM cache so a changed file
 // re-evaluates. Node's ESM loader retains prior specifiers, so every reload
@@ -65,6 +65,7 @@ async function loadLib() {
     DEFAULT_PROJECT_MODULE: workspace.DEFAULT_PROJECT_MODULE, computeInjectedFilters: workspace.computeInjectedFilters,
     findStalePlans: audit.findStalePlans, findMissingMetadata: audit.findMissingMetadata,
     findStaleProjectLore: audit.findStaleProjectLore, findDuplicateErrorPatternLessons: audit.findDuplicateErrorPatternLessons,
+    indexDocMetadata: audit.indexDocMetadata,
   };
   for (const [k, val] of Object.entries(next)) {
     if (val === undefined) throw new Error(`hot reload aborted: module export '${k}' is missing`);
@@ -75,7 +76,7 @@ async function loadLib() {
     findFiles, defaultGlobs, mergeIgnore, relPathToDocName, lessonDocName,
     PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
     WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters,
-    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = next);
+    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons, indexDocMetadata } = next);
 }
 await loadLib();
 
@@ -1151,16 +1152,6 @@ server.registerTool(
   },
 );
 
-// Flatten Dify's doc_metadata array ([{name,value,type}]) into a key->value map.
-function flattenDocMeta(doc) {
-  const md = {};
-  const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
-  for (const f of fields) {
-    if (f?.name) md[f.name] = f.value;
-  }
-  return md;
-}
-
 function envIntDefault(name, fallback) {
   const n = Number.parseInt(process.env[name] || "", 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -1219,7 +1210,7 @@ server.registerTool(
             category: slot,
             createdAtMs: (Number(row?.created_at) || 0) * 1000,
             enabled: row?.enabled !== false,
-            metadata: flattenDocMeta(row),
+            metadata: indexDocMetadata(row),
           }));
           const active = leaves.filter((l) => l.enabled);
           const disabled = leaves.filter((l) => !l.enabled);

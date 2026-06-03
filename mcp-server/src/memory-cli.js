@@ -27,6 +27,7 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
 import { WORKSPACE_MOUNT as WORKSPACE_ROOT, ABSORB_MAX_FILE_BYTES as MAX_FILE_BYTES } from "./workspace.js";
+import { indexDocMetadata } from "./audit.js";
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -183,15 +184,6 @@ async function readCmd(config, { datasetId, documentId }) {
   return { datasetId: requireDifyWriteConfig(config, datasetId), documentId, text };
 }
 
-// Flatten Dify's doc_metadata array ([{name,value,type}]) into a key->value map.
-function flattenDocMetadata(doc) {
-  const md = {};
-  const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
-  for (const f of fields) {
-    if (f?.name) md[f.name] = f.value;
-  }
-  return md;
-}
 
 // Consolidate working-set listing: EVERY document in a dataset (enabled and
 // disabled) with its flattened per-doc metadata + created_at + enabled flag.
@@ -210,7 +202,7 @@ async function listConsolidateCmd(config, { datasetId }) {
       enabled: d?.enabled,
       createdAt: d?.created_at,
       wordCount: d?.word_count,
-      metadata: flattenDocMetadata(d),
+      metadata: indexDocMetadata(d),
     })),
   };
 }

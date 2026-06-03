@@ -199,11 +199,6 @@ export function consolidateLlmEnabled() {
   return envBool("MEMORY_CONSOLIDATE_LLM", true);
 }
 
-// Schema-validation retry budget for an LLM pass call.
-export function consolidateLlmMaxRetries() {
-  return envInt("MEMORY_CONSOLIDATE_LLM_MAX_RETRIES", 2);
-}
-
 // CSV allow-list of pass names (or "all"). Resolution: explicit CLI/MCP arg >
 // this env > "all". Returns the raw string for the orchestrator to parse.
 export function consolidatePassesEnv() {

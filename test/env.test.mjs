@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { slotEnvKey, envValue, envInt, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR, parseEnvValue } from "../scripts/lib/env.mjs";
+import { slotEnvKey, envValue, envInt, envFloat, envBool, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR, parseEnvValue } from "../scripts/lib/env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -113,6 +113,40 @@ test("envValue: empty process.env value falls through to file/fallback", (t) => 
   // The file lookup may also return "" (no MEMORY_TEST_... in any .env);
   // the contract is that the fallback wins.
   assert.equal(envValue(key, "fallback"), "fallback");
+});
+
+test("envFloat: parses positive floats, falls back on non-positive/garbage/unset", (t) => {
+  const KEY = "MEMORY_TEST_FLOAT_XYZ";
+  t.after(() => { delete process.env[KEY]; });
+  process.env[KEY] = "0.5";
+  assert.equal(envFloat(KEY, 6), 0.5);
+  process.env[KEY] = "2";
+  assert.equal(envFloat(KEY, 6), 2);
+  process.env[KEY] = "0"; // not > 0 -> fallback
+  assert.equal(envFloat(KEY, 6), 6);
+  process.env[KEY] = "-1"; // negative -> fallback
+  assert.equal(envFloat(KEY, 6), 6);
+  process.env[KEY] = "abc"; // garbage -> fallback
+  assert.equal(envFloat(KEY, 6), 6);
+  delete process.env[KEY]; // unset -> fallback
+  assert.equal(envFloat(KEY, 6), 6);
+});
+
+test("envBool: only exact true/false (case-insensitive) flip; else fallback", (t) => {
+  const KEY = "MEMORY_TEST_BOOL_XYZ";
+  t.after(() => { delete process.env[KEY]; });
+  process.env[KEY] = "true";
+  assert.equal(envBool(KEY, false), true);
+  process.env[KEY] = "TRUE";
+  assert.equal(envBool(KEY, false), true);
+  process.env[KEY] = "false";
+  assert.equal(envBool(KEY, true), false);
+  process.env[KEY] = "1"; // not a recognised bool -> fallback
+  assert.equal(envBool(KEY, true), true);
+  process.env[KEY] = ""; // empty -> fallback
+  assert.equal(envBool(KEY, true), true);
+  delete process.env[KEY]; // unset -> fallback
+  assert.equal(envBool(KEY, false), false);
 });
 
 test("envValue: unset key returns fallback", () => {
