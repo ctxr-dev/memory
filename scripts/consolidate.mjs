@@ -104,7 +104,9 @@ export const ALL_PASS_NAMES = Object.freeze([
 // tiny cap), the marker is returned verbatim.
 function truncateWithMarker(text, cap, marker) {
   const room = Math.max(0, cap - marker.length);
-  if (room === 0) return marker;
+  // Pathological tiny cap (marker alone >= cap): still honour the <= cap
+  // contract by returning the marker clipped to cap.
+  if (room === 0) return marker.slice(0, cap);
   return String(text).slice(0, room).replace(/\s+$/, "") + marker;
 }
 
@@ -604,12 +606,13 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     return {
       ok: true,
       skipped: "no-passes",
+      dryRun: Boolean(dryRun),
       llmRequested,
       llm: false,
       policies: {},
       refine: [],
       workingSetSize: 0,
-      passes: {},
+      passes: Object.fromEntries(ALL_PASS_NAMES.map((n) => [n, emptyReport(n)])),
       totals: { archived: 0, merged: 0, refreshed: 0, flagged: 0, touched: 0, errors: 0, freedBytes: 0 },
     };
   }

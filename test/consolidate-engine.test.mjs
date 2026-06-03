@@ -294,6 +294,30 @@ test("empty --passes is a no-op skip that does NOT write state (won't suppress n
   assert.equal(res.skipped, "no-passes");
   assert.equal(stateWritten, false, "a no-op run must not write state");
   assert.equal(calls.list.length, 0, "no work done");
+  assert.equal(res.dryRun, false, "result carries dryRun");
+  assert.ok(res.passes && res.passes["dedupe-by-sha256"], "result carries the per-pass report shape");
+});
+
+test("truncation honours the cap even when the marker alone exceeds it (pathological tiny cap)", async (t) => {
+  const KEY = "MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS";
+  const prev = process.env[KEY];
+  process.env[KEY] = "10";
+  t.after(() => { if (prev === undefined) delete process.env[KEY]; else process.env[KEY] = prev; });
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "old", name: "d.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision" }, body: "same" },
+      { documentId: "new", name: "d.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "same" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    mergeResponder: (o) => ({ action: "merge", merged_body: "x".repeat(500), keeper_id: o.keeper.documentId, loser_id: o.loser.documentId, reason: "x" }),
+    refreshResponder: () => ({}),
+  });
+  await consolidateMemory({ now: NOW, passes: ["dedupe-by-sha256", "llm-merge-near-duplicates"], deps });
+  assert.equal(calls.saveDoc.length, 1);
+  assert.ok(calls.saveDoc[0].text.length <= 10, `body ${calls.saveDoc[0].text.length} must be <= cap 10 even when the marker is longer`);
 });
 
 test("undeclared bound slot refuses before any list/write", async () => {
