@@ -711,6 +711,15 @@ schedule_job() {
   local node_bin
   node_bin="$(command -v node || echo node)"
   local job_cmd="\"$node_bin\" \"$MEMORY_DIR/scripts/cron-job.mjs\""
+  # launchd / cron run with a MINIMAL PATH (typically /usr/bin:/bin:/usr/sbin:
+  # /sbin) that lacks both node and docker, so the job's `docker exec` to the
+  # bridge would fail with "spawn docker ENOENT". Build an explicit PATH that
+  # includes node's dir, the resolved docker dir, and the common docker
+  # locations (Rancher Desktop's ~/.rd/bin, Homebrew, /usr/local/bin).
+  local docker_bin docker_dir cron_path
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+  docker_dir="$(cd "$(dirname "${docker_bin:-/usr/local/bin/docker}")" 2>/dev/null && pwd -P || echo /usr/local/bin)"
+  cron_path="$(dirname "$node_bin"):$docker_dir:${HOME:-}/.rd/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
   local ws_hash
   ws_hash="$(printf '%s' "$WORKSPACE_DIR" | cksum | awk '{print $1}')"
 
@@ -739,6 +748,8 @@ schedule_job() {
   <dict>
     <key>MEMORY_DATA_DIR</key>
     <string>$data_dir</string>
+    <key>PATH</key>
+    <string>$cron_path</string>
   </dict>
   <key>ProgramArguments</key>
   <array>
@@ -781,6 +792,7 @@ PLIST
 # Do NOT hand-edit; re-run bootstrap.sh to regenerate.
 set -u
 export MEMORY_DATA_DIR="$data_dir"
+export PATH="$cron_path"
 exec "$node_bin" "$MEMORY_DIR/scripts/cron-job.mjs"
 WRAPPER
     chmod +x "$wrapper"
