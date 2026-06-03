@@ -340,6 +340,10 @@ server.registerTool(
       // them as recently used. Never awaited and never rejects (the helper
       // swallows all errors), so the response is byte-identical with or without
       // stamping and the read is never delayed or failed by a metadata write.
+      // This is a DELIBERATE in-container write (design decision 5): only the two
+      // recall fields, debounced. It is NOT the consolidate engine (host-side
+      // only); read_only here means "the response is read-only", not "the
+      // container never writes" (it has always had write MCP tools).
       void stampRecallsFireAndForget(config, returnedRecords);
 
       return jsonToolResponse({
@@ -1017,6 +1021,8 @@ server.registerTool(
       // Fire-and-forget recall instrumentation on the documents actually
       // returned (lessons + supplementary cross-refs). `all` items carry
       // documentId + datasetId via compactRecord. Never awaited / never rejects.
+      // Same DELIBERATE in-container write as in search_memory (decision 5): only
+      // the two recall fields, debounced; distinct from the host-side engine.
       void stampRecallsFireAndForget(config, all);
 
       return jsonToolResponse({

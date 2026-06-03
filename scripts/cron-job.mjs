@@ -22,6 +22,15 @@ import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 
 const MAX_LOG_LINES = 200;
 const STDERR_CAP_BYTES = 2000;
+// Bounded per-step timeout. Without it, a hung compile/consolidate (e.g. a stuck
+// `docker exec` to the bridge) would let cron-job run forever holding the cron
+// lock, starving every future hourly attempt and leaving cron_health with a
+// stale lastAttempt. On timeout spawnSync kills the child (SIGTERM) and the step
+// is recorded as a failure. Override via MEMORY_CRON_STEP_TIMEOUT_MS (default 30m).
+const STEP_TIMEOUT_MS = (() => {
+  const v = Number(process.env.MEMORY_CRON_STEP_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : 30 * 60 * 1000;
+})();
 // Serialises cron-job runs so two overlapping invocations (launchd/cron can
 // start a new run before the previous finishes) never race appendAttempt's
 // read-rewrite log truncation.
@@ -82,12 +91,29 @@ export function cronHealth({ limit = 20 } = {}) {
   return { ok: true, healthy: true, summary: `healthy; last cron-job ok at ${last.ts}`, lastAttempt: last, lastSuccessAt: last.ts, ...(lastFailureAt ? { lastFailureAt } : {}), recent: all.slice(-limit) };
 }
 
-function runStep(scriptPath, args) {
-  const r = spawnSync(process.execPath, [scriptPath, ...args], { stdio: "pipe", encoding: "utf8", env: process.env });
+export function runStep(scriptPath, args, { timeoutMs = STEP_TIMEOUT_MS } = {}) {
+  const r = spawnSync(process.execPath, [scriptPath, ...args], {
+    stdio: "pipe",
+    encoding: "utf8",
+    env: process.env,
+    timeout: timeoutMs,
+    killSignal: "SIGTERM",
+  });
+  // spawnSync sets `error` (code ETIMEDOUT) and kills with killSignal on timeout,
+  // and also on spawn failure (e.g. ENOENT). Either way the step is NOT ok.
+  const timedOut = Boolean(r.error && (r.error.code === "ETIMEDOUT" || r.signal === "SIGTERM"));
+  const detail = timedOut
+    ? `step timed out after ${timeoutMs}ms (killed)`
+    : r.error
+      ? `spawn error: ${r.error.message || r.error.code || r.error}`
+      : "";
+  // Put the failure detail FIRST so the cap never truncates it away.
+  const stderr = [detail, String(r.stderr || "")].filter(Boolean).join("\n").slice(0, STDERR_CAP_BYTES);
   return {
-    ok: r.status === 0,
+    ok: r.status === 0 && !r.error,
     exit: typeof r.status === "number" ? r.status : -1,
-    stderr: String(r.stderr || "").slice(0, STDERR_CAP_BYTES),
+    timedOut,
+    stderr,
     stdout: String(r.stdout || ""),
   };
 }

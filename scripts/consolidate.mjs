@@ -3,9 +3,15 @@
 // A faithful RAG adaptation of llm-wiki-memory's consolidate: deterministic
 // dedup (sha256 / lesson-key / similarity) then optional LLM merge, age-based
 // staleness flag then optional LLM refresh, and compress-archived. It runs
-// host-side like compile.mjs (uses the host LLM client + the Dify bridge), is
-// the ONLY mutator, and is what the cron calls. The read-only MCP projector
-// reuses the same pure core (mcp-server/src/consolidate-core.js) for dry-run.
+// host-side like compile.mjs (uses the host LLM client + the Dify bridge) and is
+// what the cron calls. It is the only mutator FOR CONSOLIDATION (merge / refresh
+// / archive / compress); the consolidate ENGINE never runs in the MCP container,
+// and the consolidate MCP surfaces (consolidate_memory, cron_health) are
+// read-only. (This is NOT a claim that the container never writes: the container
+// has always had write MCP tools, and recall instrumentation, recall-stamp.js,
+// deliberately writes the two recall fields in-container per design decision 5.)
+// The read-only MCP projector reuses the same pure core
+// (mcp-server/src/consolidate-core.js) for dry-run.
 //
 // Eligibility is policy-driven (MEMORY_CONSOLIDATE_<SLOT>=refine|none); an
 // undeclared bound slot makes the run refuse (the layout-missing-consolidate
