@@ -98,6 +98,16 @@ export const ALL_PASS_NAMES = Object.freeze([
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+// Truncate `text` so the result (body + marker) is at most `cap` chars: reserve
+// room for the marker first, then append it. (A plain slice(0,cap)+marker would
+// overshoot cap by the marker length.) If the marker alone is >= cap (pathological
+// tiny cap), the marker is returned verbatim.
+function truncateWithMarker(text, cap, marker) {
+  const room = Math.max(0, cap - marker.length);
+  if (room === 0) return marker;
+  return String(text).slice(0, room).replace(/\s+$/, "") + marker;
+}
+
 function toIso(now) {
   if (now instanceof Date) return now.toISOString();
   if (typeof now === "string" && now) return now;
@@ -393,7 +403,7 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
         continue;
       }
       if (body.length > cap) {
-        body = body.slice(0, cap).replace(/\s+$/, "") + `\n\n[truncated by consolidate at ${toIso(now)}: merged_body exceeded MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS]\n`;
+        body = truncateWithMarker(body, cap, `\n\n[truncated by consolidate at ${toIso(now)}: merged_body exceeded MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS]\n`);
       }
       if (!dryRun) {
         try {
@@ -522,7 +532,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
           r.errors++;
           continue;
         }
-        if (nb.length > cap) nb = nb.slice(0, cap).replace(/\s+$/, "") + `\n\n[truncated by consolidate at ${toIso(now)}]\n`;
+        if (nb.length > cap) nb = truncateWithMarker(nb, cap, `\n\n[truncated by consolidate at ${toIso(now)}]\n`);
         await deps.saveDoc({ name: leaf.name, text: nb, datasetId: slot, metadata: stampMeta(leaf, { stale: "false", last_refreshed_at: toIso(now), consolidated_at: toIso(now) }) });
         r.refreshed++;
       } else if (decision.action === "archive") {
@@ -555,7 +565,7 @@ async function runCompressArchived({ disabled, slot, deps, now, report, dryRun }
   const candidates = compressCandidates(disabled, nowMs(now), { bodyMax, archiveAgeDays: ageDays });
   for (const leaf of candidates) {
     const oldLen = String(leaf.body).length;
-    const truncated = String(leaf.body).slice(0, bodyMax).replace(/\s+$/, "") + `\n\n[archived body truncated by consolidate at ${toIso(now)}]\n`;
+    const truncated = truncateWithMarker(leaf.body, bodyMax, `\n\n[archived body truncated by consolidate at ${toIso(now)}]\n`);
     if (dryRun) {
       r.touched++;
       r.freedBytes += Math.max(0, oldLen - truncated.length);

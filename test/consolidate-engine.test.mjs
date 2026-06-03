@@ -229,6 +229,29 @@ test("no-LLM: exact dup archived; fuzzy similarity flagged-only (never archived)
   assert.ok(res.passes["dedupe-by-similarity"].flagged >= 1, "fuzzy pair flagged");
 });
 
+test("merge truncation keeps the saved body within the cap (marker length reserved)", async (t) => {
+  // Regression (Copilot): slice(0,cap)+marker overshoots cap by marker.length.
+  const KEY = "MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS";
+  const prev = process.env[KEY];
+  process.env[KEY] = "300";
+  t.after(() => { if (prev === undefined) delete process.env[KEY]; else process.env[KEY] = prev; });
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "old", name: "d.md", createdAtSec: nowSec - 100, metadata: { atom_type: "decision" }, body: "same" },
+      { documentId: "new", name: "d.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "same" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    mergeResponder: (o) => ({ action: "merge", merged_body: "x".repeat(1000), keeper_id: o.keeper.documentId, loser_id: o.loser.documentId, reason: "x" }),
+    refreshResponder: () => ({}),
+  });
+  await consolidateMemory({ now: NOW, passes: ["dedupe-by-sha256", "llm-merge-near-duplicates"], deps });
+  assert.equal(calls.saveDoc.length, 1);
+  assert.ok(calls.saveDoc[0].text.length <= 300, `saved body ${calls.saveDoc[0].text.length} must be <= cap 300`);
+});
+
 test("dry-run: zero writes, projection still counts", async () => {
   const slotsDocs = {
     knowledge: [
