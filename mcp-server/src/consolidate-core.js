@@ -66,14 +66,17 @@ export function contentHash(text) {
   return crypto.createHash("sha256").update(String(text ?? "")).digest("hex");
 }
 
-// Canonical lesson key. Empty error_pattern returns "" (sentinel: skip; those
-// are surfaced separately by audit_memory's missing-metadata class).
+// Canonical lesson key (project_module | task_type | error_pattern). Returns ""
+// (sentinel: skip) unless ALL THREE parts are present: a partial key would
+// collapse unrelated lessons (e.g. "|debug|flaky" with an empty project_module),
+// making lesson-key dedup dangerously over-aggressive. Docs missing these fields
+// are surfaced separately by audit_memory's missing-metadata class.
 export function lessonKey(leaf) {
   const m = leaf?.metadata || {};
   const ep = String(m.error_pattern || "").trim().toLowerCase();
-  if (!ep) return "";
   const pm = String(m.project_module || "").trim().toLowerCase();
   const tt = String(m.task_type || "").trim().toLowerCase();
+  if (!ep || !pm || !tt) return "";
   return `${pm}|${tt}|${ep}`;
 }
 

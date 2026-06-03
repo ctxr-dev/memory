@@ -52,6 +52,16 @@ test("boundSlotsFromEnv: derives non-empty DIFY_DATASET_<NAME>_ID slots + legacy
   assert.deepEqual(slots.sort(), ["default", "knowledge", "self_improvement"]);
 });
 
+test("boundSlotsFromEnv: legacy default NOT duplicated when its id is already a bound slot", () => {
+  const env = { DIFY_DATASET_KNOWLEDGE_ID: "shared-id", DIFY_WRITE_DATASET_ID: "shared-id" };
+  assert.deepEqual(boundSlotsFromEnv(env), ["knowledge"], "no separate 'default' when the legacy id is already bound");
+});
+
+test("boundSlotsFromEnv: legacy default added only when its id is not otherwise bound", () => {
+  const env = { DIFY_DATASET_KNOWLEDGE_ID: "k", DIFY_WRITE_DATASET_ID: "legacy-only-id" };
+  assert.deepEqual(boundSlotsFromEnv(env).sort(), ["default", "knowledge"]);
+});
+
 test("resolveConsolidatePolicy: explicit line wins over built-in default", () => {
   assert.equal(
     resolveConsolidatePolicy("knowledge", { MEMORY_CONSOLIDATE_KNOWLEDGE: "none" }),

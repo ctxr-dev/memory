@@ -57,17 +57,22 @@ export function parseConsolidatePolicy(raw) {
 export function boundSlotsFromEnv(env = {}) {
   const slots = [];
   const seen = new Set();
+  const boundIds = new Set();
   for (const key of Object.keys(env)) {
     const m = key.match(/^DIFY_DATASET_(.+)_ID$/);
     if (!m) continue;
     const slot = m[1].toLowerCase();
     if (seen.has(slot)) continue;
-    if (!String(env[key] || "").trim()) continue;
+    const id = String(env[key] || "").trim();
+    if (!id) continue;
     seen.add(slot);
+    boundIds.add(id);
     slots.push(slot);
   }
+  // Mirror dify.js:buildDatasetMap: add the legacy "default" slot ONLY if that
+  // id is not already bound via a DIFY_DATASET_<NAME>_ID slot (avoid a duplicate).
   const legacy = String(env.DIFY_WRITE_DATASET_ID || "").trim();
-  if (legacy && !seen.has("default")) slots.push("default");
+  if (legacy && !boundIds.has(legacy) && !seen.has("default")) slots.push("default");
   return slots;
 }
 

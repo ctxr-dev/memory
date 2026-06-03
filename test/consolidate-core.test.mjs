@@ -49,6 +49,9 @@ test("lessonKey: project_module|task_type|error_pattern, empty error_pattern -> 
     "api|debug|bad-id",
   );
   assert.equal(lessonKey(leaf({ metadata: { project_module: "api" } })), "");
+  // Partial identity must NOT produce a key (would collapse unrelated lessons).
+  assert.equal(lessonKey(leaf({ metadata: { error_pattern: "flaky", project_module: "api" } })), "", "missing task_type -> no key");
+  assert.equal(lessonKey(leaf({ metadata: { error_pattern: "flaky", task_type: "debug" } })), "", "missing project_module -> no key");
 });
 
 test("pickKeeper: newest createdAtMs wins; tiebreak lex documentId", () => {
