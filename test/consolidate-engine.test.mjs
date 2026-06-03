@@ -431,6 +431,7 @@ test("refresh daysSinceRecall is 'never' (not NaN/null) for an unparseable last_
   assert.ok(refreshCall, "refresh LLM was called");
   const u = JSON.parse(refreshCall.userPrompt);
   assert.equal(u.document.daysSinceRecall, "never");
+  assert.equal(u.document.last_recalled_at, "never", "unparseable last_recalled_at normalized to 'never' in the prompt");
 });
 
 test("refresh keep without stale_after does NOT clear stale (defaults to keeping it)", async () => {

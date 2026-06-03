@@ -29,12 +29,12 @@ const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "
 const STAMP_CACHE_MAX = 5000;
 const stampCache = new Map();
 
-// Per-dataset cache of the doc-metadata map (id -> {name:value}) with a short
-// TTL, so a burst of recalls does not re-list the whole dataset on every stamp
-// run. Keyed by resolved datasetId. Also bounded.
-const METADATA_MAP_TTL_MS = 60_000;
-const METADATA_MAP_CACHE_MAX = 16;
-const metadataMapCache = new Map();
+// NOTE: we deliberately do NOT cache the per-dataset metadata map across calls.
+// A cached snapshot can go stale within its TTL, and because the metadata POST
+// REPLACES the full custom-metadata set, writing from a stale snapshot would
+// roll back any field another writer (consolidate, a concurrent recall) changed
+// in the meantime. Correctness beats avoiding the re-list; the list is
+// fire-and-forget and debounced, so it only runs when a doc actually needs a stamp.
 
 function cacheSet(map, key, value, max) {
   map.set(key, value);
@@ -100,29 +100,22 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
     // Dify's documents/metadata POST REPLACES a document's full custom-metadata
     // set, so we MUST carry every existing custom field on the write or it is
     // wiped (atom_type / project_module / error_pattern lost). Read the dataset's
-    // current metadata map (id -> {name:value}); reuse a recent cached map within
-    // METADATA_MAP_TTL_MS so a burst of recalls does not re-list the whole
-    // dataset every run. If the read fails we DO NOT stamp (better to skip the
-    // staleness signal than to corrupt classifying metadata).
+    // CURRENT metadata map fresh (no cross-call cache: a stale snapshot would
+    // roll back fields another writer changed). If the read fails we DO NOT stamp
+    // (better to skip the staleness signal than to corrupt classifying metadata).
     let metaById;
-    const cachedMap = metadataMapCache.get(selectedDatasetId);
-    if (cachedMap && now - cachedMap.at < METADATA_MAP_TTL_MS) {
-      metaById = cachedMap.byId;
-    } else {
-      try {
-        const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
-        metaById = new Map();
-        for (const d of docs || []) {
-          const m = {};
-          const fields = Array.isArray(d?.doc_metadata) ? d.doc_metadata : [];
-          for (const f of fields) if (f?.name) m[f.name] = f.value;
-          metaById.set(d.id, m);
-        }
-        cacheSet(metadataMapCache, selectedDatasetId, { at: now, byId: metaById }, METADATA_MAP_CACHE_MAX);
-      } catch (err) {
-        process.stderr.write(`[recall-stamp] skip stamping ${selectedDatasetId}: could not read current metadata (would risk a wipe): ${err?.message || err}\n`);
-        return summary;
+    try {
+      const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
+      metaById = new Map();
+      for (const d of docs || []) {
+        const m = {};
+        const fields = Array.isArray(d?.doc_metadata) ? d.doc_metadata : [];
+        for (const f of fields) if (f?.name) m[f.name] = f.value;
+        metaById.set(d.id, m);
       }
+    } catch (err) {
+      process.stderr.write(`[recall-stamp] skip stamping ${selectedDatasetId}: could not read current metadata (would risk a wipe): ${err?.message || err}\n`);
+      return summary;
     }
 
     const endpoint = `${config.apiUrl.replace(/\/+$/, "")}/datasets/${encodeURIComponent(selectedDatasetId)}/documents/metadata`;
@@ -211,5 +204,4 @@ export function stampRecallsFireAndForget(config, records, nowMs) {
 // Test-only: reset the in-process debounce cache between cases.
 export function _resetStampCache() {
   stampCache.clear();
-  metadataMapCache.clear();
 }

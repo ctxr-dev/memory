@@ -87,7 +87,7 @@ test("stampRecalls: recall_count seeds from the PERSISTED value on a cold cache"
   }, { responseFn: responder({ docs }) });
 });
 
-test("stampRecalls: reuses the dataset metadata map within the TTL (no repeat full list)", () => {
+test("stampRecalls: reads fresh metadata each run (no stale cross-call cache that could roll back fields)", () => {
   _resetStampCache();
   const docs = [
     { id: "d1", doc_metadata: [{ name: "atom_type", value: "x" }] },
@@ -95,9 +95,9 @@ test("stampRecalls: reuses the dataset metadata map within the TTL (no repeat fu
   ];
   return withFetchStub(async (calls) => {
     await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d1", datasetId: DATASET }], nowMs: 1000 });
-    await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d2", datasetId: DATASET }], nowMs: 1000 + 5000 }); // +5s, within the 60s TTL
+    await stampRecalls(CONFIG, { datasetId: DATASET, records: [{ documentId: "d2", datasetId: DATASET }], nowMs: 1000 + 5000 });
     const lists = calls.filter((c) => /\/documents\?/.test(c.url));
-    assert.equal(lists.length, 1, "second stamp run within the TTL reuses the cached metadata map");
+    assert.equal(lists.length, 2, "each run re-lists fresh (no stale snapshot reuse)");
   }, { responseFn: responder({ docs }) });
 });
 

@@ -483,14 +483,14 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
       .filter((rec) => rec.documentId !== leaf.documentId)
       .slice(0, topK)
       .map((rec, i) => ({ n: i + 1, documentId: rec.documentId, score: Number(rec.score?.toFixed?.(4) ?? rec.score), content: String(rec.content || "").slice(0, 600) }));
-    const lastRecalled = leaf.metadata?.last_recalled_at || "";
-    // Guard against an unparseable last_recalled_at: Date.parse -> NaN would
-    // serialize to null in the prompt JSON (schema expects a number or "never").
-    let daysSinceRecall = "never";
-    if (lastRecalled) {
-      const t = Date.parse(lastRecalled);
-      if (Number.isFinite(t)) daysSinceRecall = Math.max(0, Math.round((nowMs(now) - t) / 86_400_000));
-    }
+    // Normalise last_recalled_at: only forward it to the prompt when it parses;
+    // an unparseable value (e.g. "not-a-date") is sent as "never" so the prompt
+    // schema (ISO string or "never") and daysSinceRecall (number or "never") are
+    // never violated.
+    const lastRecalledRaw = leaf.metadata?.last_recalled_at || "";
+    const lastRecalledMs = lastRecalledRaw ? Date.parse(lastRecalledRaw) : NaN;
+    const lastRecalled = Number.isFinite(lastRecalledMs) ? lastRecalledRaw : "";
+    const daysSinceRecall = lastRecalled ? Math.max(0, Math.round((nowMs(now) - lastRecalledMs) / 86_400_000)) : "never";
     const user = JSON.stringify({
       document: { documentId: leaf.documentId, created_at: new Date(leaf.createdAtMs).toISOString(), last_recalled_at: lastRecalled || "never", daysSinceRecall, metadata: leaf.metadata, body: String(body || "") },
       cluster: clusterBundle,
