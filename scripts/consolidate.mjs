@@ -74,14 +74,23 @@ import {
 const DIFY_QUERY_MAX_CHARS = 240;
 
 // Dify's documents/metadata POST REPLACES a document's full custom-metadata set
-// (it is not a per-field merge). So every consolidate stamp MUST carry ALL of the
-// document's existing custom fields too, or they are wiped. We preserve every
-// existing field EXCEPT Dify's auto-managed built-ins (which must not be echoed
-// back) -- this also keeps any user-added custom fields beyond our own set.
+// (it is not a per-field merge), so a write must include every field the doc
+// should end up with. Built-ins are auto-managed by Dify and must NOT be echoed
+// back. There are TWO write paths in this engine, with DIFFERENT obligations:
+//   - EXISTING-doc updates (deps.updateMeta -> the bridge): pass ONLY the changed
+//     fields (the patch) and let updateDocumentMetadata's default READ-MERGE
+//     preserve the rest from a FRESH read. stampMeta is NOT used here, on purpose:
+//     carrying the working-set snapshot would roll back a field a concurrent
+//     writer changed after the snapshot (notably recall-stamp's recall fields).
+//   - NEW-doc writes (deps.saveDoc -> upsertDocumentByName, replace:true): the
+//     created doc has no prior custom fields and the upsert skips the read-merge,
+//     so the FULL intended set must be supplied. stampMeta builds it from the
+//     source leaf's existing fields + the patch.
 const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "last_update_date", "source"]);
 
-// Merge a stamp `patch` onto a leaf's EXISTING custom metadata (preserving every
-// non-built-in field Dify would otherwise drop on a partial write).
+// Build the FULL custom-metadata set for a NEW-doc write (saveDoc/upsert): the
+// leaf's existing non-built-in fields with `patch` overlaid. Do NOT use this for
+// updateMeta on an existing doc (send the bare patch and rely on read-merge).
 function stampMeta(leaf, patch) {
   const out = {};
   const m = leaf?.metadata || {};
