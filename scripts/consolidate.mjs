@@ -244,7 +244,10 @@ export function defaultDeps() {
       return { id, raw: r };
     },
     disableDoc: (a) => disableDocument(a),
-    updateMeta: (a) => updateDocMetadata(a),
+    // The engine always builds the COMPLETE custom-metadata set via stampMeta
+    // (every existing non-builtin field from the working-set snapshot + the
+    // patch), so it asserts replace:true to skip the bridge-side read-merge.
+    updateMeta: (a) => updateDocMetadata({ ...a, replace: true }),
     llm: (a) => callLLMWithRetry(a),
     // Shared with compile so the two never race / share one LLM window. Injected
     // so tests pass a no-op lock (avoids cross-test-file contention on the real

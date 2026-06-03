@@ -329,11 +329,14 @@ async function setBuiltInMetadataCmd(config, { datasetId, enabled }) {
   return setBuiltInMetadata(config, { datasetId, enabled: want });
 }
 
-async function updateDocMetadataCmd(config, { datasetId, documentId, metadata }) {
+async function updateDocMetadataCmd(config, { datasetId, documentId, metadata, replace }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   const md = parseJsonFlag(metadata, "metadata");
   if (!md) throw new Error("--metadata <json-object> is required");
-  return updateDocumentMetadata(config, { datasetId, documentId, metadataMap: md });
+  // --replace asserts the caller is passing the COMPLETE custom-metadata set
+  // (skip the read-merge). Absent => safe read-merge (preserve existing fields).
+  const replaceFull = replace === true || replace === "true";
+  return updateDocumentMetadata(config, { datasetId, documentId, metadataMap: md, replace: replaceFull });
 }
 
 async function deleteCmd(config, { datasetId, documentId }) {

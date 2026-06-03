@@ -218,9 +218,14 @@ export function setBuiltInMetadata({ datasetId, enabled } = {}) {
   return execCli("set-built-in-metadata", { datasetId, enabled: String(enabled !== false) });
 }
 
-export function updateDocMetadata({ datasetId, documentId, metadata } = {}) {
+// replace:true asserts `metadata` is the COMPLETE custom-metadata set (skip the
+// bridge-side read-merge). Use it only when the caller already holds every field
+// (a freshly-created doc, or an engine that merged in memory); omit it otherwise
+// so existing fields are preserved (Dify's metadata POST replaces the full set).
+export function updateDocMetadata({ datasetId, documentId, metadata, replace } = {}) {
   const flags = { datasetId, documentId };
   if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
+  if (replace) flags.replace = true;
   return execCli("update-doc-metadata", flags);
 }
 

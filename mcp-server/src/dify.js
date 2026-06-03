@@ -426,10 +426,36 @@ export async function loadMetadataFieldIndex(config, { datasetId } = {}) {
   return byName;
 }
 
+// Read ONE document's current custom-metadata as a { name: value } map. Dify has
+// no single-document metadata endpoint, so this lists the dataset and finds the
+// doc by id (O(dataset)). Only the read-merge path of updateDocumentMetadata uses
+// it; the hot full-set callers bypass it via replace:true. Returns {} if the doc
+// is not found (e.g. indexing lag on a freshly-created doc).
+export async function getDocumentMetadataMap(config, { datasetId, documentId } = {}) {
+  if (!documentId) throw new Error("getDocumentMetadataMap requires documentId.");
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
+  const doc = (docs || []).find((d) => d?.id === documentId);
+  const out = {};
+  const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
+  for (const f of fields) if (f?.name) out[f.name] = f.value;
+  return out;
+}
+
 // metadataMap: plain { fieldName: value } object. Resolves field ids via
 // loadMetadataFieldIndex and posts to the documents/metadata endpoint.
 // Skips fields that are missing on the dataset (log to caller via return).
-export async function updateDocumentMetadata(config, { datasetId, documentId, metadataMap } = {}) {
+//
+// CONTRACT: Dify's POST /documents/metadata REPLACES the document's ENTIRE
+// custom-metadata set with metadata_list, so a partial map silently wipes every
+// field not included. To make that safe by default, this helper READ-MERGES: it
+// fetches the doc's current custom metadata and overlays the provided fields
+// (provided values win). Callers that already hold the COMPLETE intended set
+// (a freshly-created doc with no prior metadata; the consolidate engine, which
+// builds the full merged map in memory from its working set) pass `replace: true`
+// to skip the extra dataset read. A read failure throws (the update aborts)
+// rather than writing a partial set that would corrupt classifying metadata.
+export async function updateDocumentMetadata(config, { datasetId, documentId, metadataMap, replace = false } = {}) {
   if (!documentId) throw new Error("updateDocumentMetadata requires documentId.");
   const md = metadataMap && typeof metadataMap === "object" ? metadataMap : {};
   if (Object.keys(md).length === 0) return { ok: true, skipped: "empty metadata" };
@@ -437,9 +463,15 @@ export async function updateDocumentMetadata(config, { datasetId, documentId, me
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const fieldIndex = await loadMetadataFieldIndex(config, { datasetId: selectedDatasetId });
 
+  let effectiveMap = md;
+  if (!replace) {
+    const current = await getDocumentMetadataMap(config, { datasetId: selectedDatasetId, documentId });
+    effectiveMap = { ...current, ...md };
+  }
+
   const metadataList = [];
   const skippedFields = [];
-  for (const [name, value] of Object.entries(md)) {
+  for (const [name, value] of Object.entries(effectiveMap)) {
     const f = fieldIndex.get(name);
     if (!f) { skippedFields.push(name); continue; }
     metadataList.push({ id: f.id, name, value: value == null ? "" : String(value) });
@@ -878,6 +910,9 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
           datasetId: selectedDatasetId,
           documentId: newDocId,
           metadataMap: metadata,
+          // Freshly-created doc: `metadata` is the complete intended set and the
+          // doc has no prior custom fields, so skip the read-merge.
+          replace: true,
         });
       } catch (err) {
         metadataError = err instanceof Error ? err.message : String(err);

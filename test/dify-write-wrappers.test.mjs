@@ -165,3 +165,17 @@ test("searchMemoryFiltered: filters object is JSON-stringified", () => {
   assert.equal(args[args.indexOf("--filters") + 1], '{"atom_type":"decision","project_module":"auth"}');
   assert.equal(args[args.indexOf("--scoreThreshold") + 1], "0.5");
 });
+
+// ---------- updateDocMetadata: --replace is a valueless boolean flag ----------
+
+test("updateDocMetadata: --replace emitted as a valueless flag only when set", () => {
+  // With replace:true the builder emits a bare `--replace` (no value), so the
+  // bridge asserts the full-set / skip-read-merge contract.
+  const withReplace = buildExecCliArgs("update-doc-metadata", { datasetId: "d", documentId: "x", metadata: "{}", replace: true }, "c");
+  const idx = withReplace.indexOf("--replace");
+  assert.ok(idx > 5, "expected --replace in args");
+  assert.notEqual(withReplace[idx + 1], "true", "--replace must be valueless, not '--replace true'");
+  // Omitted by default (read-merge): no --replace token.
+  const noReplace = buildExecCliArgs("update-doc-metadata", { datasetId: "d", documentId: "x", metadata: "{}" }, "c");
+  assert.equal(noReplace.indexOf("--replace"), -1, "no --replace when unset (safe read-merge)");
+});
