@@ -772,10 +772,17 @@ PLIST
       echo "WARNING: crontab not available; skipping schedule setup." >&2
       return 0
     fi
-    local tag="# ctxr-memory:$WORKSPACE_DIR"
+    # Match key is the %-free, stable workspace hash (NOT the raw path): the
+    # installed line is %-escaped before writing (cron treats % as a newline), so
+    # a raw-path tag containing % would be written as "\%" but matched here as
+    # "%", leaving the old entry behind (duplicate on reinstall / fails to remove
+    # on --schedule off). The hash has no % or quotes, so grep -vF matches the
+    # installed line reliably; the human-readable path stays in the comment.
+    local tag_match="# ctxr-memory:$ws_hash"
+    local tag="$tag_match $WORKSPACE_DIR"
     local wrapper="$data_dir/state/cron-maintenance.sh"
     local filtered
-    filtered="$(crontab -l 2>/dev/null | grep -vF "$tag" || true)"
+    filtered="$(crontab -l 2>/dev/null | grep -vF "$tag_match" || true)"
     if [ "$action" = "off" ]; then
       printf '%s\n' "$filtered" | grep -v '^$' | crontab - 2>/dev/null || true
       rm -f "$wrapper"
