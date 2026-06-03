@@ -429,13 +429,18 @@ export async function loadMetadataFieldIndex(config, { datasetId } = {}) {
 // Read ONE document's current custom-metadata as a { name: value } map. Dify has
 // no single-document metadata endpoint, so this lists the dataset and finds the
 // doc by id (O(dataset)). Only the read-merge path of updateDocumentMetadata uses
-// it; the hot full-set callers bypass it via replace:true. Returns {} if the doc
-// is not found (e.g. indexing lag on a freshly-created doc).
+// it; the hot full-set callers bypass it via replace:true.
+//
+// Returns NULL when the document is not present in the listing (e.g. indexing lag
+// on a freshly-created doc), distinct from {} which means "found, no custom
+// fields". The caller MUST treat null as "could not confirm the existing set" and
+// refuse a partial write (a {} fallback would let a partial POST wipe fields).
 export async function getDocumentMetadataMap(config, { datasetId, documentId } = {}) {
   if (!documentId) throw new Error("getDocumentMetadataMap requires documentId.");
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
   const doc = (docs || []).find((d) => d?.id === documentId);
+  if (!doc) return null;
   const out = {};
   const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
   for (const f of fields) if (f?.name) out[f.name] = f.value;
@@ -466,6 +471,17 @@ export async function updateDocumentMetadata(config, { datasetId, documentId, me
   let effectiveMap = md;
   if (!replace) {
     const current = await getDocumentMetadataMap(config, { datasetId: selectedDatasetId, documentId });
+    if (current == null) {
+      // Document not found in the dataset listing (e.g. indexing lag). We cannot
+      // confirm its existing custom set, and a partial POST would REPLACE the
+      // full set and wipe unrelated fields, so REFUSE rather than write a
+      // patch-only metadata_list. A caller that knows it holds the complete set
+      // (a brand-new doc) should pass replace:true to skip this read entirely.
+      throw new Error(
+        `updateDocumentMetadata: document ${documentId} not found in dataset ${selectedDatasetId} listing; ` +
+          "refusing a partial metadata write that could wipe existing fields. Pass replace:true if you hold the complete set.",
+      );
+    }
     effectiveMap = { ...current, ...md };
   }
 

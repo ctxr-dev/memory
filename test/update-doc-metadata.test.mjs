@@ -101,13 +101,15 @@ test("replace:true skips the read-merge and posts ONLY the provided fields", asy
   );
 });
 
-test("getDocumentMetadataMap: flattens a doc's doc_metadata; {} when not found", async () => {
+test("getDocumentMetadataMap: flattens a found doc; NULL (not {}) when not found", async () => {
   await withFetchStub(
     async () => {
       const map = await getDocumentMetadataMap(cfg(), { datasetId: "knowledge", documentId: "doc-1" });
       assert.deepEqual(map, { atom_type: "decision", stale: "true" });
+      // Not-found is null (distinct from {} = found-with-no-custom-fields), so
+      // the read-merge can refuse rather than wipe.
       const missing = await getDocumentMetadataMap(cfg(), { datasetId: "knowledge", documentId: "nope" });
-      assert.deepEqual(missing, {});
+      assert.equal(missing, null);
     },
     {
       responseFn: difyResponder({
@@ -116,6 +118,28 @@ test("getDocumentMetadataMap: flattens a doc's doc_metadata; {} when not found",
           { name: "atom_type", value: "decision" },
           { name: "stale", value: "true" },
         ] }],
+      }),
+    },
+  );
+});
+
+test("read-merge REFUSES (throws, no POST) when the target doc is not in the listing", async () => {
+  await withFetchStub(
+    async (calls) => {
+      await assert.rejects(
+        () => updateDocumentMetadata(cfg(), {
+          datasetId: "knowledge",
+          documentId: "ghost", // not present in the dataset listing (indexing lag)
+          metadataMap: { stale: "true" },
+        }),
+        /not found in dataset .* refusing a partial metadata write/,
+      );
+      assert.ok(!calls.some((c) => c.method === "POST"), "must NOT POST when the doc cannot be confirmed");
+    },
+    {
+      responseFn: difyResponder({
+        fields: FIELDS,
+        docs: [{ id: "other-doc", doc_metadata: [{ name: "atom_type", value: "decision" }] }],
       }),
     },
   );
