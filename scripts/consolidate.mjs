@@ -393,7 +393,7 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
         continue;
       }
       if (body.length > cap) {
-        body = body.slice(0, cap).replace(/\s+$/, "") + `\n\n[truncated by consolidate at ${toIso(now)} — merged_body exceeded MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS]\n`;
+        body = body.slice(0, cap).replace(/\s+$/, "") + `\n\n[truncated by consolidate at ${toIso(now)}: merged_body exceeded MEMORY_CONSOLIDATE_ATOM_BODY_MAX_CHARS]\n`;
       }
       if (!dryRun) {
         try {
