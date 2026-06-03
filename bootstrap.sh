@@ -785,6 +785,10 @@ exec "$node_bin" "$MEMORY_DIR/scripts/cron-job.mjs"
 WRAPPER
     chmod +x "$wrapper"
     local line="0 * * * * \"$wrapper\" $tag"
+    # cron treats '%' in the command/comment as a newline (even when quoted), so a
+    # wrapper path or workspace tag containing '%' would corrupt the crontab.
+    # Escape every '%' as '\%' in the cron line.
+    line="${line//%/\\%}"
     { printf '%s\n' "$filtered" | grep -v '^$'; printf '%s\n' "$line"; } | crontab - \
       || echo "WARNING: failed to update crontab." >&2
     echo "Installed hourly maintenance cron (crontab, every hour at :00) via wrapper $wrapper"
