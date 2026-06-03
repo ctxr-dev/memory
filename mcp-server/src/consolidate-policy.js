@@ -31,9 +31,10 @@ export const BUILTIN_CONSOLIDATE_DEFAULTS = Object.freeze({
 });
 
 // The MEMORY_CONSOLIDATE_<SLOT> env-var name for a slot. Mirrors the tokeniser
-// in env.mjs:slotEnvKey (lowercase + non-alphanumerics -> "_", uppercased) so
-// `self_improvement` -> MEMORY_CONSOLIDATE_SELF_IMPROVEMENT and a hyphenated
-// custom slot `my-runbooks` -> MEMORY_CONSOLIDATE_MY_RUNBOOKS.
+// in env.mjs:slotEnvKey (uppercase + non-alphanumerics -> "_") so
+// `self_improvement` -> MEMORY_CONSOLIDATE_SELF_IMPROVEMENT. Bound slot names are
+// derived from DIFY_DATASET_<NAME>_ID env keys, so in practice they are already
+// lowercase + underscore; the tokeniser still normalises any other char defensively.
 export function consolidatePolicyEnvKey(slot) {
   const tag = String(slot || "").toUpperCase().replace(/[^A-Z0-9]+/g, "_");
   return `MEMORY_CONSOLIDATE_${tag}`;
