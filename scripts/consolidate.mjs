@@ -518,15 +518,25 @@ async function runCompressArchived({ disabled, slot, deps, now, report, dryRun }
 
 // ─── entry point ───────────────────────────────────────────────────────────
 
-export async function consolidateMemory({ dryRun = false, ifDue = false, force = false, llm = true, passes, now, deps } = {}) {
+export async function consolidateMemory({ dryRun = false, ifDue = false, force = false, llm = true, passes, now, deps, onlyDataset } = {}) {
   const startMs = Date.now();
   const D = deps || defaultDeps();
   const allowed = resolveAllowedPasses(passes);
   const llmRequested = consolidateLlmEnabled() && llm !== false;
 
-  // 1. Policy gate: refuse on any undeclared bound slot.
+  // 1. Policy gate: refuse on any undeclared bound slot. When `onlyDataset` is
+  // given (an id or slot name), scope the run to JUST that dataset and bypass
+  // policy resolution (used for targeted runs / testing a single dataset; a raw
+  // dataset id is resolved directly by the bridge).
   const env = D.loadEnv();
-  const { policies, refine, refusals } = resolveAllPolicies(env);
+  let policies, refine, refusals;
+  if (onlyDataset) {
+    refine = [onlyDataset];
+    policies = { [onlyDataset]: "refine" };
+    refusals = [];
+  } else {
+    ({ policies, refine, refusals } = resolveAllPolicies(env));
+  }
   if (refusals.length > 0) {
     return {
       ok: false,
@@ -650,7 +660,7 @@ function handleNoLlmCounts(_fuzzyCount) {
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const out = { dryRun: false, ifDue: false, force: false, llm: true, json: false, passes: undefined };
+  const out = { dryRun: false, ifDue: false, force: false, llm: true, json: false, passes: undefined, onlyDataset: undefined };
   for (const a of argv) {
     if (a === "--dry-run") out.dryRun = true;
     else if (a === "--if-due") out.ifDue = true;
@@ -658,13 +668,14 @@ export function parseArgs(argv) {
     else if (a === "--no-llm") out.llm = false;
     else if (a === "--json") out.json = true;
     else if (a.startsWith("--passes=")) out.passes = a.slice("--passes=".length);
+    else if (a.startsWith("--only-dataset=")) out.onlyDataset = a.slice("--only-dataset=".length);
   }
   return out;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const result = await consolidateMemory({ dryRun: args.dryRun, ifDue: args.ifDue, force: args.force, llm: args.llm, passes: args.passes });
+  const result = await consolidateMemory({ dryRun: args.dryRun, ifDue: args.ifDue, force: args.force, llm: args.llm, passes: args.passes, onlyDataset: args.onlyDataset });
   if (args.json) {
     process.stdout.write(JSON.stringify(result) + "\n");
   } else {

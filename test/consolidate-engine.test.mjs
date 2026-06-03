@@ -254,6 +254,24 @@ test("cluster query is capped under Dify's 250-char limit even for long bodies",
   }
 });
 
+test("onlyDataset scopes the run to one dataset and bypasses policy", async () => {
+  const slotsDocs = {
+    knowledge: [{ documentId: "k1", name: "k.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "kbody" }],
+    other: [{ documentId: "o1", name: "o.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "obody" }],
+  };
+  // `other` is an undeclared bound slot that would normally REFUSE; onlyDataset bypasses that.
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: { DIFY_DATASET_KNOWLEDGE_ID: "k", DIFY_DATASET_OTHER_ID: "o" },
+    mergeResponder: () => ({}),
+    refreshResponder: () => ({}),
+  });
+  const res = await consolidateMemory({ now: NOW, llm: false, onlyDataset: "knowledge", deps });
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.refine, ["knowledge"]);
+  assert.deepEqual(calls.list, ["knowledge"], "only the scoped dataset was listed");
+});
+
 test("provider failure mid-merge falls back to deterministic archive", async () => {
   const slotsDocs = {
     knowledge: [
