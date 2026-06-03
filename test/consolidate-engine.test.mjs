@@ -15,7 +15,7 @@ const nowSec = Math.floor(NOW.getTime() / 1000);
 
 // Build an injectable deps object backed by in-memory slot documents.
 function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshResponder, failLlm }) {
-  const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [] };
+  const calls = { saveDoc: [], disableDoc: [], updateMeta: [], llm: [], list: [], searchQueries: [] };
   let saveN = 0;
   let stateValue = null;
   const allDocs = () => Object.values(slotsDocs).flat();
@@ -39,8 +39,11 @@ function makeDeps({ slotsDocs, env, scoreMap = {}, mergeResponder, refreshRespon
     },
     readBody: async ({ documentId }) => bodyOf(documentId),
     searchSimilar: async ({ datasetId, query }) => {
+      calls.searchQueries.push(query);
       const docs = (slotsDocs[datasetId] || []).filter((d) => d.enabled !== false);
-      const queryId = docs.find((d) => String(d.body).slice(0, 1024) === query)?.documentId;
+      // Tolerant reverse-lookup: the engine caps the query to a prefix of the
+      // body, so match on prefix in either direction.
+      const queryId = docs.find((d) => String(d.body).startsWith(query) || query.startsWith(String(d.body)))?.documentId;
       const records = [];
       for (const d of docs) {
         if (d.documentId === queryId) continue;
@@ -230,6 +233,25 @@ test("refresh: archive disables the doc; rewrite saves a new body", async () => 
   assert.equal(r2.calls.saveDoc[0].metadata.stale, "false");
   assert.ok(r2.calls.saveDoc[0].metadata.last_refreshed_at);
   assert.equal(res.passes["llm-semantic-refresh"].refreshed, 1);
+});
+
+test("cluster query is capped under Dify's 250-char limit even for long bodies", async () => {
+  // Regression: Dify's retrieval rejects a query > 250 chars (the error lands
+  // in the per-dataset errors array, NOT as a throw), so an uncapped body query
+  // silently yields empty clusters and zero dedup candidates.
+  const longBody = "Lead line about a topic. " + "x".repeat(2000);
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "a", name: "a.md", createdAtSec: nowSec - 10, metadata: { atom_type: "decision" }, body: longBody },
+      { documentId: "b", name: "b.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: longBody + " tail" },
+    ],
+  };
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  await consolidateMemory({ now: NOW, llm: false, passes: ["dedupe-by-similarity"], deps });
+  assert.ok(calls.searchQueries.length > 0, "ran at least one cluster query");
+  for (const q of calls.searchQueries) {
+    assert.ok(q.length <= 250, `cluster query length ${q.length} exceeds Dify's 250-char limit`);
+  }
 });
 
 test("provider failure mid-merge falls back to deterministic archive", async () => {

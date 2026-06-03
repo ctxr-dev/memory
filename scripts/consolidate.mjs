@@ -59,6 +59,14 @@ import {
   compressCandidates,
 } from "../mcp-server/src/consolidate-core.js";
 
+// Dify's hit-testing/retrieval endpoint rejects a query longer than 250 chars
+// ("String should have at most 250 characters"), and the error comes back in
+// the per-dataset errors array (NOT as a thrown error), so an over-long query
+// silently yields an empty cluster. Cap the body-derived cluster query well
+// under that limit. The leading chars (title + lead) are the strongest
+// near-duplicate signal anyway.
+const DIFY_QUERY_MAX_CHARS = 240;
+
 export const ALL_PASS_NAMES = Object.freeze([
   SOURCE_PASSES.SHA256,
   SOURCE_PASSES.LESSON_KEY,
@@ -218,7 +226,7 @@ async function buildPairsForSlot({ slot, leaves, allowed, deps, simThreshold, to
     try {
       const body = await getBody(leaf);
       cluster = await deps.searchSimilar({
-        query: String(body).slice(0, 1024),
+        query: String(body).slice(0, DIFY_QUERY_MAX_CHARS),
         datasetId: slot,
         limit: topK,
         scoreThreshold: clusterScore,
@@ -409,7 +417,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
     let cluster;
     try {
       if (body === undefined) body = await deps.readBody({ documentId: leaf.documentId, datasetId: slot });
-      cluster = await deps.searchSimilar({ query: String(body).slice(0, 1024), datasetId: slot, limit: topK, scoreThreshold: clusterScore });
+      cluster = await deps.searchSimilar({ query: String(body).slice(0, DIFY_QUERY_MAX_CHARS), datasetId: slot, limit: topK, scoreThreshold: clusterScore });
     } catch (err) {
       r.errors++;
       process.stderr.write(`[consolidate] refresh cluster failed for ${leaf.documentId}: ${err?.message || err}\n`);
