@@ -732,6 +732,16 @@ schedule_job() {
   docker_dir="$(cd "$(dirname "${docker_bin:-/usr/local/bin/docker}")" 2>/dev/null && pwd -P || echo /usr/local/bin)"
   cron_path="$("$node_bin" "$MEMORY_DIR/mcp-server/src/cron-path.mjs" 2>/dev/null || true)"
   [ -n "$cron_path" ] || cron_path="${PATH:-}"
+  # Strip empty PATH segments (leading/trailing/double ":"). The helper output is
+  # already clean; this guards the live-$PATH fallback, whose empty segments would
+  # otherwise bake CWD-on-PATH into the cron job (a security footgun).
+  {
+    local _clean="" _seg _oifs="$IFS"
+    IFS=:
+    for _seg in $cron_path; do [ -n "$_seg" ] && _clean="${_clean:+$_clean:}$_seg"; done
+    IFS="$_oifs"
+    cron_path="$_clean"
+  }
   # Prepend the resolved docker dir, but: (a) never produce an empty PATH segment
   # (a leading/trailing ":" means CWD-on-PATH, a cron security footgun), and
   # (b) don't duplicate it when cron-path.mjs already included it (docker_dir is
