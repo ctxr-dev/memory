@@ -29,6 +29,16 @@ const DIFY_BUILTIN_META = new Set(["document_name", "uploader", "upload_date", "
 const STAMP_CACHE_MAX = 5000;
 const stampCache = new Map();
 
+// Serialise fire-and-forget dispatches. The bridge is long-lived and both
+// search_memory + recall_lessons call stampRecallsFireAndForget without any
+// ordering guarantee, so two concurrent stamps of the SAME document could each
+// read recall_count BEFORE the other's write lands, losing an increment (and the
+// debounce cache is only populated AFTER the write). Chaining all dispatches
+// through one promise makes the read-bump-write sequence atomic per process. The
+// work is debounced (24h) and fire-and-forget, so the serialisation never blocks
+// a read and the throughput cost is negligible.
+let stampChain = Promise.resolve();
+
 // NOTE: we deliberately do NOT cache the per-dataset metadata map across calls.
 // A cached snapshot can go stale within its TTL, and because the metadata POST
 // REPLACES the full custom-metadata set, writing from a stale snapshot would
@@ -188,27 +198,30 @@ export async function stampRecalls(config, { datasetId, records, nowMs, debounce
 // dataset and stamp each. NEVER awaited by the caller and NEVER rejects: this is
 // the fire-and-forget entry point the tool handlers call right before returning.
 export function stampRecallsFireAndForget(config, records, nowMs) {
-  return Promise.resolve()
-    .then(async () => {
-      const byDataset = new Map();
-      for (const rec of records || []) {
-        const ds = rec?.datasetId;
-        const id = rec?.documentId;
-        if (!ds || !id) continue;
-        let arr = byDataset.get(ds);
-        if (!arr) {
-          arr = [];
-          byDataset.set(ds, arr);
-        }
-        arr.push(rec);
+  // Chain after any in-flight dispatch so concurrent stamps never race the
+  // read-bump-write of recall_count. A failed prior dispatch must not break the
+  // chain, so the tail always resolves (errors are swallowed below).
+  const run = stampChain.then(async () => {
+    const byDataset = new Map();
+    for (const rec of records || []) {
+      const ds = rec?.datasetId;
+      const id = rec?.documentId;
+      if (!ds || !id) continue;
+      let arr = byDataset.get(ds);
+      if (!arr) {
+        arr = [];
+        byDataset.set(ds, arr);
       }
-      for (const [datasetId, recs] of byDataset) {
-        await stampRecalls(config, { datasetId, records: recs, nowMs });
-      }
-    })
-    .catch((err) => {
-      process.stderr.write(`[recall-stamp] fire-and-forget dispatch error: ${err?.message || err}\n`);
-    });
+      arr.push(rec);
+    }
+    for (const [datasetId, recs] of byDataset) {
+      await stampRecalls(config, { datasetId, records: recs, nowMs });
+    }
+  }).catch((err) => {
+    process.stderr.write(`[recall-stamp] fire-and-forget dispatch error: ${err?.message || err}\n`);
+  });
+  stampChain = run;
+  return run;
 }
 
 // Test-only: reset the in-process debounce cache between cases.

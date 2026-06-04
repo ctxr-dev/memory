@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { slotEnvKey, envValue, envInt, envFloat, envBool, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR, parseEnvValue } from "../scripts/lib/env.mjs";
+import { slotEnvKey, envValue, envInt, envFloat, envScore, envBool, atomBodyMaxChars, ATOM_BODY_MAX_CHARS_DEFAULT, ENV_PATH, MEMORY_DATA_DIR, parseEnvValue } from "../scripts/lib/env.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -130,6 +130,25 @@ test("envFloat: parses positive floats, falls back on non-positive/garbage/unset
   assert.equal(envFloat(KEY, 6), 6);
   delete process.env[KEY]; // unset -> fallback
   assert.equal(envFloat(KEY, 6), 6);
+});
+
+test("envScore: accepts (0,1], falls back outside the range (no silent drop)", (t) => {
+  const KEY = "MEMORY_TEST_SCORE_XYZ";
+  t.after(() => { delete process.env[KEY]; });
+  process.env[KEY] = "0.88";
+  assert.equal(envScore(KEY, 0.5), 0.88);
+  process.env[KEY] = "1"; // upper bound inclusive
+  assert.equal(envScore(KEY, 0.5), 1);
+  process.env[KEY] = "2"; // > 1 -> fallback (would otherwise be silently dropped downstream)
+  assert.equal(envScore(KEY, 0.5), 0.5);
+  process.env[KEY] = "88"; // typo for 0.88 -> fallback, not a never-matching threshold
+  assert.equal(envScore(KEY, 0.5), 0.5);
+  process.env[KEY] = "0"; // not > 0 -> fallback
+  assert.equal(envScore(KEY, 0.5), 0.5);
+  process.env[KEY] = "abc"; // garbage -> fallback
+  assert.equal(envScore(KEY, 0.5), 0.5);
+  delete process.env[KEY]; // unset -> fallback
+  assert.equal(envScore(KEY, 0.5), 0.5);
 });
 
 test("envBool: only exact true/false (case-insensitive) flip; else fallback", (t) => {

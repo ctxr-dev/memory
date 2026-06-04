@@ -103,6 +103,17 @@ export function envFloat(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+// Score reader for the (0, 1] retrieval / similarity thresholds. Like envFloat
+// but ALSO rejects values > 1: an out-of-range value (e.g. a typo'd 2 or 88
+// instead of 0.88) is treated as unset and falls back, rather than being passed
+// through where the downstream gate would silently drop it (an unfiltered cluster
+// for the score threshold, or a never-matching similarity threshold).
+export function envScore(name, fallback) {
+  const raw = envValue(name, "");
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n > 0 && n <= 1 ? n : fallback;
+}
+
 // Boolean reader. Only the exact string "true"/"false" (case-insensitive)
 // flips the value; anything else (unset, "", garbage) returns the fallback.
 // Mirrors the `=== "true"` convention already used for MEMORY_COMPILE_QUALITY_STRICT.
@@ -146,15 +157,19 @@ export function consolidateIntervalDays() {
 }
 
 // Dify hybrid score (NOT raw cosine) at/above which two docs are merge
-// candidates in the similarity pass. Higher = stricter (fewer merges).
+// candidates in the similarity pass. Higher = stricter (fewer merges). Read via
+// envScore so a value outside (0,1] (e.g. a typo'd 88) falls back instead of
+// becoming a never-matching threshold that silently disables similarity dedup.
 export function consolidateSimilarityThreshold() {
-  return envFloat("MEMORY_CONSOLIDATE_SIMILARITY_THRESHOLD", 0.88);
+  return envScore("MEMORY_CONSOLIDATE_SIMILARITY_THRESHOLD", 0.88);
 }
 
 // Coarser score floor for the per-doc cluster lookup that feeds the
 // LLM-refresh prompt (wants surrounding context, not just near-duplicates).
+// envScore: an out-of-(0,1] value falls back rather than being silently dropped
+// by retrieveChunks (which would return an UNFILTERED cluster).
 export function consolidateClusterScoreThreshold() {
-  return envFloat("MEMORY_CONSOLIDATE_CLUSTER_SCORE_THRESHOLD", 0.5);
+  return envScore("MEMORY_CONSOLIDATE_CLUSTER_SCORE_THRESHOLD", 0.5);
 }
 
 // Top-K members fetched per cluster lookup.

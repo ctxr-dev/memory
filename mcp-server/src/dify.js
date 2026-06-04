@@ -557,7 +557,17 @@ export async function listAllDocuments(config, { datasetId, keyword } = {}) {
     all.push(...batch);
     if (!body?.has_more || batch.length === 0) break;
     page += 1;
-    if (page > 100) break;
+    if (page > 100) {
+      // Hard cap at ~10k docs (100 pages x 100). Do NOT truncate silently: callers
+      // that build a doc map from this (getDocumentMetadataMap, recall-stamp,
+      // list-consolidate) would otherwise treat a doc beyond the cap as "not found"
+      // (read-merge then refuses; consolidate skips it). Surface it so an operator
+      // with a dataset this large knows to raise the cap / paginate differently.
+      process.stderr.write(
+        `[dify] listAllDocuments hit the 100-page cap (~${all.length} docs) for dataset ${datasetId} with has_more still true; results are TRUNCATED.\n`,
+      );
+      break;
+    }
   }
   return all;
 }
