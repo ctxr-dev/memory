@@ -8,7 +8,6 @@ import assert from "node:assert/strict";
 
 import { consolidateMemory, resolveAllowedPasses, allowListIsEffective, parseArgs, ALL_PASS_NAMES } from "../scripts/consolidate.mjs";
 
-const SEC = 1; // createdAt in seconds
 const NOW = new Date("2026-06-03T00:00:00Z");
 const MONTH_SEC = 2_629_800; // ~30.4 days in seconds
 const nowSec = Math.floor(NOW.getTime() / 1000);
