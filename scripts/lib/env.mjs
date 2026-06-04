@@ -26,10 +26,16 @@ export const ENV_PATH = path.join(MEMORY_DATA_DIR, "settings", ".env");
 // explicit MEMORY_COMPILE_STATE_DIR override so a test (or an ops relocation)
 // can run compile fully hermetically without touching the working tree. Read
 // from process.env directly: this is a path bootstrap, before envValue is defined.
-const COMPILE_STATE_DIR =
+const COMPILE_STATE_OVERRIDE =
   process.env.MEMORY_COMPILE_STATE_DIR && process.env.MEMORY_COMPILE_STATE_DIR.trim() !== ""
     ? process.env.MEMORY_COMPILE_STATE_DIR
-    : MEMORY_DIR;
+    : "";
+const COMPILE_STATE_DIR = COMPILE_STATE_OVERRIDE || MEMORY_DIR;
+// MEMORY_DIR always exists; an override dir may not, and acquireLock would then
+// ENOENT on lockfile creation. Best-effort create it (only when overridden).
+if (COMPILE_STATE_OVERRIDE) {
+  try { fs.mkdirSync(COMPILE_STATE_DIR, { recursive: true }); } catch { /* best-effort */ }
+}
 export const COMPILE_STATE_PATH = path.join(COMPILE_STATE_DIR, ".compile-state.json");
 export const COMPILE_LOCK_PATH = path.join(COMPILE_STATE_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
