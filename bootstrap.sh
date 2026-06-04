@@ -732,7 +732,13 @@ schedule_job() {
   docker_dir="$(cd "$(dirname "${docker_bin:-/usr/local/bin/docker}")" 2>/dev/null && pwd -P || echo /usr/local/bin)"
   cron_path="$("$node_bin" "$MEMORY_DIR/mcp-server/src/cron-path.mjs" 2>/dev/null || true)"
   [ -n "$cron_path" ] || cron_path="${PATH:-}"
-  cron_path="$docker_dir:$cron_path"
+  # Prepend the resolved docker dir, but never produce an empty PATH segment: a
+  # trailing/leading ":" means CWD-on-PATH, a security footgun for a cron job.
+  if [ -n "$cron_path" ]; then
+    cron_path="$docker_dir:$cron_path"
+  else
+    cron_path="$docker_dir"
+  fi
   local ws_hash
   ws_hash="$(printf '%s' "$WORKSPACE_DIR" | cksum | awk '{print $1}')"
 
