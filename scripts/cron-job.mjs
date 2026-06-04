@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { MEMORY_DIR, MEMORY_DATA_DIR, CONSOLIDATE_ATTEMPTS_LOG_PATH, envInt } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
+import { redact } from "./lib/redact.mjs";
 
 const MAX_LOG_LINES = 200;
 const STDERR_CAP_BYTES = 2000;
@@ -53,10 +54,10 @@ function appendAttempt(entry) {
   }
 }
 
-export function readAttempts({ limit = 50 } = {}) {
+export function readAttempts({ limit = 50, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH } = {}) {
   let raw = "";
   try {
-    raw = fs.readFileSync(CONSOLIDATE_ATTEMPTS_LOG_PATH, "utf8");
+    raw = fs.readFileSync(logPath, "utf8");
   } catch {
     return [];
   }
@@ -71,8 +72,8 @@ export function readAttempts({ limit = 50 } = {}) {
   return out.slice(-limit);
 }
 
-export function cronHealth({ limit = 20 } = {}) {
-  const all = readAttempts({ limit: MAX_LOG_LINES });
+export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH } = {}) {
+  const all = readAttempts({ limit: MAX_LOG_LINES, logPath });
   if (all.length === 0) {
     return { ok: true, healthy: true, summary: "no cron-job attempts logged yet (cron not yet scheduled or system fresh)", lastAttempt: null };
   }
@@ -106,8 +107,11 @@ export function runStep(scriptPath, args, { timeoutMs = STEP_TIMEOUT_MS } = {}) 
     : r.error
       ? `spawn error: ${r.error.message || r.error.code || r.error}`
       : "";
-  // Put the failure detail FIRST so the cap never truncates it away.
-  const stderr = [detail, String(r.stderr || "")].filter(Boolean).join("\n").slice(0, STDERR_CAP_BYTES);
+  // Put the failure detail FIRST so the cap never truncates it away. REDACT the
+  // child stderr: it is persisted to the attempts log and surfaced to the agent
+  // via cron_health, so any secret a child accidentally printed must be scrubbed
+  // here (every other host path that exposes text applies the same redaction).
+  const stderr = redact([detail, String(r.stderr || "")].filter(Boolean).join("\n")).slice(0, STDERR_CAP_BYTES);
   return {
     ok: r.status === 0 && !r.error,
     exit: typeof r.status === "number" ? r.status : -1,
@@ -117,7 +121,25 @@ export function runStep(scriptPath, args, { timeoutMs = STEP_TIMEOUT_MS } = {}) 
   };
 }
 
-export async function runCronJob() {
+// deps is injectable so the orchestration (overlap-skip, compile short-circuit,
+// consolidate error/llm-interrupt surfacing) is unit-testable WITHOUT spawning
+// real subprocesses, taking the shared lock, or writing the live attempts log.
+// Production passes nothing and gets the real runStep / lock / append.
+export async function runCronJob(deps = {}) {
+  const runStepFn = deps.runStepFn || runStep;
+  const appendFn = deps.appendFn || appendAttempt;
+  const acquireLockFn = deps.acquireLockFn || (() => {
+    // Ensure the state dir exists first (cron-job can run before bootstrap creates
+    // it, or after a manual cleanup) so the atomic-create lock does not ENOENT.
+    try {
+      fs.mkdirSync(path.dirname(CRON_LOCK_PATH), { recursive: true });
+    } catch {
+      /* best-effort; acquireLock surfaces a real failure */
+    }
+    installLockReleaseHandlers(CRON_LOCK_PATH);
+    return acquireLock(CRON_LOCK_PATH, { label: "cron-job" });
+  });
+
   const start = Date.now();
   const entry = { ts: new Date(start).toISOString(), kind: "cron-job", ok: false, durationMs: 0, compile: null, consolidate: null, error: null };
   const compileCli = path.join(MEMORY_DIR, "scripts", "compile.mjs");
@@ -125,15 +147,7 @@ export async function runCronJob() {
 
   // Skip (don't append) if another cron-job run holds the lock: it logs its own
   // attempt; appending from a second instance would race the log truncation.
-  // Ensure the state dir exists first (cron-job can run before bootstrap creates
-  // it, or after a manual cleanup) so the atomic-create lock does not ENOENT.
-  try {
-    fs.mkdirSync(path.dirname(CRON_LOCK_PATH), { recursive: true });
-  } catch {
-    /* best-effort; acquireLock surfaces a real failure */
-  }
-  installLockReleaseHandlers(CRON_LOCK_PATH);
-  const cronLock = acquireLock(CRON_LOCK_PATH, { label: "cron-job" });
+  const cronLock = acquireLockFn();
   if (!cronLock.ok) {
     return { ...entry, ok: true, skipped: "overlap", durationMs: Date.now() - start };
   }
@@ -141,37 +155,40 @@ export async function runCronJob() {
   try {
     // 1. compile (per-UTC-day state; cheap no-op on re-run).
     try {
-      const r = runStep(compileCli, []);
+      const r = runStepFn(compileCli, []);
       entry.compile = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
       if (!r.ok) {
         entry.error = `compile exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
         entry.durationMs = Date.now() - start;
-        appendAttempt(entry);
+        appendFn(entry);
         return entry;
       }
     } catch (err) {
       entry.error = `compile threw: ${err?.message || err}`;
       entry.durationMs = Date.now() - start;
-      appendAttempt(entry);
+      appendFn(entry);
       return entry;
     }
 
     // 2. consolidate --if-due --json (self-throttles to once per cadence).
     try {
-      const r = runStep(consolidateCli, ["--if-due", "--json"]);
+      const r = runStepFn(consolidateCli, ["--if-due", "--json"]);
       entry.consolidate = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
       if (r.ok) {
         try {
           const body = JSON.parse(r.stdout);
-          entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null };
+          entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null, llmInterrupted: body.llmInterrupted || false };
           // A zero exit code is not enough: consolidate can exit 0 while
-          // reporting ok:false or per-doc errors. Surface those so cron-health
-          // does not mask them as a clean run.
+          // reporting ok:false, per-doc errors, or an LLM provider that died
+          // mid-run (LLM passes deferred). Surface all three so cron-health does
+          // not mask them as a clean run.
           const errs = Number(body?.totals?.errors) || 0;
           if (body && body.ok === false) {
             entry.error = `consolidate not ok: ${body.error || "unknown"}`;
           } else if (errs > 0) {
             entry.error = `consolidate completed with ${errs} error(s)`;
+          } else if (body && body.llmInterrupted) {
+            entry.error = "consolidate: LLM provider unavailable mid-run; LLM passes incomplete (will retry next run)";
           }
         } catch {
           // Exit 0 but unparseable --json stdout means something is wrong
@@ -182,20 +199,20 @@ export async function runCronJob() {
       } else {
         entry.error = `consolidate exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
         entry.durationMs = Date.now() - start;
-        appendAttempt(entry);
+        appendFn(entry);
         return entry;
       }
     } catch (err) {
       entry.error = `consolidate threw: ${err?.message || err}`;
       entry.durationMs = Date.now() - start;
-      appendAttempt(entry);
+      appendFn(entry);
       return entry;
     }
 
     // ok unless a non-fatal consolidate error was surfaced above.
     entry.ok = !entry.error;
     entry.durationMs = Date.now() - start;
-    appendAttempt(entry);
+    appendFn(entry);
     return entry;
   } finally {
     try {

@@ -4,6 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
   ATOM_TYPES,
@@ -206,6 +207,27 @@ test("METADATA_SCHEMA cross-runtime TYPE parity: datasets.mjs == schema.js (name
     PER_DOC_METADATA_SCHEMA,
     METADATA_SCHEMA,
     "drift between mcp-server/src/schema.js:PER_DOC_METADATA_SCHEMA and scripts/lib/datasets.mjs:METADATA_SCHEMA: both must list the same {name,type} entries in the same order",
+  );
+});
+
+test("dify-setup.sh SCHEMA_FIELDS is the THIRD source and stays in lock-step with the JS schema", () => {
+  // The bash array is the shell installer's copy of the field list. Comments in
+  // all three files claim it is parity-locked by this test, but nothing read the
+  // shell file until now. Parse the SCHEMA_FIELDS=( ... ) array (multi-line, with
+  // backslash continuations) and assert its names == METADATA_SCHEMA names, in
+  // order, so a field added to the JS schema but forgotten in dify-setup.sh fails.
+  const sh = fs.readFileSync(new URL("../scripts/dify-setup.sh", import.meta.url), "utf8");
+  const m = sh.match(/SCHEMA_FIELDS=\(([\s\S]*?)\)/);
+  assert.ok(m, "could not find SCHEMA_FIELDS=( ... ) in scripts/dify-setup.sh");
+  const shellFields = m[1]
+    .replace(/\\\s*\n/g, " ") // join backslash line-continuations
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.deepEqual(
+    shellFields,
+    METADATA_SCHEMA.map((f) => f.name),
+    "drift between scripts/dify-setup.sh:SCHEMA_FIELDS and scripts/lib/datasets.mjs:METADATA_SCHEMA: the shell installer must list the same fields in the same order",
   );
 });
 

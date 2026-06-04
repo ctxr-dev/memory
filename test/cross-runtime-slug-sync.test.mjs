@@ -32,12 +32,35 @@ const SHARED_FUNCTIONS = [
 ];
 
 // Extract the source of a single `export function NAME(...) { ... }`
-// declaration by brace-matching from the opening { to its matching }.
+// declaration by brace-matching from the BODY's opening { to its matching }.
+// The body brace is located AFTER the balanced parameter list, so a destructured
+// param default (e.g. `slugify(text, { maxLen = 60 } = {})`) does NOT fool the
+// extractor into matching the param object's brace (which silently truncated the
+// comparison and let any drift inside slugify's body pass unnoticed).
 function extractFunction(source, name) {
-  const re = new RegExp(`export\\s+function\\s+${name}\\b[^{]*\\{`);
+  const re = new RegExp(`export\\s+function\\s+${name}\\b`);
   const start = source.search(re);
   if (start < 0) return null;
-  const openIdx = source.indexOf("{", start);
+  // Balance the parameter list parens first, respecting strings, so the body
+  // brace is the first `{` AFTER the closing `)` of the params.
+  const parenOpen = source.indexOf("(", start);
+  if (parenOpen < 0) return null;
+  let pdepth = 0;
+  let pstr = null;
+  let paramEnd = -1;
+  for (let j = parenOpen; j < source.length; j += 1) {
+    const ch = source[j];
+    if (pstr) {
+      if (ch === "\\") { j += 1; continue; }
+      if (ch === pstr) pstr = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { pstr = ch; continue; }
+    if (ch === "(") pdepth += 1;
+    else if (ch === ")") { pdepth -= 1; if (pdepth === 0) { paramEnd = j; break; } }
+  }
+  if (paramEnd < 0) return null;
+  const openIdx = source.indexOf("{", paramEnd);
   if (openIdx < 0) return null;
   let depth = 0;
   let inString = null;

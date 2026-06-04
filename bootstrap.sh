@@ -77,6 +77,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Validate --schedule at PARSE time, before any side-effecting work (template
+# render/merge, .gitignore + .env writes, schema install). Otherwise an invalid
+# value only failed at the very end, after the install had already run.
+case "${schedule:-}" in
+  ""|daily|off) : ;;
+  *) echo "Invalid --schedule '$schedule' (use 'daily' or 'off')." >&2; exit 2 ;;
+esac
+
 # ---------- prereq checks ----------
 require_cmd() {
   local cmd="$1" hint="$2"
@@ -737,25 +745,33 @@ schedule_job() {
       return 0
     fi
     mkdir -p "$HOME/Library/LaunchAgents"
+    # XML-escape every value interpolated into the plist: a workspace path with
+    # & < or > (all legal in macOS dir names) would otherwise produce malformed
+    # XML that launchctl silently rejects. Order matters: & MUST be first.
+    local x_label="$label" x_data="$data_dir" x_path="$cron_path" x_cmd="$job_cmd"
+    x_label="${x_label//&/&amp;}"; x_label="${x_label//</&lt;}"; x_label="${x_label//>/&gt;}"
+    x_data="${x_data//&/&amp;}";   x_data="${x_data//</&lt;}";   x_data="${x_data//>/&gt;}"
+    x_path="${x_path//&/&amp;}";   x_path="${x_path//</&lt;}";   x_path="${x_path//>/&gt;}"
+    x_cmd="${x_cmd//&/&amp;}";     x_cmd="${x_cmd//</&lt;}";     x_cmd="${x_cmd//>/&gt;}"
     cat > "$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$label</string>
+  <string>$x_label</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>MEMORY_DATA_DIR</key>
-    <string>$data_dir</string>
+    <string>$x_data</string>
     <key>PATH</key>
-    <string>$cron_path</string>
+    <string>$x_path</string>
   </dict>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>$job_cmd</string>
+    <string>$x_cmd</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -778,8 +794,12 @@ PLIST
     # "%", leaving the old entry behind (duplicate on reinstall / fails to remove
     # on --schedule off). The hash has no % or quotes, so grep -vF matches the
     # installed line reliably; the human-readable path stays in the comment.
-    local tag_match="# ctxr-memory:$ws_hash"
-    local tag="$tag_match $WORKSPACE_DIR"
+    # The TRAILING colon delimiter is load-bearing: cksum is a variable-length
+    # decimal CRC, so without it one workspace whose hash is a prefix of another's
+    # (e.g. 123 vs 1234) would have its cron line deleted by the other's substring
+    # grep -vF. The installed comment always has ":$ws_hash:" so the match is exact.
+    local tag_match="# ctxr-memory:$ws_hash:"
+    local tag="$tag_match$WORKSPACE_DIR"
     local wrapper="$data_dir/state/cron-maintenance.sh"
     local filtered
     filtered="$(crontab -l 2>/dev/null | grep -vF "$tag_match" || true)"
