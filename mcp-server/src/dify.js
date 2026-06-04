@@ -455,7 +455,15 @@ export async function getDocumentMetadataMap(config, { datasetId, documentId } =
     }
     if (!body?.has_more || batch.length === 0) break;
     page += 1;
-    if (page > 100) break; // same ~10k hard cap as listAllDocuments
+    if (page > 100) {
+      // Same ~10k hard cap as listAllDocuments. Warn (don't truncate silently):
+      // returning null here makes updateDocumentMetadata refuse a read-merge, and
+      // the operator should know it is pagination truncation, not indexing lag.
+      process.stderr.write(
+        `[dify] getDocumentMetadataMap hit the 100-page cap for dataset ${selectedDatasetId} without finding ${documentId} (has_more still true); treating as not-found (a read-merge will refuse).\n`,
+      );
+      break;
+    }
   }
   return null; // not found in the listing (distinct from {} = found, no custom fields)
 }

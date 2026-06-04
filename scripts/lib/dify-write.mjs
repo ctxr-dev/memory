@@ -225,7 +225,10 @@ export function setBuiltInMetadata({ datasetId, enabled } = {}) {
 export function updateDocMetadata({ datasetId, documentId, metadata, replace } = {}) {
   const flags = { datasetId, documentId };
   if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
-  if (replace) flags.replace = true;
+  // Require a strict boolean true: emitting --replace skips the bridge read-merge
+  // (destructive full-set write), so a truthy non-boolean leaking in from config /
+  // CLI plumbing (e.g. the string "false") must NOT enable it.
+  if (replace === true) flags.replace = true;
   return execCli("update-doc-metadata", flags);
 }
 
