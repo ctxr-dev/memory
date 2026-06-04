@@ -720,14 +720,19 @@ schedule_job() {
   node_bin="$(command -v node || echo node)"
   local job_cmd="\"$node_bin\" \"$MEMORY_DIR/scripts/cron-job.mjs\""
   # launchd / cron run with a MINIMAL PATH (typically /usr/bin:/bin:/usr/sbin:
-  # /sbin) that lacks both node and docker, so the job's `docker exec` to the
-  # bridge would fail with "spawn docker ENOENT". Build an explicit PATH that
-  # includes node's dir, the resolved docker dir, and the common docker
-  # locations (Rancher Desktop's ~/.rd/bin, Homebrew, /usr/local/bin).
+  # /sbin) that hides BOTH the provider CLIs (claude/codex the host engines
+  # spawn) and `docker` (the bridge transport), so the job ENOENTs and silently
+  # skips work while reporting healthy. Build a hybrid PATH from the single
+  # source of truth (mcp-server/src/cron-path.mjs: live login PATH + dirname(node)
+  # + curated CLI/docker dirs); fall back to the live PATH if the helper fails.
+  # Then PREPEND the bootstrap-resolved docker dir so a non-interactive install
+  # (whose minimal PATH may not list docker) still guarantees the bridge.
   local docker_bin docker_dir cron_path
   docker_bin="$(command -v docker 2>/dev/null || true)"
   docker_dir="$(cd "$(dirname "${docker_bin:-/usr/local/bin/docker}")" 2>/dev/null && pwd -P || echo /usr/local/bin)"
-  cron_path="$(dirname "$node_bin"):$docker_dir:${HOME:-}/.rd/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  cron_path="$("$node_bin" "$MEMORY_DIR/mcp-server/src/cron-path.mjs" 2>/dev/null || true)"
+  [ -n "$cron_path" ] || cron_path="${PATH:-}"
+  cron_path="$docker_dir:$cron_path"
   local ws_hash
   ws_hash="$(printf '%s' "$WORKSPACE_DIR" | cksum | awk '{print $1}')"
 

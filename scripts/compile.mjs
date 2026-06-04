@@ -24,6 +24,12 @@ import { ATOM_TYPE_TO_DATASET, ATOM_TYPES, metadataForDify } from "./lib/dataset
 
 const FORCE = process.argv.includes("--force");
 const DRY_RUN = process.argv.includes("--dry-run");
+// BSD EX_UNAVAILABLE. Distinguishes "daily docs pending but no LLM/bridge
+// provider reachable" (retryable; the cron tick records a FAILED attempt and
+// retries next hour) from 0 (clean) and other non-zero (hard failure). The
+// cron-job + cron_health use this to stop reporting a silently-skipped tick as
+// healthy.
+const EX_UNAVAILABLE = 69;
 const SEARCH_LIMIT = envInt("MEMORY_COMPILE_SEARCH_LIMIT", 5);
 const METADATA_RETRY_LIMIT = envInt("MEMORY_COMPILE_METADATA_RETRY_LIMIT", 3);
 // When true, atoms failing scoreAtomQuality are dropped before promotion.
@@ -446,8 +452,8 @@ async function executeAction(atom, decision, candidates, targetDataset) {
 // After writeMemory creates the new document, set the per-document Dify
 // metadata so subsequent retrieve calls can filter on it. Failure is
 // recorded but does not abort the compile run — EXCEPT bridge-unavailable
-// errors are re-thrown so the outer per-atom catch can fire `process.exit(0)`
-// instead of grinding through more dailies against a dead bridge.
+// errors are re-thrown so the outer per-atom catch can fire `process.exit(69)`
+// (EX_UNAVAILABLE) instead of grinding through more dailies against a dead bridge.
 async function applyMetadataToWritten(atom, writeResult, targetDataset) {
   if (!writeResult || writeResult.dryRun) return null;
   const docId = writeResult?.created?.document?.id || writeResult?.created?.id;
@@ -486,8 +492,8 @@ async function main() {
     dailies = Array.isArray(result?.documents) ? result.documents : [];
   } catch (err) {
     if (err instanceof DifyBridgeUnavailable) {
-      console.error(`compile.mjs: bridge unavailable: ${err.message}`);
-      process.exit(0);
+      console.error(`compile.mjs: aborting (${err.constructor.name}): ${err.message}`);
+      process.exit(EX_UNAVAILABLE);
     }
     throw err;
   }
@@ -570,8 +576,8 @@ async function main() {
       counts.error += 1;
       appendCompileLog({ event: "read-error", document: daily.name, error: err.message || String(err) });
       if (err instanceof DifyBridgeUnavailable) {
-        console.error(`compile.mjs: aborting, bridge gone: ${err.message}`);
-        process.exit(0);
+        console.error(`compile.mjs: aborting (${err.constructor.name}): ${err.message}`);
+        process.exit(EX_UNAVAILABLE);
       }
       continue;
     }
@@ -714,7 +720,7 @@ async function main() {
           // run sees the latest state.
           try { writeState(state); } catch { /* swallow — state write best-effort */ }
           console.error(`compile.mjs: aborting (${err.constructor.name}): ${err.message}`);
-          process.exit(0);
+          process.exit(EX_UNAVAILABLE);
         }
       }
     }
@@ -787,7 +793,7 @@ async function main() {
     }
 
     // Persist state per-daily so a crash mid-loop doesn't lose retry
-    // counters. Without this, a process.exit(0) on bridge/LLM unavailable
+    // counters. Without this, a process.exit(69) on bridge/LLM unavailable
     // (lines above) would never let the retry cap kick in.
     try {
       writeState(state);

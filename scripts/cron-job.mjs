@@ -23,6 +23,9 @@ import { redact } from "./lib/redact.mjs";
 
 const MAX_LOG_LINES = 200;
 const STDERR_CAP_BYTES = 2000;
+// compile.mjs exits 69 (BSD EX_UNAVAILABLE) when daily docs are pending but no
+// LLM/bridge provider is reachable: a retryable failed attempt, not a crash.
+const EX_UNAVAILABLE = 69;
 // Bounded per-step timeout. Without it, a hung compile/consolidate (e.g. a stuck
 // `docker exec` to the bridge) would let cron-job run forever holding the cron
 // lock, starving every future hourly attempt and leaving cron_health with a
@@ -158,7 +161,13 @@ export async function runCronJob(deps = {}) {
       const r = runStepFn(compileCli, []);
       entry.compile = { ok: r.ok, exit: r.exit, stderr: r.stderr.slice(0, 500) };
       if (!r.ok) {
-        entry.error = `compile exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
+        // Exit 69 (EX_UNAVAILABLE) = daily docs pending but no LLM/bridge
+        // provider reachable: a retryable failed attempt (cron_health flips
+        // unhealthy, self-clearing on the next good tick), NOT a hard crash.
+        entry.error =
+          r.exit === EX_UNAVAILABLE
+            ? `compile: providers unavailable (exit 69); promotion deferred, will retry: ${r.stderr.slice(0, 240)}`
+            : `compile exit ${r.exit}: ${r.stderr.slice(0, 300)}`;
         entry.durationMs = Date.now() - start;
         appendFn(entry);
         return entry;
@@ -177,7 +186,7 @@ export async function runCronJob(deps = {}) {
       if (r.ok) {
         try {
           const body = JSON.parse(r.stdout);
-          entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null, llmInterrupted: body.llmInterrupted || false };
+          entry.consolidate.summary = { ok: body.ok, skipped: body.skipped || null, dryRun: body.dryRun || false, totals: body.totals || null, workingSetSize: body.workingSetSize ?? null, llm: body.llm ?? null, llmRequested: body.llmRequested ?? null, llmInterrupted: body.llmInterrupted || false };
           // A zero exit code is not enough: consolidate can exit 0 while
           // reporting ok:false, per-doc errors, or an LLM provider that died
           // mid-run (LLM passes deferred). Surface all three so cron-health does

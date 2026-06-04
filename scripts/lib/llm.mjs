@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { envValue, envInt } from "./env.mjs";
 import { reentryEnv } from "./reentry.mjs";
+import { augmentSpawnEnv } from "../../mcp-server/src/cron-path.mjs";
 
 export class LLMProviderUnavailable extends Error {}
 export class LLMOutputInvalid extends Error {
@@ -78,7 +79,10 @@ async function spawnCapture(cmd, args, { input, timeoutMs, env }) {
   return new Promise((resolve, reject) => {
     // env undefined -> Node inherits process.env (the API providers below
     // never spawn, so only the CLI providers pass an explicit env).
-    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], env });
+    // augmentSpawnEnv appends well-known CLI install dirs to the child PATH:
+    // under launchd/cron's minimal PATH the provider CLIs are otherwise
+    // invisible, and in an interactive session the merge is a no-op dedup.
+    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"], env: augmentSpawnEnv(env) });
     const stdout = [];
     const stderr = [];
     // SIGTERM first so the CLI gets a chance to flush auth state /

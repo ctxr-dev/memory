@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { envValue } from "./env.mjs";
+import { augmentSpawnEnv } from "../../mcp-server/src/cron-path.mjs";
 
 export class DifyBridgeUnavailable extends Error {}
 
@@ -47,7 +48,10 @@ async function execCli(subcommand, flags = {}, { stdin, timeoutMs = DEFAULT_TIME
   const args = buildExecCliArgs(subcommand, flags, container);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+    // Heal the child PATH so `docker` resolves under launchd/cron's minimal PATH
+    // (the bridge transport is `docker exec`); a no-op dedup in an interactive
+    // shell where docker is already on PATH.
+    const child = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"], env: augmentSpawnEnv(process.env) });
     const stdout = [];
     const stderr = [];
     let stdoutBytes = 0;
