@@ -27,6 +27,10 @@ export function dailyDocName(date = new Date()) {
   return `daily-${dateUtc(date)}.md`;
 }
 
+export function dailyDatePath(date = new Date()) {
+  return dateUtc(date).replace(/-/g, "/");
+}
+
 export function knowledgeDocName(slugOrTitle, date = new Date()) {
   const slug = slugify(slugOrTitle);
   return `knowledge-${slug}-${timestampUtc(date)}.md`;

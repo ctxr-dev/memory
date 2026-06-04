@@ -27,6 +27,7 @@ const SHARED_FUNCTIONS = [
   "slugify",
   "timestampUtc",
   "dailyDocName",
+  "dailyDatePath",
   "knowledgeDocName",
   "lessonDocName",
 ];
