@@ -1299,9 +1299,9 @@ server.registerTool(
         attempts = raw.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       } catch {
         if (escalations.length > 0) {
-          return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s)`, lastAttempt: null, escalations, logPath });
+          return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s)`, lastAttempt: null, recent: [], escalations, logPath });
         }
-        return jsonToolResponse({ ok: true, healthy: true, summary: "no cron attempts logged yet (cron not scheduled, or state dir not mounted)", lastAttempt: null, escalations, logPath });
+        return jsonToolResponse({ ok: true, healthy: true, summary: "no cron attempts logged yet (cron not scheduled, or state dir not mounted)", lastAttempt: null, recent: [], escalations, logPath });
       }
       const last = attempts.length ? attempts[attempts.length - 1] : null;
       if (escalations.length > 0) {
@@ -1310,7 +1310,7 @@ server.registerTool(
         return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s); ${where}`.slice(0, 200), lastAttempt: last, recent: attempts.slice(-n), escalations, logPath });
       }
       if (!last) {
-        return jsonToolResponse({ ok: true, healthy: true, summary: "attempts log is empty", lastAttempt: null, escalations, logPath });
+        return jsonToolResponse({ ok: true, healthy: true, summary: "attempts log is empty", lastAttempt: null, recent: [], escalations, logPath });
       }
       if (last.ok === false) {
         return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${last.ts}: ${String(last.error || "").slice(0, 200)}`, lastAttempt: last, recent: attempts.slice(-n), escalations, logPath });

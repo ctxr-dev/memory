@@ -410,9 +410,10 @@ function renderIssueReport(rec) {
     "",
     `# Consolidate escalation: ${collapse(rec.signature)}`,
     "",
-    "Auto-generated skeleton: a maintenance action kept failing for the same",
-    `entity across ${e.attempts} consecutive cron attempt(s)` +
-      (e.reason === "recurring-bug" ? ` and the same error signature spans ${e.entityCount} distinct entities (likely a code bug)` : "") +
+    "Auto-generated skeleton: " +
+      (e.reason === "recurring-bug"
+        ? `the same error signature recurred across ${e.entityCount} distinct entities (likely a code bug; max ${e.attempts} consecutive attempt(s) on any one)`
+        : `a maintenance action kept failing for the same entity across ${e.attempts} consecutive cron attempt(s)`) +
       ". Use it to draft a fix; an agent can deepen the analysis from the linked full logs on request.",
     "",
     "## Error excerpts (redacted)",
@@ -538,8 +539,11 @@ export async function runCronJob(deps = {}) {
 
   const start = new Date();
   const ts = start.toISOString();
+  const dataDir = sp.dataDir || MEMORY_DATA_DIR;
   const fullLogAbs = fullLogPathFor(start, { cronLogsDir: sp.cronLogsDir || CRON_LOGS_DIR });
-  const logPathRel = relToDataDir(fullLogAbs);
+  // Relative to the EFFECTIVE data dir (honors statePaths.dataDir) so a redirected
+  // test run gets a clean relative pointer, not a "../"-laden path.
+  const logPathRel = path.relative(dataDir, fullLogAbs);
   const compileCli = path.join(MEMORY_DIR, "scripts", "compile.mjs");
   const consolidateCli = path.join(MEMORY_DIR, "scripts", "consolidate.mjs");
 
@@ -588,7 +592,7 @@ export async function runCronJob(deps = {}) {
         escalations = escalations.filter((e) => touchedSigs.has(e.signature));
       }
       const issues = writeIssueReports(escalations, state, start, {
-        issuesDir: sp.issuesDir, issuesIndexPath: sp.issuesIndexPath, dataDir: sp.dataDir || MEMORY_DATA_DIR,
+        issuesDir: sp.issuesDir, issuesIndexPath: sp.issuesIndexPath, dataDir,
       });
       writeEntityState(state, { entitiesPath: sp.entitiesPath });
       entry.escalations = issues.openCount;
