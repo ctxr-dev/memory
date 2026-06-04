@@ -21,6 +21,19 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+// The PATH env var is "PATH" on POSIX but commonly "Path" on Windows / Git Bash.
+// Find whichever casing an env object uses so we never drop the live PATH (and so
+// augmentSpawnEnv writes back under the SAME key instead of creating a dual
+// PATH/Path). Defaults to "PATH" when absent.
+export function pathKeyOf(env) {
+  if (env) {
+    for (const k of Object.keys(env)) {
+      if (k.toLowerCase() === "path") return k;
+    }
+  }
+  return "PATH";
+}
+
 // Well-known CLI install dirs across platforms and toolchain managers, plus the
 // docker shim dirs this project's bridge needs (Rancher Desktop, Colima).
 // Filesystem paths only. Pure string list: no fs probing, a nonexistent dir on
@@ -60,7 +73,7 @@ export function buildCronPath({ envPath = "", home = "", execPath = "" } = {}) {
     segments.push(dir);
   };
 
-  for (const dir of String(envPath).split(path.delimiter)) push(dir);
+  for (const dir of String(envPath).split(path.delimiter)) push(dir.trim());
   if (execPath) push(path.dirname(execPath));
   for (const dir of CURATED_CLI_DIRS) {
     if (dir.startsWith("~/")) {
@@ -78,10 +91,11 @@ export function buildCronPath({ envPath = "", home = "", execPath = "" } = {}) {
 // unchanged when env is null/undefined (an API provider that never spawns a CLI).
 export function augmentSpawnEnv(env) {
   if (!env) return env;
+  const key = pathKeyOf(env); // preserve the env's own PATH casing (Windows "Path")
   return {
     ...env,
-    PATH: buildCronPath({
-      envPath: env.PATH ?? process.env.PATH ?? "",
+    [key]: buildCronPath({
+      envPath: env[key] ?? process.env[pathKeyOf(process.env)] ?? "",
       home: env.HOME ?? process.env.HOME ?? "",
       execPath: process.execPath,
     }),
@@ -101,7 +115,7 @@ if (invokedAsCli) {
   // No trailing newline: bootstrap captures this with "$(...)" verbatim.
   process.stdout.write(
     buildCronPath({
-      envPath: process.env.PATH || "",
+      envPath: process.env[pathKeyOf(process.env)] || "",
       home: process.env.HOME || "",
       execPath: process.execPath,
     }),

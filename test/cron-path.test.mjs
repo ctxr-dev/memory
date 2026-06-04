@@ -59,6 +59,23 @@ test("augmentSpawnEnv: merges curated dirs into a minimal cron env; passes null 
   assert.equal(augmentSpawnEnv(null), null);
 });
 
+test("buildCronPath: whitespace-padded / empty segments are trimmed before dedup", () => {
+  const out = buildCronPath({ envPath: join(" /usr/bin ", "/usr/bin", "  ", "/bin"), home: "/h", execPath: "" }).split(D);
+  assert.ok(out.includes("/usr/bin"), "trailing/leading space trimmed to the real dir");
+  assert.equal(out.filter((d) => d === "/usr/bin").length, 1, "padded duplicate collapsed");
+  assert.ok(!out.includes(""), "no empty segment");
+  assert.ok(!out.some((d) => /^\s|\s$/.test(d)), "no whitespace-padded segments");
+});
+
+test("augmentSpawnEnv: honors a Windows-style 'Path' key (preserves casing, keeps live PATH)", () => {
+  const merged = augmentSpawnEnv({ Path: join("/usr/bin", "/bin"), HOME: "/home/u" });
+  assert.equal(merged.PATH, undefined, "does not create a second PATH key");
+  assert.ok(typeof merged.Path === "string", "writes back under the original 'Path' key");
+  const dirs = merged.Path.split(D);
+  assert.ok(dirs.includes("/usr/bin"), "live PATH from 'Path' is preserved, not dropped");
+  assert.ok(dirs.includes(path.join("/home/u", ".local/bin")), "curated dirs still appended");
+});
+
 test("CURATED_CLI_DIRS: includes provider-CLI homes AND docker shim dirs", () => {
   for (const d of ["~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/.volta/bin", "~/.asdf/shims", "~/.cargo/bin", "~/.rd/bin", "~/.colima/default/bin"]) {
     assert.ok(CURATED_CLI_DIRS.includes(d), `curated dirs must include ${d}`);
