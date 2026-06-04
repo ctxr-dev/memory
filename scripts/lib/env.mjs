@@ -22,8 +22,16 @@ export const MEMORY_DATA_DIR =
     ? process.env.MEMORY_DATA_DIR
     : path.join(WORKSPACE_DIR, ".memory");
 export const ENV_PATH = path.join(MEMORY_DATA_DIR, "settings", ".env");
-export const COMPILE_STATE_PATH = path.join(MEMORY_DIR, ".compile-state.json");
-export const COMPILE_LOCK_PATH = path.join(MEMORY_DIR, ".compile.lock");
+// Compile lock + state default to the repo dir (unchanged), but honor an
+// explicit MEMORY_COMPILE_STATE_DIR override so a test (or an ops relocation)
+// can run compile fully hermetically without touching the working tree. Read
+// from process.env directly: this is a path bootstrap, before envValue is defined.
+const COMPILE_STATE_DIR =
+  process.env.MEMORY_COMPILE_STATE_DIR && process.env.MEMORY_COMPILE_STATE_DIR.trim() !== ""
+    ? process.env.MEMORY_COMPILE_STATE_DIR
+    : MEMORY_DIR;
+export const COMPILE_STATE_PATH = path.join(COMPILE_STATE_DIR, ".compile-state.json");
+export const COMPILE_LOCK_PATH = path.join(COMPILE_STATE_DIR, ".compile.lock");
 export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 
 // Durable cron/consolidate state lives under the gitignored data dir's

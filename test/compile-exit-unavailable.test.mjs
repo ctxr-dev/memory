@@ -25,6 +25,10 @@ function runCompile(extraEnv) {
       env: {
         ...process.env,
         MEMORY_DATA_DIR: dir,
+        // Isolate compile's lock + state (.compile.lock / .compile-state.json /
+        // .compile-state.json.log) into the temp dir too — they default to the
+        // repo root, so without this the subprocess would write the working tree.
+        MEMORY_COMPILE_STATE_DIR: dir,
         // A container that cannot exist forces `docker exec` to fail at the very
         // first bridge call; never targets the real ctxr-dev-memory container.
         MCP_CONTAINER_NAME: "ctxr-nonexistent-test-container-xyz",
