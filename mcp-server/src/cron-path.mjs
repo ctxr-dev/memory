@@ -47,7 +47,9 @@ export const CURATED_CLI_DIRS = Object.freeze([
 // Hybrid PATH: live env PATH first (user wins), then the dir of the node binary
 // that launched us (npm-shim CLIs need `node` resolvable), then the curated dirs.
 // Deduped keeping first occurrence; `~` entries dropped when home is unknown (a
-// literal `~` on PATH is never resolved by spawn).
+// literal `~` on PATH is never resolved by spawn). Uses `path.delimiter` (":" on
+// POSIX, ";" on Windows) for both split and join so a native-Windows PATH (whose
+// "C:\..." entries contain a colon) is not corrupted under Git Bash.
 export function buildCronPath({ envPath = "", home = "", execPath = "" } = {}) {
   const segments = [];
   const seen = new Set();
@@ -58,7 +60,7 @@ export function buildCronPath({ envPath = "", home = "", execPath = "" } = {}) {
     segments.push(dir);
   };
 
-  for (const dir of String(envPath).split(":")) push(dir);
+  for (const dir of String(envPath).split(path.delimiter)) push(dir);
   if (execPath) push(path.dirname(execPath));
   for (const dir of CURATED_CLI_DIRS) {
     if (dir.startsWith("~/")) {
@@ -67,7 +69,7 @@ export function buildCronPath({ envPath = "", home = "", execPath = "" } = {}) {
       push(dir);
     }
   }
-  return segments.join(":");
+  return segments.join(path.delimiter);
 }
 
 // Spawn-env wrapper for llm.mjs / dify-write.mjs: same merge, sourced from the
