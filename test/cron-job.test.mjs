@@ -72,11 +72,16 @@ test("runCronJob: consolidate non-zero exit -> failure with the exit + stderr", 
   assert.match(res.error, /consolidate exit 3/);
 });
 
-test("runCronJob: consolidate exit 0 but unparseable JSON -> treated as a failure", async () => {
-  const consolidate = { ok: true, exit: 0, stderr: "", stdout: "not json" };
+test("runCronJob: consolidate exit 0 but unparseable JSON -> failure, with stdout REDACTED", async () => {
+  // The unparseable stdout is embedded in the error (persisted + surfaced via
+  // cron_health), so any secret a child printed must be scrubbed.
+  const secret = "ghp_" + "A".repeat(36);
+  const consolidate = { ok: true, exit: 0, stderr: "", stdout: `oops ${secret} not json` };
   const res = await runCronJob({ acquireLockFn: okLock, runStepFn: step({ compile: OK, consolidate }), appendFn: () => {} });
   assert.equal(res.ok, false);
   assert.match(res.error, /unparseable/);
+  assert.ok(!res.error.includes(secret), "raw secret must not appear in the surfaced error");
+  assert.match(res.error, /ghp_\[REDACTED\]/, "stdout is redacted");
 });
 
 // ---- cronHealth / readAttempts classification (temp log) ----

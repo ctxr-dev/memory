@@ -193,8 +193,9 @@ export async function runCronJob(deps = {}) {
         } catch {
           // Exit 0 but unparseable --json stdout means something is wrong
           // (stray stdout logging, partial output); treat it as an error so
-          // cron-health does not record a misleading clean run.
-          entry.error = `consolidate exited 0 but produced unparseable --json stdout: ${String(r.stdout).slice(0, 200)}`;
+          // cron-health does not record a misleading clean run. REDACT the stdout
+          // slice: it is persisted + surfaced via cron_health like the stderr.
+          entry.error = `consolidate exited 0 but produced unparseable --json stdout: ${redact(String(r.stdout)).slice(0, 200)}`;
         }
       } else {
         entry.error = `consolidate exit ${r.exit}: ${r.stderr.slice(0, 300)}`;

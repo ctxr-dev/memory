@@ -438,13 +438,26 @@ export async function loadMetadataFieldIndex(config, { datasetId } = {}) {
 export async function getDocumentMetadataMap(config, { datasetId, documentId } = {}) {
   if (!documentId) throw new Error("getDocumentMetadataMap requires documentId.");
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
-  const docs = await listAllDocuments(config, { datasetId: selectedDatasetId });
-  const doc = (docs || []).find((d) => d?.id === documentId);
-  if (!doc) return null;
-  const out = {};
-  const fields = Array.isArray(doc?.doc_metadata) ? doc.doc_metadata : [];
-  for (const f of fields) if (f?.name) out[f.name] = f.value;
-  return out;
+  // Page through and EARLY-EXIT as soon as the target doc is found, instead of
+  // materialising the whole dataset (read-merge runs this per metadata write, so
+  // the common case of finding the doc on an early page should be cheap).
+  let page = 1;
+  const limit = 100;
+  while (true) {
+    const body = await listDocuments(config, { datasetId: selectedDatasetId, page, limit });
+    const batch = Array.isArray(body?.data) ? body.data : [];
+    const doc = batch.find((d) => d?.id === documentId);
+    if (doc) {
+      const out = {};
+      const fields = Array.isArray(doc.doc_metadata) ? doc.doc_metadata : [];
+      for (const f of fields) if (f?.name) out[f.name] = f.value;
+      return out;
+    }
+    if (!body?.has_more || batch.length === 0) break;
+    page += 1;
+    if (page > 100) break; // same ~10k hard cap as listAllDocuments
+  }
+  return null; // not found in the listing (distinct from {} = found, no custom fields)
 }
 
 // metadataMap: plain { fieldName: value } object. Resolves field ids via
