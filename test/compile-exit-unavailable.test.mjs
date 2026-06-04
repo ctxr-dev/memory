@@ -29,6 +29,11 @@ function runCompile(extraEnv) {
         // first bridge call; never targets the real ctxr-dev-memory container.
         MCP_CONTAINER_NAME: "ctxr-nonexistent-test-container-xyz",
         DIFY_FLUSH_DATASET: "daily",
+        // Tiny lock-stale window so an orphaned .compile.lock (a prior crashed
+        // or recently-run compile within the default 30m window) is reclaimed
+        // instead of making compile exit 0 early via "skipping (lock held)" —
+        // which would mask the exit-69 path this test asserts.
+        MEMORY_COMPILE_LOCK_STALE_MS: "1",
         ...extraEnv,
       },
     });
