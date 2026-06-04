@@ -151,8 +151,15 @@ export function similarityPairs(queryLeaf, candidates, threshold) {
 }
 
 // Collapse a flat pair list to at most one pair per loser (highest-precedence
-// sourcePass wins) and drop any pair whose keeper is itself archived as a loser
-// elsewhere (so we never rewrite-then-archive the same doc). Deterministic order.
+// sourcePass wins), then RE-POINT each loser to its ULTIMATE keeper. In a 3+
+// mutually-similar cluster the per-doc scans produce a chain (e.g. A<-B, B<-C),
+// where an intermediate doc B is both a keeper and a loser. Rather than DROP the
+// pair whose keeper is itself a loser (which orphaned that loser: never archived,
+// never flagged), follow the chain to the single survivor so every loser is
+// archived against the one keeper that remains. This also preserves the original
+// safety property: we never rewrite-then-archive the same doc, because a doc that
+// is a loser is never emitted as a keeper. A cycle guard protects against loops.
+// Deterministic order (sorted by loser id).
 export function dedupePairs(pairs) {
   const byLoser = new Map();
   for (const p of pairs || []) {
@@ -161,11 +168,23 @@ export function dedupePairs(pairs) {
     const prev = byLoser.get(id);
     if (!prev || passRank(p.sourcePass) < passRank(prev.sourcePass)) byLoser.set(id, p);
   }
-  const losers = new Set(byLoser.keys());
+  const ultimateKeeper = (start) => {
+    let cur = start;
+    const seen = new Set();
+    while (cur && byLoser.has(cur.documentId)) {
+      if (seen.has(cur.documentId)) break; // cycle guard
+      seen.add(cur.documentId);
+      const next = byLoser.get(cur.documentId).keeper;
+      if (!next || next.documentId === cur.documentId) break;
+      cur = next;
+    }
+    return cur;
+  };
   const out = [];
   for (const p of byLoser.values()) {
-    if (losers.has(p.keeper.documentId)) continue;
-    out.push(p);
+    const keeper = ultimateKeeper(p.keeper);
+    if (!keeper || keeper.documentId === p.loser.documentId) continue; // never pair to self
+    out.push(keeper === p.keeper ? p : { ...p, keeper });
   }
   out.sort((a, b) => (a.loser.documentId < b.loser.documentId ? -1 : a.loser.documentId > b.loser.documentId ? 1 : 0));
   return out;

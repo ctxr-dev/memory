@@ -41,6 +41,7 @@ import {
   consolidateLlmEnabled,
   consolidatePassesEnv,
   readEnvFile,
+  envInt,
 } from "./lib/env.mjs";
 import { acquireLock, installLockReleaseHandlers } from "./lib/lock.mjs";
 import { callLLMWithRetry, LLMProviderUnavailable } from "./lib/llm.mjs";
@@ -272,7 +273,12 @@ export function defaultDeps() {
     // lock file, which node --test's parallel file processes would otherwise hit).
     acquireLock: () => {
       installLockReleaseHandlers(COMPILE_LOCK_PATH);
-      return acquireLock(COMPILE_LOCK_PATH, { label: "consolidate" });
+      // Use the SAME stale window compile.mjs uses (MEMORY_COMPILE_LOCK_STALE_MS),
+      // not lock.mjs's bare default: otherwise raising the env to extend compile's
+      // hold would let consolidate reclaim a still-valid compile lock early and
+      // break the mutual exclusion the shared lock provides.
+      const staleMs = envInt("MEMORY_COMPILE_LOCK_STALE_MS", 1_800_000);
+      return acquireLock(COMPILE_LOCK_PATH, { staleMs, label: "consolidate" });
     },
     readState,
     writeState,
@@ -361,10 +367,14 @@ async function buildPairsForSlot({ slot, leaves, allowed, deps, simThreshold, to
   return pairs;
 }
 
-// Archive a loser: stamp superseded_by + consolidated_at, then disable.
-async function archiveLoser({ loser, keeperId, slot, deps, now, report, sourcePass, dryRun }) {
+// Archive a loser: stamp superseded_by + consolidated_at, then disable. Records
+// the loser id in `consumed` so the later staleness/refresh passes skip it (the
+// working set was snapshotted before this archive; without this a disabled loser
+// could be re-flagged or, via a refresh rewrite, resurrected as a new enabled doc).
+async function archiveLoser({ loser, keeperId, slot, deps, now, report, sourcePass, dryRun, consumed }) {
   if (dryRun) {
     report.get(sourcePass).archived++;
+    if (consumed) consumed.add(loser.documentId);
     return;
   }
   try {
@@ -376,23 +386,24 @@ async function archiveLoser({ loser, keeperId, slot, deps, now, report, sourcePa
     });
     await deps.disableDoc({ documentId: loser.documentId, datasetId: slot });
     report.get(sourcePass).archived++;
+    if (consumed) consumed.add(loser.documentId);
   } catch (err) {
     report.get(sourcePass).errors++;
     process.stderr.write(`[consolidate] archive failed for ${loser.documentId} (${sourcePass}): ${err?.message || err}\n`);
   }
 }
 
-async function handlePairsNoLlm({ pairs, slot, deps, now, report, dryRun }) {
+async function handlePairsNoLlm({ pairs, slot, deps, now, report, dryRun, consumed }) {
   const { deterministic, fuzzy } = partitionByArchivePolicy(pairs);
   // Fuzzy similarity: flag only (already counted in report.flagged); never
   // archive without LLM confirmation.
   for (const p of deterministic) {
-    await archiveLoser({ loser: p.loser, keeperId: p.keeper.documentId, slot, deps, now, report, sourcePass: p.sourcePass, dryRun });
+    await archiveLoser({ loser: p.loser, keeperId: p.keeper.documentId, slot, deps, now, report, sourcePass: p.sourcePass, dryRun, consumed });
   }
   return fuzzy.length;
 }
 
-async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx }) {
+async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx, consumed }) {
   const sys = loadPrompt("consolidate-merge.md");
   const cap = consolidateAtomBodyMaxChars();
   const mergeReport = report.get("llm-merge-near-duplicates");
@@ -401,7 +412,7 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
       // Provider died mid-run: fall back to the no-LLM policy for the rest.
       const { deterministic } = partitionByArchivePolicy([p]);
       for (const d of deterministic) {
-        await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun });
+        await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun, consumed });
       }
       continue;
     }
@@ -416,10 +427,11 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
     } catch (err) {
       if (err instanceof LLMProviderUnavailable) {
         ctx.llmEnabled = false;
+        ctx.llmInterrupted = true;
         process.stderr.write(`[consolidate] LLM provider unavailable; remaining merges fall back to deterministic: ${err?.message || err}\n`);
         const { deterministic } = partitionByArchivePolicy([p]);
         for (const d of deterministic) {
-          await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun });
+          await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun, consumed });
         }
         continue;
       }
@@ -427,7 +439,7 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
       mergeReport.errors++;
       const { deterministic } = partitionByArchivePolicy([p]);
       for (const d of deterministic) {
-        await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun });
+        await archiveLoser({ loser: d.loser, keeperId: d.keeper.documentId, slot, deps, now, report, sourcePass: d.sourcePass, dryRun, consumed });
       }
       continue;
     }
@@ -463,6 +475,10 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
         try {
           const saved = await deps.saveDoc({ name: p.keeper.name, text: body, datasetId: slot, metadata: stampMeta(p.keeper, { consolidated_at: toIso(now) }) });
           keeperId = requireNewId(saved, `merge keeper ${p.keeper.documentId}`);
+          // The keeper was rewritten via upsert-by-name (create-then-delete), so
+          // its OLD id is gone. Mark it consumed so a later pass does not stamp a
+          // deleted id or rewrite the merged keeper away.
+          if (consumed) consumed.add(p.keeper.documentId);
           mergeReport.merged++;
         } catch (err) {
           mergeReport.errors++;
@@ -472,12 +488,13 @@ async function handlePairsWithLlm({ pairs, slot, deps, now, report, dryRun, ctx 
           continue;
         }
       } else {
+        if (consumed) consumed.add(p.keeper.documentId);
         mergeReport.merged++;
       }
     }
     // merge + keep-keeper-unchanged both archive the loser (against the
     // post-rewrite keeper id when a merge happened).
-    await archiveLoser({ loser: p.loser, keeperId, slot, deps, now, report, sourcePass: p.sourcePass, dryRun });
+    await archiveLoser({ loser: p.loser, keeperId, slot, deps, now, report, sourcePass: p.sourcePass, dryRun, consumed });
   }
 }
 
@@ -490,14 +507,18 @@ async function runStalenessFlag({ leaves, slot, deps, now, report, dryRun }) {
     const stale = isStale(leaf, nowMs(now), months);
     const cur = String(leaf.metadata?.stale || "") === "true";
     if (stale === cur) continue;
-    r.touched++;
-    if (!dryRun) {
-      try {
-        await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: stale ? "true" : "false" } });
-      } catch (err) {
-        r.errors++;
-        process.stderr.write(`[consolidate] staleness stamp failed for ${leaf.documentId}: ${err?.message || err}\n`);
-      }
+    if (dryRun) {
+      r.touched++;
+      continue;
+    }
+    // Count `touched` only AFTER the stamp succeeds, so a failed write reports as
+    // errors=1 and NOT touched=1 (it previously double-counted as both).
+    try {
+      await deps.updateMeta({ datasetId: slot, documentId: leaf.documentId, metadata: { stale: stale ? "true" : "false" } });
+      r.touched++;
+    } catch (err) {
+      r.errors++;
+      process.stderr.write(`[consolidate] staleness stamp failed for ${leaf.documentId}: ${err?.message || err}\n`);
     }
   }
 }
@@ -556,6 +577,7 @@ async function runSemanticRefresh({ leaves, slot, deps, now, report, dryRun, ctx
     } catch (err) {
       if (err instanceof LLMProviderUnavailable) {
         ctx.llmEnabled = false;
+        ctx.llmInterrupted = true;
         process.stderr.write(`[consolidate] LLM provider unavailable; refresh halted: ${err?.message || err}\n`);
         break;
       }
@@ -722,7 +744,11 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     return { ok: true, skipped: "locked-by", reason: lock.reason, owner: lock.owner, llmRequested, llm: false };
   }
 
-  const ctx = { llmEnabled: llmRequested };
+  // llmInterrupted flips true if the LLM provider dies MID-RUN (merge or refresh).
+  // It is surfaced in the result and (like an error) prevents advancing the
+  // --if-due throttle, so the deferred LLM passes are retried next run instead of
+  // being silently skipped for a whole cadence and masked from cron_health.
+  const ctx = { llmEnabled: llmRequested, llmInterrupted: false };
   const report = new Map(ALL_PASS_NAMES.map((n) => [n, emptyReport(n)]));
   const simThreshold = consolidateSimilarityThreshold();
   const topK = consolidateClusterTopK();
@@ -749,22 +775,32 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
       const disabled = all.filter((l) => !l.enabled);
       workingSetSize += active.length;
 
+      // documentIds removed/replaced by the dedup+merge pass (archived losers and
+      // rewritten keepers whose old id is deleted). The working set was captured
+      // BEFORE those mutations, so the later passes must skip these or they would
+      // re-flag a disabled doc, stamp a deleted id, or (via a refresh rewrite)
+      // resurrect an archived duplicate as a new enabled doc.
+      const consumed = new Set();
+
       // Dedup -> merge/archive.
       if (allowed.has(SOURCE_PASSES.SHA256) || allowed.has(SOURCE_PASSES.LESSON_KEY) || allowed.has(SOURCE_PASSES.SIMILARITY)) {
         const pairs = await buildPairsForSlot({ slot, leaves: active, allowed, deps: D, simThreshold, topK, clusterScore, report });
         if (ctx.llmEnabled && allowed.has("llm-merge-near-duplicates")) {
-          await handlePairsWithLlm({ pairs, slot, deps: D, now, report, dryRun, ctx });
+          await handlePairsWithLlm({ pairs, slot, deps: D, now, report, dryRun, ctx, consumed });
         } else {
-          handleNoLlmCounts(await handlePairsNoLlm({ pairs, slot, deps: D, now, report, dryRun }));
+          handleNoLlmCounts(await handlePairsNoLlm({ pairs, slot, deps: D, now, report, dryRun, consumed }));
         }
       }
 
+      // Live working set: drop anything the dedup/merge pass archived or replaced.
+      const liveActive = consumed.size ? active.filter((l) => !consumed.has(l.documentId)) : active;
+
       // Staleness flag + refresh.
       if (allowed.has("staleness-flag")) {
-        await runStalenessFlag({ leaves: active, slot, deps: D, now, report, dryRun });
+        await runStalenessFlag({ leaves: liveActive, slot, deps: D, now, report, dryRun });
       }
       if (ctx.llmEnabled && allowed.has("llm-semantic-refresh")) {
-        await runSemanticRefresh({ leaves: active, slot, deps: D, now, report, dryRun, ctx, topK, clusterScore });
+        await runSemanticRefresh({ leaves: liveActive, slot, deps: D, now, report, dryRun, ctx, topK, clusterScore });
       }
 
       // Compress archived.
@@ -796,6 +832,7 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     dryRun: Boolean(dryRun),
     llm: ctx.llmEnabled,
     llmRequested,
+    llmInterrupted: ctx.llmInterrupted,
     policies,
     refine,
     workingSetSize,
@@ -803,12 +840,12 @@ export async function consolidateMemory({ dryRun = false, ifDue = false, force =
     totals,
   };
   // Advance the --if-due throttle (last_run_utc) ONLY on a clean run. If any pass
-  // or slot list errored, leave the prior state untouched so the NEXT scheduled
-  // --if-due run RETRIES instead of skipping the whole cadence after a partial
-  // failure: self-heal, mirroring how a failed cron attempt stays unresolved in
-  // the attempts log. A persistent error keeps retrying hourly (each attempt is
-  // logged for cron_health) rather than going silent for a full cadence.
-  if (!dryRun && totals.errors === 0) {
+  // or slot list errored, OR the LLM provider died mid-run (LLM passes deferred),
+  // leave the prior state untouched so the NEXT scheduled --if-due run RETRIES
+  // instead of skipping the whole cadence: self-heal, mirroring how a failed cron
+  // attempt stays unresolved in the attempts log. A persistent error keeps
+  // retrying hourly (each attempt logged for cron_health) rather than going silent.
+  if (!dryRun && totals.errors === 0 && !ctx.llmInterrupted) {
     D.writeState({ last_run_utc: toIso(now), durationMs: Date.now() - startMs, dryRun: false, totals, passes: Object.fromEntries(report) });
   }
   return result;

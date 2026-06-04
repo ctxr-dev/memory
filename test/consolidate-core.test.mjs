@@ -122,9 +122,12 @@ test("dedupePairs: one pair per loser, highest-precedence sourcePass wins", () =
   assert.equal(out[0].sourcePass, SOURCE_PASSES.SHA256);
 });
 
-test("dedupePairs: drops a pair whose keeper is archived as a loser elsewhere", () => {
-  // A is loser to B (sha256); A is keeper of C (similarity). The A-as-keeper
-  // pair is dropped so we never rewrite A then archive it.
+test("dedupePairs: re-points a loser past an intermediate (keeper-that-is-also-a-loser) to the ultimate keeper", () => {
+  // A is loser to B (sha256); C is loser to A (similarity). A is both a keeper
+  // (of C) and a loser (to B). Instead of DROPPING C's pair (which would orphan
+  // C: never archived/flagged), C is re-pointed to A's keeper B. Both A and C end
+  // up archived against the single survivor B. We still never rewrite-then-archive
+  // A (A is never emitted as a keeper).
   const A = leaf({ documentId: "A", createdAtMs: NOW + 100 });
   const B = leaf({ documentId: "B", createdAtMs: NOW + 200 });
   const C = leaf({ documentId: "C", createdAtMs: NOW });
@@ -133,7 +136,25 @@ test("dedupePairs: drops a pair whose keeper is archived as a loser elsewhere", 
     { keeper: A, loser: C, sourcePass: SOURCE_PASSES.SIMILARITY },
   ];
   const out = dedupePairs(pairs);
-  assert.deepEqual(out.map((p) => p.loser.documentId), ["A"]);
+  assert.deepEqual(out.map((p) => p.loser.documentId), ["A", "C"]);
+  for (const p of out) assert.equal(p.keeper.documentId, "B", "every loser points at the ultimate keeper B");
+});
+
+test("dedupePairs: a 3+ mutually-similar cluster archives every non-keeper against the newest (no orphan)", () => {
+  // A<B<C by createdAt (C newest). Pairwise similarity scans produce a chain; the
+  // intermediate doc must NOT be orphaned. All non-keepers point at C.
+  const A = leaf({ documentId: "A", createdAtMs: NOW });
+  const B = leaf({ documentId: "B", createdAtMs: NOW + 100 });
+  const C = leaf({ documentId: "C", createdAtMs: NOW + 200 });
+  const sim = SOURCE_PASSES.SIMILARITY;
+  const pairs = [
+    { keeper: B, loser: A, sourcePass: sim, score: 0.95 }, // from A's scan vs B
+    { keeper: C, loser: A, sourcePass: sim, score: 0.95 }, // from A's scan vs C
+    { keeper: C, loser: B, sourcePass: sim, score: 0.95 }, // from B's scan vs C
+  ];
+  const out = dedupePairs(pairs);
+  assert.deepEqual(out.map((p) => p.loser.documentId).sort(), ["A", "B"], "both A and B are archived (neither orphaned)");
+  for (const p of out) assert.equal(p.keeper.documentId, "C", "all point at the newest keeper C");
 });
 
 test("partitionByArchivePolicy: sha256+lesson-key deterministic, similarity fuzzy", () => {

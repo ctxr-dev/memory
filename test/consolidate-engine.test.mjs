@@ -477,6 +477,62 @@ test("slot list-consolidate failure counts as ONE error, not one-per-pass", asyn
   assert.equal(res.totals.errors, 1, "one slot failure -> one error, not one per pass");
 });
 
+test("a dedup loser is NOT re-processed (resurrected) by the later staleness/refresh passes", async () => {
+  // Regression (review HIGH): the working set was snapshotted before the dedup
+  // pass archived the loser, so the refresh `rewrite` path (saveDoc upsert-by-name)
+  // could re-create the archived loser as a fresh ENABLED doc. The consumed-set
+  // re-filter must exclude it from both later passes.
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "old", name: "a.md", createdAtSec: nowSec - 9 * MONTH_SEC, metadata: { atom_type: "self-improvement-lesson" }, body: "same body" },
+      { documentId: "new", name: "b.md", createdAtSec: nowSec - 8 * MONTH_SEC, metadata: { atom_type: "self-improvement-lesson" }, body: "same body" },
+    ],
+  };
+  const { deps, calls } = makeDeps({
+    slotsDocs,
+    env: KNOWLEDGE_ENV,
+    mergeResponder: (o) => ({ action: "keep-keeper-unchanged", keeper_id: o.keeper.documentId, loser_id: o.loser.documentId, reason: "dup" }),
+    refreshResponder: (o) => ({ action: "rewrite", leaf_id: o.document.documentId, rewritten_body: "fresh", stale_after: false, reason: "drift" }),
+  });
+  await consolidateMemory({ now: NOW, passes: ["dedupe-by-sha256", "llm-merge-near-duplicates", "staleness-flag", "llm-semantic-refresh"], deps });
+  assert.ok(calls.disableDoc.includes("old"), "loser archived by dedup");
+  // The loser's name must NOT be rewritten by refresh (that would resurrect it).
+  assert.ok(calls.saveDoc.every((c) => c.name !== "a.md"), "archived loser must NOT be refreshed/resurrected");
+  // The loser must NOT receive a staleness {stale} stamp after being archived.
+  const loserStale = calls.updateMeta.find((u) => u.documentId === "old" && u.metadata && "stale" in u.metadata);
+  assert.equal(loserStale, undefined, "archived loser must not be staleness-flagged");
+});
+
+test("LLM provider outage mid-refresh sets llmInterrupted and does NOT advance the throttle", async () => {
+  // Regression (review MEDIUM): the outage broke out without an error, so the run
+  // looked clean, wrote state, and masked the incomplete LLM passes from cron_health.
+  const slotsDocs = {
+    knowledge: [
+      { documentId: "s1", name: "s.md", createdAtSec: nowSec - 9 * MONTH_SEC, metadata: { atom_type: "self-improvement-lesson" }, body: "rule" },
+    ],
+  };
+  const { deps } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, failLlm: true, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  let stateWritten = false;
+  deps.writeState = () => { stateWritten = true; };
+  const res = await consolidateMemory({ now: NOW, passes: ["staleness-flag", "llm-semantic-refresh"], deps });
+  assert.equal(res.llmInterrupted, true, "mid-run LLM outage is surfaced");
+  assert.equal(stateWritten, false, "an LLM-interrupted run must not advance --if-due (retry next tick)");
+});
+
+test("--if-due skips when within the cadence window; --force bypasses the throttle", async () => {
+  const slotsDocs = { knowledge: [{ documentId: "a", name: "a.md", createdAtSec: nowSec, metadata: { atom_type: "decision" }, body: "x" }] };
+  const recentIso = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString(); // 1h ago, well within the 1-day cadence
+  const { deps, calls } = makeDeps({ slotsDocs, env: KNOWLEDGE_ENV, mergeResponder: () => ({}), refreshResponder: () => ({}) });
+  deps.readState = () => ({ last_run_utc: recentIso });
+  const skipped = await consolidateMemory({ now: NOW, ifDue: true, llm: false, deps });
+  assert.equal(skipped.skipped, "not-due", "within the window -> not-due skip");
+  assert.equal(calls.list.length, 0, "not-due returns before listing");
+  // --force bypasses the throttle and actually runs.
+  const forced = await consolidateMemory({ now: NOW, ifDue: true, force: true, llm: false, deps });
+  assert.notEqual(forced.skipped, "not-due");
+  assert.ok(calls.list.length > 0, "force bypass runs the slot listing");
+});
+
 test("compress-archived disables the REWRITTEN doc (new upsert id), not the deleted old id", async () => {
   // Regression (Copilot): saveDoc is upsert-by-name -> new id + old deleted, so
   // disabling the old id would fail and leave the truncated doc ENABLED.
