@@ -237,8 +237,11 @@ export function updateEntityState(state, report, { ts, logPath, escalateAfter })
   for (const id of succeeded) {
     if (!failedNow.has(id)) delete state.entities[id];
   }
-  // Age out entities that stopped being attempted entirely.
-  const idleCutoff = Date.now() - retentionDaysSafe() * 86_400_000;
+  // Age out entities that stopped being attempted entirely. Reference the TICK
+  // timestamp (ts), not wall-clock Date.now(): keeps the fold deterministic /
+  // hermetic and immune to clock skew (the caller already provides ts).
+  const nowMs = Date.parse(ts) || Date.now();
+  const idleCutoff = nowMs - retentionDaysSafe() * 86_400_000;
   for (const [id, ent] of Object.entries(state.entities)) {
     const lastMs = Date.parse(ent.lastFailedTs || "") || 0;
     if (lastMs < idleCutoff) delete state.entities[id];
@@ -687,8 +690,11 @@ export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH
   const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir });
   const lastAttempt = all.length ? all[all.length - 1] : null;
 
+  // `recent` is part of the documented shape on EVERY path (consistent for callers).
+  const recent = all.slice(-limit);
+
   if (!lastAttempt && escalations.length === 0) {
-    return { ok: true, healthy: true, summary: "no cron-job attempts logged yet (cron not yet scheduled or system fresh)", lastAttempt: null, escalations };
+    return { ok: true, healthy: true, summary: "no cron-job attempts logged yet (cron not yet scheduled or system fresh)", lastAttempt: null, recent, escalations };
   }
 
   if (escalations.length > 0) {
@@ -696,11 +702,11 @@ export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH
     const where = newest.unrendered
       ? `report write FAILED (signature ${newest.signature}; see cron stderr)`
       : `newest report ${newest.issuePath}`;
-    return { ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s); ${where}`.slice(0, 200), lastAttempt, escalations };
+    return { ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s); ${where}`.slice(0, 200), lastAttempt, recent, escalations };
   }
 
   if (lastAttempt.ok === false) {
-    return { ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${lastAttempt.ts}: ${collapse(lastAttempt.error || "<no detail>").slice(0, 120)}`, lastAttempt, escalations };
+    return { ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${lastAttempt.ts}: ${collapse(lastAttempt.error || "<no detail>").slice(0, 120)}`, lastAttempt, recent, escalations };
   }
 
   let lastFailureAt = null;
