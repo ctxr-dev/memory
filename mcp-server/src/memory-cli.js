@@ -28,26 +28,7 @@ import {
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
 import { WORKSPACE_MOUNT as WORKSPACE_ROOT, ABSORB_MAX_FILE_BYTES as MAX_FILE_BYTES } from "./workspace.js";
 import { indexDocMetadata } from "./audit.js";
-
-function parseArgs(argv) {
-  const args = { _: [] };
-  for (let i = 0; i < argv.length; i += 1) {
-    const a = argv[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (next == null || next.startsWith("--")) {
-        args[key] = true;
-      } else {
-        args[key] = next;
-        i += 1;
-      }
-    } else {
-      args._.push(a);
-    }
-  }
-  return args;
-}
+import { parseArgs } from "./cli-args.js";
 
 function splitList(value) {
   if (!value) return [];
