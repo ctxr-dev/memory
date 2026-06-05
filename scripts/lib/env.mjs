@@ -47,6 +47,15 @@ export const PROMPTS_DIR = path.join(MEMORY_DIR, "prompts");
 export const STATE_DIR = path.join(MEMORY_DATA_DIR, "state");
 export const CONSOLIDATE_STATE_PATH = path.join(STATE_DIR, ".consolidate-state.json");
 export const CONSOLIDATE_ATTEMPTS_LOG_PATH = path.join(STATE_DIR, ".consolidate-attempts.log");
+// Self-healing escalation state (the cron job's per-entity failure-streak
+// tracking + skeleton issue reports). Entities + the issues INDEX live under
+// state/ (so the container cron_health tool can read the index via the ro mount);
+// the rendered issue-report .md files live under issues/ (host-only, for humans).
+// Sharded full per-run logs live under state/logs/<yyyy>/<mm>/.
+export const CONSOLIDATE_ENTITIES_PATH = path.join(STATE_DIR, ".consolidate-entities.json");
+export const CRON_LOGS_DIR = path.join(STATE_DIR, "logs");
+export const ISSUES_INDEX_PATH = path.join(STATE_DIR, ".issues-index.json");
+export const ISSUES_DIR = path.join(MEMORY_DATA_DIR, "issues");
 
 // Parse one .env value. Deliberately small (NOT a full dotenv parser): it
 // trims, honours a simple pair of surrounding single or double quotes (the
@@ -236,4 +245,20 @@ export function consolidatePassesEnv() {
 // amplification on hot docs). Consumed by mcp-server/src/recall-stamp.js.
 export function recallStampDebounceHours() {
   return envInt("MEMORY_RECALL_STAMP_DEBOUNCE_HOURS", 24);
+}
+
+// ── Self-healing escalation knobs (consumed by scripts/cron-job.mjs) ──
+// How many slim attempt-log entries to keep (front-truncated).
+export function consolidateAttemptsKeep() {
+  return envInt("MEMORY_CONSOLIDATE_ATTEMPTS_KEEP", 50);
+}
+// Retention window (days) for the sharded full per-run logs AND the cutoff for
+// ageing out idle tracked entities.
+export function consolidateFullLogRetentionDays() {
+  return envInt("MEMORY_CONSOLIDATE_FULL_LOG_RETENTION_DAYS", 90);
+}
+// An entity still failing after this many CONSECUTIVE cron attempts escalates
+// into an issue report (counter-based; wall-clock skew cannot suppress it).
+export function consolidateEscalateAfterAttempts() {
+  return envInt("MEMORY_CONSOLIDATE_ESCALATE_AFTER_ATTEMPTS", 3);
 }

@@ -1268,7 +1268,7 @@ server.registerTool(
   {
     title: "Consolidate/compile cron health",
     description:
-      "Report the health of the hourly maintenance cron (compile + consolidate --if-due) by reading the attempts log the host cron writes to the mounted state dir. Returns { healthy, summary, lastAttempt, recent }. healthy=false means the most recent attempt failed and no later attempt has cleared it.",
+      "Report the health of the hourly maintenance cron (compile + consolidate --if-due) by reading the attempts log + the escalation issues index the host cron writes to the mounted state dir. Returns { healthy, summary, lastAttempt, recent, escalations }. healthy=false means the most recent attempt failed with no later success, OR at least one self-healing escalation episode is still open (a provider outage / entity that kept failing across runs).",
     inputSchema: {
       limit: z.number().int().min(1).max(100).optional(),
     },
@@ -1277,26 +1277,49 @@ server.registerTool(
     try {
       const stateDir = process.env.MEMORY_STATE_DIR || "/app/state";
       const logPath = path.join(stateDir, ".consolidate-attempts.log");
+      const n = limit || 20;
+      // Open self-healing escalations, read from the issues INDEX (under the same
+      // ro-mounted state dir; the rendered issues/*.md live host-side only). An
+      // open episode means the same entity kept failing across runs OR one error
+      // signature spans many entities; either is unhealthy until it self-resolves.
+      let escalations = [];
+      try {
+        const idx = JSON.parse(fs.readFileSync(path.join(stateDir, ".issues-index.json"), "utf8"));
+        if (idx && idx.signatures) {
+          escalations = Object.entries(idx.signatures)
+            .filter(([, rec]) => rec && rec.status === "open")
+            .map(([signature, rec]) => ({ signature, sinceTs: rec.escalation?.sinceTs || null, attempts: rec.escalation?.attempts ?? null, issuePath: rec.path, ...(rec.unrendered ? { unrendered: true } : {}) }))
+            .sort((a, b) => (a.signature < b.signature ? -1 : a.signature > b.signature ? 1 : 0));
+        }
+      } catch { /* no index yet: no open escalations */ }
+
       let attempts = [];
       try {
         const raw = fs.readFileSync(logPath, "utf8");
         attempts = raw.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
       } catch {
-        return jsonToolResponse({ ok: true, healthy: true, summary: "no cron attempts logged yet (cron not scheduled, or state dir not mounted)", lastAttempt: null, logPath });
+        if (escalations.length > 0) {
+          return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s)`, lastAttempt: null, recent: [], escalations, logPath });
+        }
+        return jsonToolResponse({ ok: true, healthy: true, summary: "no cron attempts logged yet (cron not scheduled, or state dir not mounted)", lastAttempt: null, recent: [], escalations, logPath });
       }
-      if (attempts.length === 0) {
-        return jsonToolResponse({ ok: true, healthy: true, summary: "attempts log is empty", lastAttempt: null, logPath });
+      const last = attempts.length ? attempts[attempts.length - 1] : null;
+      if (escalations.length > 0) {
+        const newest = escalations.reduce((a, b) => ((a.sinceTs || "") >= (b.sinceTs || "") ? a : b));
+        const where = newest.unrendered ? `report write FAILED (signature ${newest.signature})` : `newest report ${newest.issuePath}`;
+        return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED: ${escalations.length} open escalation(s); ${where}`.slice(0, 200), lastAttempt: last, recent: attempts.slice(-n), escalations, logPath });
       }
-      const last = attempts[attempts.length - 1];
-      const n = limit || 20;
+      if (!last) {
+        return jsonToolResponse({ ok: true, healthy: true, summary: "attempts log is empty", lastAttempt: null, recent: [], escalations, logPath });
+      }
       if (last.ok === false) {
-        return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${last.ts}: ${String(last.error || "").slice(0, 200)}`, lastAttempt: last, recent: attempts.slice(-n), logPath });
+        return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${last.ts}: ${String(last.error || "").slice(0, 200)}`, lastAttempt: last, recent: attempts.slice(-n), escalations, logPath });
       }
       let lastFailureAt = null;
       for (let i = attempts.length - 1; i >= 0; i -= 1) {
         if (attempts[i].ok === false) { lastFailureAt = attempts[i].ts; break; }
       }
-      return jsonToolResponse({ ok: true, healthy: true, summary: `healthy; last cron-job ok at ${last.ts}`, lastAttempt: last, lastSuccessAt: last.ts, ...(lastFailureAt ? { lastFailureAt } : {}), recent: attempts.slice(-n), logPath });
+      return jsonToolResponse({ ok: true, healthy: true, summary: `healthy; last cron-job ok at ${last.ts}`, lastAttempt: last, lastSuccessAt: last.ts, ...(lastFailureAt ? { lastFailureAt } : {}), recent: attempts.slice(-n), escalations, logPath });
     } catch (error) {
       return errorToolResponse(error);
     }
