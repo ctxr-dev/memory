@@ -20,7 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildExecCliArgs } from "../scripts/lib/dify-write.mjs";
+import { buildExecCliArgs, searchMemoryFiltered } from "../scripts/lib/dify-write.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIFY_WRITE_SRC = fs.readFileSync(
@@ -178,4 +178,14 @@ test("updateDocMetadata: --replace emitted as a valueless flag only when set", (
   // Omitted by default (read-merge): no --replace token.
   const noReplace = buildExecCliArgs("update-doc-metadata", { datasetId: "d", documentId: "x", metadata: "{}" }, "c");
   assert.equal(noReplace.indexOf("--replace"), -1, "no --replace when unset (safe read-merge)");
+});
+
+test("searchMemoryFiltered: empty/whitespace/absent query short-circuits to {records:[]} (no bridge call)", async () => {
+  // Regression: an empty query reached the bridge, which rejected it ("--query
+  // <string> is required"); execCli mislabeled that exit as DifyBridgeUnavailable,
+  // aborting the whole hourly compile run (10 dailies stuck) and exiting 69. The
+  // guard returns before execCli, so this resolves cleanly even with no docker.
+  assert.deepEqual(await searchMemoryFiltered({ query: "", datasetId: "knowledge" }), { records: [] });
+  assert.deepEqual(await searchMemoryFiltered({ query: "   ", datasetId: "knowledge" }), { records: [] });
+  assert.deepEqual(await searchMemoryFiltered({ datasetId: "knowledge" }), { records: [] });
 });
