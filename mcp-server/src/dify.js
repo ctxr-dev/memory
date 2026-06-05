@@ -426,10 +426,62 @@ export async function loadMetadataFieldIndex(config, { datasetId } = {}) {
   return byName;
 }
 
+// Read ONE document's current custom-metadata as a { name: value } map. Dify has
+// no single-document metadata endpoint, so this lists the dataset and finds the
+// doc by id (O(dataset)). Only the read-merge path of updateDocumentMetadata uses
+// it; the hot full-set callers bypass it via replace:true.
+//
+// Returns NULL when the document is not present in the listing (e.g. indexing lag
+// on a freshly-created doc), distinct from {} which means "found, no custom
+// fields". The caller MUST treat null as "could not confirm the existing set" and
+// refuse a partial write (a {} fallback would let a partial POST wipe fields).
+export async function getDocumentMetadataMap(config, { datasetId, documentId } = {}) {
+  if (!documentId) throw new Error("getDocumentMetadataMap requires documentId.");
+  const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
+  // Page through and EARLY-EXIT as soon as the target doc is found, instead of
+  // materialising the whole dataset (read-merge runs this per metadata write, so
+  // the common case of finding the doc on an early page should be cheap).
+  let page = 1;
+  const limit = 100;
+  while (true) {
+    const body = await listDocuments(config, { datasetId: selectedDatasetId, page, limit });
+    const batch = Array.isArray(body?.data) ? body.data : [];
+    const doc = batch.find((d) => d?.id === documentId);
+    if (doc) {
+      const out = {};
+      const fields = Array.isArray(doc.doc_metadata) ? doc.doc_metadata : [];
+      for (const f of fields) if (f?.name) out[f.name] = f.value;
+      return out;
+    }
+    if (!body?.has_more || batch.length === 0) break;
+    page += 1;
+    if (page > 100) {
+      // Same ~10k hard cap as listAllDocuments. Warn (don't truncate silently):
+      // returning null here makes updateDocumentMetadata refuse a read-merge, and
+      // the operator should know it is pagination truncation, not indexing lag.
+      process.stderr.write(
+        `[dify] getDocumentMetadataMap hit the 100-page cap for dataset ${selectedDatasetId} without finding ${documentId} (has_more still true); treating as not-found (a read-merge will refuse).\n`,
+      );
+      break;
+    }
+  }
+  return null; // not found in the listing (distinct from {} = found, no custom fields)
+}
+
 // metadataMap: plain { fieldName: value } object. Resolves field ids via
 // loadMetadataFieldIndex and posts to the documents/metadata endpoint.
 // Skips fields that are missing on the dataset (log to caller via return).
-export async function updateDocumentMetadata(config, { datasetId, documentId, metadataMap } = {}) {
+//
+// CONTRACT: Dify's POST /documents/metadata REPLACES the document's ENTIRE
+// custom-metadata set with metadata_list, so a partial map silently wipes every
+// field not included. To make that safe by default, this helper READ-MERGES: it
+// fetches the doc's current custom metadata and overlays the provided fields
+// (provided values win). Callers that already hold the COMPLETE intended set
+// (a freshly-created doc with no prior metadata; the consolidate engine, which
+// builds the full merged map in memory from its working set) pass `replace: true`
+// to skip the extra dataset read. A read failure throws (the update aborts)
+// rather than writing a partial set that would corrupt classifying metadata.
+export async function updateDocumentMetadata(config, { datasetId, documentId, metadataMap, replace = false } = {}) {
   if (!documentId) throw new Error("updateDocumentMetadata requires documentId.");
   const md = metadataMap && typeof metadataMap === "object" ? metadataMap : {};
   if (Object.keys(md).length === 0) return { ok: true, skipped: "empty metadata" };
@@ -437,9 +489,26 @@ export async function updateDocumentMetadata(config, { datasetId, documentId, me
   const selectedDatasetId = requireDifyWriteConfig(config, datasetId);
   const fieldIndex = await loadMetadataFieldIndex(config, { datasetId: selectedDatasetId });
 
+  let effectiveMap = md;
+  if (!replace) {
+    const current = await getDocumentMetadataMap(config, { datasetId: selectedDatasetId, documentId });
+    if (current == null) {
+      // Document not found in the dataset listing (e.g. indexing lag). We cannot
+      // confirm its existing custom set, and a partial POST would REPLACE the
+      // full set and wipe unrelated fields, so REFUSE rather than write a
+      // patch-only metadata_list. A caller that knows it holds the complete set
+      // (a brand-new doc) should pass replace:true to skip this read entirely.
+      throw new Error(
+        `updateDocumentMetadata: document ${documentId} not found in dataset ${selectedDatasetId} listing; ` +
+          "refusing a partial metadata write that could wipe existing fields. Pass replace:true if you hold the complete set.",
+      );
+    }
+    effectiveMap = { ...current, ...md };
+  }
+
   const metadataList = [];
   const skippedFields = [];
-  for (const [name, value] of Object.entries(md)) {
+  for (const [name, value] of Object.entries(effectiveMap)) {
     const f = fieldIndex.get(name);
     if (!f) { skippedFields.push(name); continue; }
     metadataList.push({ id: f.id, name, value: value == null ? "" : String(value) });
@@ -509,7 +578,17 @@ export async function listAllDocuments(config, { datasetId, keyword } = {}) {
     all.push(...batch);
     if (!body?.has_more || batch.length === 0) break;
     page += 1;
-    if (page > 100) break;
+    if (page > 100) {
+      // Hard cap at ~10k docs (100 pages x 100). Do NOT truncate silently: callers
+      // that build a doc map from this (getDocumentMetadataMap, recall-stamp,
+      // list-consolidate) would otherwise treat a doc beyond the cap as "not found"
+      // (read-merge then refuses; consolidate skips it). Surface it so an operator
+      // with a dataset this large knows to raise the cap / paginate differently.
+      process.stderr.write(
+        `[dify] listAllDocuments hit the 100-page cap (~${all.length} docs) for dataset ${datasetId} with has_more still true; results are TRUNCATED.\n`,
+      );
+      break;
+    }
   }
   return all;
 }
@@ -878,6 +957,9 @@ export async function upsertDocumentByName(config, { datasetId, name, text, meta
           datasetId: selectedDatasetId,
           documentId: newDocId,
           metadataMap: metadata,
+          // Freshly-created doc: `metadata` is the complete intended set and the
+          // doc has no prior custom fields, so skip the read-merge.
+          replace: true,
         });
       } catch (err) {
         metadataError = err instanceof Error ? err.message : String(err);

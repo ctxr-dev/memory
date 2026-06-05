@@ -454,7 +454,9 @@ async function applyMetadataToWritten(atom, writeResult, targetDataset) {
   if (!docId) return { ok: false, reason: "writeMemory response missing created.document.id" };
   const md = metadataForDify(atom);
   try {
-    return await updateDocMetadata({ datasetId: targetDataset, documentId: docId, metadata: md });
+    // Freshly-written doc: `md` is the complete intended set and the doc has no
+    // prior custom fields, so assert replace:true to skip the read-merge.
+    return await updateDocMetadata({ datasetId: targetDataset, documentId: docId, metadata: md, replace: true });
   } catch (err) {
     if (err instanceof DifyBridgeUnavailable) throw err;
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

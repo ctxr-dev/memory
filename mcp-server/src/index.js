@@ -2,6 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { INSTRUCTIONS } from "./discipline.js";
+import { stampRecallsFireAndForget } from "./recall-stamp.js";
+import * as ConsolidateCore from "./consolidate-core.js";
+import { resolveAllPolicies } from "./consolidate-policy.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,9 +22,9 @@ let buildDatasetMap, buildMetadataCondition, canonicalFilterKey, createDataset, 
   listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName;
 let findFiles, defaultGlobs, mergeIgnore, relPathToDocName;
 let lessonDocName;
-let PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
+let PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES;
 let WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters;
-let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons;
+let findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons, indexDocMetadata;
 
 // Monotonic, not Date.now(): each value busts the ESM cache so a changed file
 // re-evaluates. Node's ESM loader retains prior specifiers, so every reload
@@ -57,11 +60,12 @@ async function loadLib() {
     retrieveChunks: dify.retrieveChunks, upsertDocumentByName: dify.upsertDocumentByName,
     findFiles: glob.findFiles, defaultGlobs: glob.defaultGlobs, mergeIgnore: glob.mergeIgnore, relPathToDocName: glob.relPathToDocName,
     lessonDocName: slug.lessonDocName,
-    PER_DOC_METADATA_FIELDS: schema.PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE: schema.LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES: schema.KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    PER_DOC_METADATA_FIELDS: schema.PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA: schema.PER_DOC_METADATA_SCHEMA, LESSON_ATOM_TYPE: schema.LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES: schema.KNOWLEDGE_CROSSREF_ATOM_TYPES,
     WORKSPACE_MOUNT: workspace.WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES: workspace.ABSORB_MAX_FILE_BYTES,
     DEFAULT_PROJECT_MODULE: workspace.DEFAULT_PROJECT_MODULE, computeInjectedFilters: workspace.computeInjectedFilters,
     findStalePlans: audit.findStalePlans, findMissingMetadata: audit.findMissingMetadata,
     findStaleProjectLore: audit.findStaleProjectLore, findDuplicateErrorPatternLessons: audit.findDuplicateErrorPatternLessons,
+    indexDocMetadata: audit.indexDocMetadata,
   };
   for (const [k, val] of Object.entries(next)) {
     if (val === undefined) throw new Error(`hot reload aborted: module export '${k}' is missing`);
@@ -70,9 +74,9 @@ async function loadLib() {
     createDocumentByText, deleteDocument, disableDocument, enableDocument, getConfig, listAllDatasets,
     listAllDocuments, maskSecret, requireDifyWriteConfig, resolveDatasetId, retrieveChunks, upsertDocumentByName,
     findFiles, defaultGlobs, mergeIgnore, relPathToDocName, lessonDocName,
-    PER_DOC_METADATA_FIELDS, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
+    PER_DOC_METADATA_FIELDS, PER_DOC_METADATA_SCHEMA, LESSON_ATOM_TYPE, KNOWLEDGE_CROSSREF_ATOM_TYPES,
     WORKSPACE_MOUNT, ABSORB_MAX_FILE_BYTES, DEFAULT_PROJECT_MODULE, computeInjectedFilters,
-    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons } = next);
+    findStalePlans, findMissingMetadata, findStaleProjectLore, findDuplicateErrorPatternLessons, indexDocMetadata } = next);
 }
 await loadLib();
 
@@ -329,6 +333,19 @@ server.registerTool(
         effectiveProjectModule: effectiveFilters?.project_module || null,
       });
 
+      const returnedRecords = records.slice(0, limit);
+
+      // Fire-and-forget recall instrumentation: stamp last_recalled_at on the
+      // documents actually returned, so the consolidate staleness pass sees
+      // them as recently used. Never awaited and never rejects (the helper
+      // swallows all errors), so the response is byte-identical with or without
+      // stamping and the read is never delayed or failed by a metadata write.
+      // This is a DELIBERATE in-container write (design decision 5): only the two
+      // recall fields, debounced. It is NOT the consolidate engine (host-side
+      // only); read_only here means "the response is read-only", not "the
+      // container never writes" (it has always had write MCP tools).
+      void stampRecallsFireAndForget(config, returnedRecords);
+
       return jsonToolResponse({
         query,
         datasetsSearched: selectedDatasetIds,
@@ -337,7 +354,7 @@ server.registerTool(
         scoreThreshold: scoreThreshold ?? null,
         errors,
         totalRecords: records.length,
-        records: records.slice(0, limit),
+        records: returnedRecords,
       });
     } catch (error) {
       return errorToolResponse(error);
@@ -489,13 +506,13 @@ server.registerTool(
       const fieldResults = [];
       const fieldErrors = [];
       if (datasetId) {
-        for (const fieldName of PER_DOC_METADATA_FIELDS) {
+        for (const field of PER_DOC_METADATA_SCHEMA) {
           try {
-            const r = await createDatasetMetadataField(config, { datasetId, name: fieldName, type: "string" });
-            fieldResults.push({ name: fieldName, ok: true, id: r?.id });
+            const r = await createDatasetMetadataField(config, { datasetId, name: field.name, type: field.type });
+            fieldResults.push({ name: field.name, ok: true, id: r?.id });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            fieldErrors.push({ name: fieldName, error: msg });
+            fieldErrors.push({ name: field.name, error: msg });
           }
         }
       }
@@ -1001,6 +1018,13 @@ server.registerTool(
         effectiveProjectModule,
       });
 
+      // Fire-and-forget recall instrumentation on the documents actually
+      // returned (lessons + supplementary cross-refs). `all` items carry
+      // documentId + datasetId via compactRecord. Never awaited / never rejects.
+      // Same DELIBERATE in-container write as in search_memory (decision 5): only
+      // the two recall fields, debounced; distinct from the host-side engine.
+      void stampRecallsFireAndForget(config, all);
+
       return jsonToolResponse({
         query,
         lessonDataset: lessonSlot,
@@ -1128,6 +1152,151 @@ server.registerTool(
         failed: results.filter((r) => !r.ok).length,
         results,
       });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+function envIntDefault(name, fallback) {
+  const n = Number.parseInt(process.env[name] || "", 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// Float variant: the host runner reads MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS with
+// envFloat (fractional months allowed), so the projector must too or it would
+// floor a fractional threshold and project a different staleness set than a real run.
+function envFloatDefault(name, fallback) {
+  const n = Number.parseFloat(process.env[name] || "");
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// consolidate_memory: READ-ONLY in-container projection. The real mutating +
+// LLM consolidate runs host-side (cron + scripts/consolidate.mjs). This tool
+// resolves the per-slot policy (refusing on an undeclared bound slot) and, for
+// each refine slot, reports the CHEAP projections that need no per-document
+// cluster query or body read: working-set size, disabled count, lesson-key
+// duplicate candidates, staleness candidates, and an approximate
+// compress-archived count. The expensive sha256 + similarity dedup and the
+// merge/refresh outcomes require the host dry-run (no MCP timeout).
+server.registerTool(
+  "consolidate_memory",
+  {
+    title: "Project a consolidate run (read-only)",
+    description:
+      "READ-ONLY projection of what `consolidate` would touch. Resolves the per-slot policy (MEMORY_CONSOLIDATE_<SLOT>=refine|none; refuses on an undeclared bound slot) and, for each refine slot, returns working-set size, disabled count, lesson-key duplicate candidates, staleness candidates, and an approximate compress count. NO LLM, NO writes. The real mutating run (sha256 + similarity dedup, LLM merge/refresh, archive) is host-side: `node scripts/consolidate.mjs --dry-run --json` for the full projection, then drop --dry-run to apply.",
+    inputSchema: {
+      slots: z.array(z.string().trim().min(1)).optional(),
+    },
+  },
+  async ({ slots }) => {
+    try {
+      const config = getConfig();
+      if (!config.apiKey) {
+        throw new Error("DIFY_KNOWLEDGE_API_KEY is not configured in the canonical settings/.env.");
+      }
+      const { policies, refine, refusals } = resolveAllPolicies(process.env);
+      const requested = Array.isArray(slots) && slots.length > 0 ? new Set(slots.map((s) => String(s).toLowerCase())) : null;
+      const walk = requested ? refine.filter((s) => requested.has(s)) : refine;
+
+      const now = Date.now();
+      const staleMonths = envFloatDefault("MEMORY_CONSOLIDATE_STALE_AFTER_MONTHS", 6);
+      const archiveAgeDays = envIntDefault("MEMORY_CONSOLIDATE_ARCHIVE_AGE_DAYS", 180);
+      const DAY = 24 * 60 * 60 * 1000;
+
+      const perSlot = {};
+      const errors = [];
+      for (const slot of walk) {
+        try {
+          const id = resolveDatasetId(config, slot) || slot;
+          const rows = await listAllDocuments(config, { datasetId: id });
+          const leaves = rows.map((row) => ({
+            documentId: row?.id,
+            name: row?.name,
+            category: slot,
+            createdAtMs: (Number(row?.created_at) || 0) * 1000,
+            enabled: row?.enabled !== false,
+            metadata: indexDocMetadata(row),
+          }));
+          const active = leaves.filter((l) => l.enabled);
+          const disabled = leaves.filter((l) => !l.enabled);
+          const lessonPairs = ConsolidateCore.lessonKeyPairs(active);
+          const stale = ConsolidateCore.staleCandidates(active, now, staleMonths);
+          const compressApprox = disabled.filter(
+            (l) => !l.metadata?.consolidate_truncated_at && l.createdAtMs > 0 && (now - l.createdAtMs) / DAY > archiveAgeDays,
+          ).length;
+          perSlot[slot] = {
+            policy: policies[slot],
+            workingSetSize: active.length,
+            disabledCount: disabled.length,
+            lessonKeyDuplicateCandidates: lessonPairs.length,
+            staleCandidates: stale.length,
+            compressArchivedCandidatesApprox: compressApprox,
+          };
+        } catch (err) {
+          errors.push({ slot, message: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      return jsonToolResponse({
+        // ok reflects BOTH policy refusals AND per-slot projection failures
+        // (e.g. listAllDocuments errored for a slot), so a partial projection is
+        // not reported as fully ok.
+        ok: refusals.length === 0 && errors.length === 0,
+        readOnly: true,
+        policies,
+        refine,
+        refusals,
+        slotsProjected: walk,
+        perSlot,
+        errors,
+        note:
+          "Read-only cheap projection. sha256 + similarity dedup and LLM merge/refresh outcomes are NOT computed here; run `node scripts/consolidate.mjs --dry-run --json` host-side for the full projection (no MCP timeout), then drop --dry-run to apply.",
+      });
+    } catch (error) {
+      return errorToolResponse(error);
+    }
+  },
+);
+
+// cron_health: read the host-written attempts log (mounted read-only into the
+// container at /app/state via compose.mcp.yaml) and report whether the most
+// recent cron-job attempt succeeded. Surfaces an unresolved failure to an
+// in-session agent without shelling to the host.
+server.registerTool(
+  "cron_health",
+  {
+    title: "Consolidate/compile cron health",
+    description:
+      "Report the health of the hourly maintenance cron (compile + consolidate --if-due) by reading the attempts log the host cron writes to the mounted state dir. Returns { healthy, summary, lastAttempt, recent }. healthy=false means the most recent attempt failed and no later attempt has cleared it.",
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).optional(),
+    },
+  },
+  async ({ limit }) => {
+    try {
+      const stateDir = process.env.MEMORY_STATE_DIR || "/app/state";
+      const logPath = path.join(stateDir, ".consolidate-attempts.log");
+      let attempts = [];
+      try {
+        const raw = fs.readFileSync(logPath, "utf8");
+        attempts = raw.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      } catch {
+        return jsonToolResponse({ ok: true, healthy: true, summary: "no cron attempts logged yet (cron not scheduled, or state dir not mounted)", lastAttempt: null, logPath });
+      }
+      if (attempts.length === 0) {
+        return jsonToolResponse({ ok: true, healthy: true, summary: "attempts log is empty", lastAttempt: null, logPath });
+      }
+      const last = attempts[attempts.length - 1];
+      const n = limit || 20;
+      if (last.ok === false) {
+        return jsonToolResponse({ ok: true, healthy: false, summary: `UNRESOLVED FAILURE at ${last.ts}: ${String(last.error || "").slice(0, 200)}`, lastAttempt: last, recent: attempts.slice(-n), logPath });
+      }
+      let lastFailureAt = null;
+      for (let i = attempts.length - 1; i >= 0; i -= 1) {
+        if (attempts[i].ok === false) { lastFailureAt = attempts[i].ts; break; }
+      }
+      return jsonToolResponse({ ok: true, healthy: true, summary: `healthy; last cron-job ok at ${last.ts}`, lastAttempt: last, lastSuccessAt: last.ts, ...(lastFailureAt ? { lastFailureAt } : {}), recent: attempts.slice(-n), logPath });
     } catch (error) {
       return errorToolResponse(error);
     }

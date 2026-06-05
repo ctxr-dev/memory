@@ -69,6 +69,11 @@ services:
       # in-process hot reload (mcp-server/src/index.js) re-imports changed modules
       # live, and any new `docker exec node src/index.js` session loads fresh code.
       - ${MEMORY_DIR:?Set MEMORY_DIR via scripts/up.sh}/mcp-server/src:/app/src:ro
+      # Mount the host cron/consolidate state dir read-only so the cron_health
+      # MCP tool can read .consolidate-attempts.log (written host-side by the
+      # hourly cron). MEMORY_DATA_DIR is <workspace>/.memory; the tool reads
+      # /app/state by default (override via MEMORY_STATE_DIR).
+      - ${MEMORY_DATA_DIR:?Set MEMORY_DATA_DIR via scripts/lib.sh}/state:/app/state:ro
     # env_file forwards every line of the canonical settings/.env into the
     # container, so any DIFY_DATASET_<NAME>_ID line the user adds is
     # auto-propagated. The

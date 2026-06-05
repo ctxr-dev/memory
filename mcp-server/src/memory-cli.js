@@ -27,6 +27,7 @@ import {
 } from "./dify.js";
 import { findFiles, defaultGlobs, defaultIgnore, relPathToDocName } from "./glob.js";
 import { WORKSPACE_MOUNT as WORKSPACE_ROOT, ABSORB_MAX_FILE_BYTES as MAX_FILE_BYTES } from "./workspace.js";
+import { indexDocMetadata } from "./audit.js";
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -183,6 +184,29 @@ async function readCmd(config, { datasetId, documentId }) {
   return { datasetId: requireDifyWriteConfig(config, datasetId), documentId, text };
 }
 
+
+// Consolidate working-set listing: EVERY document in a dataset (enabled and
+// disabled) with its flattened per-doc metadata + created_at + enabled flag.
+// The plain `list` subcommand omits metadata, which the consolidate
+// orchestrator needs (atom_type / error_pattern / stale / created_at) to group
+// and age documents. Bodies are NOT included (fetched lazily per surviving
+// candidate via `read`). One paginated listAllDocuments call carries doc_metadata.
+async function listConsolidateCmd(config, { datasetId }) {
+  const docs = await listAllDocuments(config, { datasetId });
+  return {
+    datasetId: requireDifyWriteConfig(config, datasetId),
+    total: docs.length,
+    documents: docs.map((d) => ({
+      documentId: d?.id,
+      name: d?.name,
+      enabled: d?.enabled,
+      createdAt: d?.created_at,
+      wordCount: d?.word_count,
+      metadata: indexDocMetadata(d),
+    })),
+  };
+}
+
 async function disableCmd(config, { datasetId, documentId }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   return disableDocument(config, { datasetId, documentId });
@@ -305,11 +329,14 @@ async function setBuiltInMetadataCmd(config, { datasetId, enabled }) {
   return setBuiltInMetadata(config, { datasetId, enabled: want });
 }
 
-async function updateDocMetadataCmd(config, { datasetId, documentId, metadata }) {
+async function updateDocMetadataCmd(config, { datasetId, documentId, metadata, replace }) {
   if (!documentId) throw new Error("--documentId <id> is required");
   const md = parseJsonFlag(metadata, "metadata");
   if (!md) throw new Error("--metadata <json-object> is required");
-  return updateDocumentMetadata(config, { datasetId, documentId, metadataMap: md });
+  // --replace asserts the caller is passing the COMPLETE custom-metadata set
+  // (skip the read-merge). Absent => safe read-merge (preserve existing fields).
+  const replaceFull = replace === true || replace === "true";
+  return updateDocumentMetadata(config, { datasetId, documentId, metadataMap: md, replace: replaceFull });
 }
 
 async function deleteCmd(config, { datasetId, documentId }) {
@@ -436,6 +463,7 @@ try {
     case "write": result = await writeCmd(config, args); break;
     case "save": result = await saveCmd(config, args); break;
     case "list": result = await listCmd(config, args); break;
+    case "list-consolidate": result = await listConsolidateCmd(config, args); break;
     case "read": result = await readCmd(config, args); break;
     case "disable": result = await disableCmd(config, args); break;
     case "enable": result = await enableCmd(config, args); break;
@@ -455,7 +483,7 @@ try {
     default:
       console.error(`Unknown subcommand: ${sub || "(none)"}`);
       console.error(
-        "Usage: memory-cli.js <search|write|save|list|read|disable|enable|delete|list-datasets|create-dataset|get-config|list-embedding-models|get-embedding-default|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
+        "Usage: memory-cli.js <search|write|save|list|list-consolidate|read|disable|enable|delete|list-datasets|create-dataset|get-config|list-embedding-models|get-embedding-default|find-by-name|scan|absorb|list-metadata-fields|create-metadata-field|set-built-in-metadata|update-doc-metadata> [--flag value]",
       );
       process.exit(2);
   }

@@ -218,12 +218,38 @@ export function setBuiltInMetadata({ datasetId, enabled } = {}) {
   return execCli("set-built-in-metadata", { datasetId, enabled: String(enabled !== false) });
 }
 
-export function updateDocMetadata({ datasetId, documentId, metadata } = {}) {
+// replace:true asserts `metadata` is the COMPLETE custom-metadata set (skip the
+// bridge-side read-merge). Use it only when the caller already holds every field
+// (a freshly-created doc, or an engine that merged in memory); omit it otherwise
+// so existing fields are preserved (Dify's metadata POST replaces the full set).
+export function updateDocMetadata({ datasetId, documentId, metadata, replace } = {}) {
   const flags = { datasetId, documentId };
   if (metadata && typeof metadata === "object") flags.metadata = JSON.stringify(metadata);
+  // Require a strict boolean true: emitting --replace skips the bridge read-merge
+  // (destructive full-set write), so a truthy non-boolean leaking in from config /
+  // CLI plumbing (e.g. the string "false") must NOT enable it.
+  if (replace === true) flags.replace = true;
   return execCli("update-doc-metadata", flags);
 }
 
 export function listDatasets() {
   return execCli("list-datasets", {});
+}
+
+export function listMetadataFields({ datasetId } = {}) {
+  return execCli("list-metadata-fields", { datasetId });
+}
+
+export function createMetadataField({ datasetId, name, type } = {}) {
+  return execCli("create-metadata-field", { datasetId, name, type: type || "string" });
+}
+
+// Consolidate working-set listing: every document in a dataset (enabled AND
+// disabled) with its flattened per-doc metadata + created_at + enabled flag.
+// The plain `list` subcommand omits metadata, which the consolidate
+// orchestrator needs (atom_type / error_pattern / stale / created_at) to group
+// and age documents. Bodies are NOT included (fetched lazily per surviving
+// candidate via readDocument).
+export function listForConsolidate({ datasetId } = {}) {
+  return execCli("list-consolidate", { datasetId });
 }

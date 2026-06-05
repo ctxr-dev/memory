@@ -36,6 +36,9 @@ Options:
   --no-interactive         Skip all prompts; auto-select defaults. When multiple
                            LLM providers are detected, use --llm-provider to
                            specify one explicitly or the first detected is used.
+  --schedule <daily|off>   Install (daily) or remove (off) the HOURLY maintenance
+                           cron: compile + consolidate --if-due (launchd on macOS,
+                           crontab on Linux). Omit to leave crons untouched.
   -h, --help               This help.
 
 Run from the user-project root after `git clone <boilerplate> ./.memory/src`.
@@ -49,6 +52,7 @@ provider_explicit=0   # set when the user passes --llm-provider explicitly
 install_hooks=1
 register_codex=0
 interactive=1
+schedule=""
 
 require_value() {
   local opt="$1" val="${2-}"
@@ -67,10 +71,19 @@ while [ "$#" -gt 0 ]; do
     --no-hooks) install_hooks=0; shift ;;
     --register-codex) register_codex=1; shift ;;
     --no-interactive) interactive=0; shift ;;
+    --schedule) require_value "$1" "${2-}"; schedule="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+# Validate --schedule at PARSE time, before any side-effecting work (template
+# render/merge, .gitignore + .env writes, schema install). Otherwise an invalid
+# value only failed at the very end, after the install had already run.
+case "${schedule:-}" in
+  ""|daily|off) : ;;
+  *) echo "Invalid --schedule '$schedule' (use 'daily' or 'off')." >&2; exit 2 ;;
+esac
 
 # ---------- prereq checks ----------
 require_cmd() {
@@ -689,4 +702,162 @@ if [ -f "$settings_embed" ]; then
   echo "Recorded embedding model from your prior install ($settings_embed):"
   sed 's/^/  /' "$settings_embed"
   echo "  -> set the SAME embedding model as the System Default in the Dify UI."
+fi
+
+# ---------- optional: hourly maintenance cron ----------
+# Installs an HOURLY job (launchd on macOS, crontab on Linux) that runs
+# scripts/cron-job.mjs: compile + consolidate --if-due. The heavy work is
+# self-throttled (compile per-UTC-day, consolidate per MEMORY_CONSOLIDATE_
+# INTERVAL_DAYS), so hourly attempts do real work at most once per day and each
+# attempt is logged to .memory/state/.consolidate-attempts.log (the cron_health
+# MCP tool reads it). Idempotent: re-running replaces the prior job cleanly.
+schedule_job() {
+  local action="$1"
+  # Honor a relocated durable data dir; fall back to the default. Mirrors
+  # scripts/lib.sh + env.mjs (${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}).
+  local data_dir="${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}"
+  local node_bin
+  node_bin="$(command -v node || echo node)"
+  local job_cmd="\"$node_bin\" \"$MEMORY_DIR/scripts/cron-job.mjs\""
+  # launchd / cron run with a MINIMAL PATH (typically /usr/bin:/bin:/usr/sbin:
+  # /sbin) that lacks both node and docker, so the job's `docker exec` to the
+  # bridge would fail with "spawn docker ENOENT". Build an explicit PATH that
+  # includes node's dir, the resolved docker dir, and the common docker
+  # locations (Rancher Desktop's ~/.rd/bin, Homebrew, /usr/local/bin).
+  local docker_bin docker_dir cron_path
+  docker_bin="$(command -v docker 2>/dev/null || true)"
+  docker_dir="$(cd "$(dirname "${docker_bin:-/usr/local/bin/docker}")" 2>/dev/null && pwd -P || echo /usr/local/bin)"
+  cron_path="$(dirname "$node_bin"):$docker_dir:${HOME:-}/.rd/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local ws_hash
+  ws_hash="$(printf '%s' "$WORKSPACE_DIR" | cksum | awk '{print $1}')"
+
+  if [ "$(uname)" = "Darwin" ]; then
+    if ! command -v launchctl >/dev/null 2>&1; then
+      echo "WARNING: launchctl not available; skipping schedule setup." >&2
+      return 0
+    fi
+    local label="com.ctxr-memory.$ws_hash"
+    local plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl unload "$plist" >/dev/null 2>&1 || true
+    if [ "$action" = "off" ]; then
+      rm -f "$plist"
+      echo "Removed scheduled maintenance job ($label)."
+      return 0
+    fi
+    mkdir -p "$HOME/Library/LaunchAgents"
+    # XML-escape every value interpolated into the plist: a workspace path with
+    # & < or > (all legal in macOS dir names) would otherwise produce malformed
+    # XML that launchctl silently rejects. Order matters: & MUST be first.
+    local x_label="$label" x_data="$data_dir" x_path="$cron_path" x_cmd="$job_cmd"
+    x_label="${x_label//&/&amp;}"; x_label="${x_label//</&lt;}"; x_label="${x_label//>/&gt;}"
+    x_data="${x_data//&/&amp;}";   x_data="${x_data//</&lt;}";   x_data="${x_data//>/&gt;}"
+    x_path="${x_path//&/&amp;}";   x_path="${x_path//</&lt;}";   x_path="${x_path//>/&gt;}"
+    x_cmd="${x_cmd//&/&amp;}";     x_cmd="${x_cmd//</&lt;}";     x_cmd="${x_cmd//>/&gt;}"
+    cat > "$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$x_label</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MEMORY_DATA_DIR</key>
+    <string>$x_data</string>
+    <key>PATH</key>
+    <string>$x_path</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>$x_cmd</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+</dict>
+</plist>
+PLIST
+    launchctl load "$plist" >/dev/null 2>&1 || true
+    echo "Installed hourly maintenance cron (launchd, every hour at :00): $plist"
+  else
+    if ! command -v crontab >/dev/null 2>&1; then
+      echo "WARNING: crontab not available; skipping schedule setup." >&2
+      return 0
+    fi
+    # Match key is the %-free, stable workspace hash (NOT the raw path): the
+    # installed line is %-escaped before writing (cron treats % as a newline), so
+    # a raw-path tag containing % would be written as "\%" but matched here as
+    # "%", leaving the old entry behind (duplicate on reinstall / fails to remove
+    # on --schedule off). The hash has no % or quotes, so grep -vF matches the
+    # installed line reliably; the human-readable path stays in the comment.
+    # The TRAILING colon delimiter is load-bearing: cksum is a variable-length
+    # decimal CRC, so without it one workspace whose hash is a prefix of another's
+    # (e.g. 123 vs 1234) would have its cron line deleted by the other's substring
+    # grep -vF. The installed comment always has ":$ws_hash:" so the match is exact.
+    local tag_match="# ctxr-memory:$ws_hash:"
+    local tag="$tag_match$WORKSPACE_DIR"
+    local wrapper="$data_dir/state/cron-maintenance.sh"
+    local filtered
+    filtered="$(crontab -l 2>/dev/null | grep -vF "$tag_match" || true)"
+    if [ "$action" = "off" ]; then
+      printf '%s\n' "$filtered" | grep -v '^$' | crontab - 2>/dev/null || true
+      rm -f "$wrapper"
+      echo "Removed scheduled maintenance job (crontab) + wrapper."
+      return 0
+    fi
+    # A wrapper script keeps env + the node command out of the cron line, where
+    # '%' and quotes in paths would otherwise break (cron treats '%' as newline).
+    mkdir -p "$(dirname "$wrapper")"
+    cat > "$wrapper" <<WRAPPER
+#!/usr/bin/env bash
+# Auto-generated by memory bootstrap.sh --schedule daily; invoked HOURLY by cron.
+# cron-job.mjs handles compile + consolidate --if-due + attempt logging.
+# Do NOT hand-edit; re-run bootstrap.sh to regenerate.
+set -u
+export MEMORY_DATA_DIR="$data_dir"
+export PATH="$cron_path"
+exec "$node_bin" "$MEMORY_DIR/scripts/cron-job.mjs"
+WRAPPER
+    chmod +x "$wrapper"
+    local line="0 * * * * \"$wrapper\" $tag"
+    # cron treats '%' in the command/comment as a newline (even when quoted), so a
+    # wrapper path or workspace tag containing '%' would corrupt the crontab.
+    # Escape every '%' as '\%' in the cron line.
+    line="${line//%/\\%}"
+    { printf '%s\n' "$filtered" | grep -v '^$'; printf '%s\n' "$line"; } | crontab - \
+      || echo "WARNING: failed to update crontab." >&2
+    echo "Installed hourly maintenance cron (crontab, every hour at :00) via wrapper $wrapper"
+  fi
+}
+
+# Create the state dir up front (owned by the invoking user) so the compose
+# read-only bind mount (${MEMORY_DATA_DIR}/state -> /app/state) does not get a
+# root-owned dir auto-created by docker, which the host cron could not write to.
+mkdir -p "${MEMORY_DATA_DIR:-$WORKSPACE_DIR/.memory}/state"
+
+case "${schedule:-}" in
+  "") : ;;
+  daily) schedule_job daily ;;
+  off) schedule_job off ;;
+  *) echo "Unknown --schedule '$schedule' (use 'daily' or 'off')." >&2; exit 2 ;;
+esac
+
+# Best-effort backfill of the consolidate/recall metadata fields on EXISTING
+# datasets. Idempotent (skips fields already present). Non-fatal: if the bridge
+# container is not up yet (the common case during a fresh bootstrap), this fails
+# cleanly and we print the manual command to run once the stack is up.
+echo
+echo "Installing consolidate/recall metadata fields on bound datasets (best-effort)..."
+# Do NOT suppress stderr: a real failure (bridge auth, misconfig, syntax error)
+# must be visible, not hidden behind the generic fallback message below.
+if node "$MEMORY_DIR/scripts/install-metadata-fields.mjs"; then
+  :
+else
+  echo "  install-metadata-fields did not complete (see the error above)." >&2
+  echo "  If the stack simply is not up yet, re-run once it is:" >&2
+  echo "    node \"$MEMORY_DIR/scripts/install-metadata-fields.mjs\"" >&2
 fi

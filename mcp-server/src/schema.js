@@ -3,19 +3,33 @@
 // (the bridge module is a separate Node module without import access to
 // scripts/lib/, so the constant is duplicated). Locked by the parity test
 // in test/datasets.test.mjs — that test imports both ends and asserts they
-// list the same field names in the same order.
+// list the same field names (and types) in the same order.
 //
-// If you add or remove a field, update BOTH files and the parity test will
-// pass automatically; if you only update one, the test fails with a clear
-// drift message.
-export const PER_DOC_METADATA_FIELDS = [
-  "atom_type",
-  "tags",
-  "project_module",
-  "language",
-  "task_type",
-  "error_pattern",
+// PER_DOC_METADATA_SCHEMA is the typed source of truth in this runtime;
+// PER_DOC_METADATA_FIELDS is the derived name list (kept as a named export
+// so existing consumers + the name-parity test are unaffected). Dify supports
+// only string/number/time field types. If you add or remove a field, update
+// BOTH files and dify-setup.sh; the parity test catches drift.
+export const PER_DOC_METADATA_SCHEMA = [
+  { name: "atom_type", type: "string" },
+  { name: "tags", type: "string" },
+  { name: "project_module", type: "string" },
+  { name: "language", type: "string" },
+  { name: "task_type", type: "string" },
+  { name: "error_pattern", type: "string" },
+  // All consolidate/recall fields are `string` (ISO timestamps + numeric-string
+  // count); parsing is client-side, so no Dify-typed (time/number) field is
+  // needed. Keep in lock-step with scripts/lib/datasets.mjs:METADATA_SCHEMA.
+  { name: "last_recalled_at", type: "string" },
+  { name: "recall_count", type: "string" },
+  { name: "superseded_by", type: "string" },
+  { name: "consolidated_at", type: "string" },
+  { name: "stale", type: "string" },
+  { name: "last_refreshed_at", type: "string" },
+  { name: "consolidate_truncated_at", type: "string" },
 ];
+
+export const PER_DOC_METADATA_FIELDS = PER_DOC_METADATA_SCHEMA.map((f) => f.name);
 
 // Atom-type registry: every type known to flush+compile + the hook-set
 // `plan` type. Bridge-side mirror of scripts/lib/datasets.mjs:ATOM_TYPES.

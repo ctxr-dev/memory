@@ -36,6 +36,17 @@ export const ATOM_TYPE_TO_DATASET = {
 // Per-document metadata schema applied to every Dify dataset. Dify supports
 // only string/number/time field types (no arrays); tags are stored as a
 // comma-separated string queried with the `contains` operator.
+//
+// The trailing seven fields back the consolidate orchestrator + recall
+// instrumentation (see scripts/consolidate.mjs, mcp-server/src/recall-stamp.js):
+//   last_recalled_at / recall_count  — staleness signal stamped on recall.
+//   superseded_by / consolidated_at  — merge bookkeeping on archived losers.
+//   stale                            — persisted staleness flag ("true"/"false").
+//   last_refreshed_at                — LLM-refresh rewrite marker.
+//   consolidate_truncated_at         — compress-archived marker.
+// Mirrored verbatim (name + type) in mcp-server/src/schema.js and
+// scripts/dify-setup.sh; the parity test in test/datasets.test.mjs locks all
+// three in lock-step.
 export const METADATA_SCHEMA = [
   { name: "atom_type", type: "string" },
   { name: "tags", type: "string" },
@@ -43,6 +54,17 @@ export const METADATA_SCHEMA = [
   { name: "language", type: "string" },
   { name: "task_type", type: "string" },
   { name: "error_pattern", type: "string" },
+  // All consolidate/recall fields are `string`: we never use Dify-side typed
+  // (time/number) filtering on them, and all date/count parsing happens
+  // client-side. Storing ISO timestamps + a numeric-string count in string
+  // fields avoids any Dify type-coercion surprise on write.
+  { name: "last_recalled_at", type: "string" },
+  { name: "recall_count", type: "string" },
+  { name: "superseded_by", type: "string" },
+  { name: "consolidated_at", type: "string" },
+  { name: "stale", type: "string" },
+  { name: "last_refreshed_at", type: "string" },
+  { name: "consolidate_truncated_at", type: "string" },
 ];
 
 export const TASK_TYPES = new Set([
