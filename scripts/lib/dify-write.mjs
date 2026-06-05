@@ -33,12 +33,26 @@ function containerName() {
 // contract). Flags with value === true are emitted as a bare `--flag`
 // (no value), matching the boolean-switch convention used by the
 // memory-cli enable/disable/etc. subcommands.
+//
+// String values are emitted in the joined `--key=value` form (one argv
+// element) rather than the two-element `--key value` form. This is the
+// only unambiguous way to pass a value that itself starts with `--`: e.g.
+// a dedup search query for a daily atom titled "--dry-run --force wiped
+// state" would, in two-element form, be read by the bridge's parser as a
+// valueless `--query` flag (the value token starts with `--`, so it looks
+// like the next flag), making the bridge reject the call with
+// "--query <string> is required" and aborting the whole hourly compile.
+// The bridge parseArgs accepts both forms; the `=` form removes the
+// ambiguity for every flag, not just query.
 export function buildExecCliArgs(subcommand, flags = {}, container) {
   const args = ["exec", "-i", container, "node", "src/memory-cli.js", subcommand];
   for (const [key, value] of Object.entries(flags)) {
     if (value === undefined || value === null || value === "") continue;
-    args.push(`--${key}`);
-    if (value !== true) args.push(String(value));
+    if (value === true) {
+      args.push(`--${key}`);
+    } else {
+      args.push(`--${key}=${String(value)}`);
+    }
   }
   return args;
 }

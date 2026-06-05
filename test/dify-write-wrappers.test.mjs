@@ -56,14 +56,16 @@ test("buildExecCliArgs: emits docker-exec preamble + subcommand", () => {
   assert.deepEqual(args, ["exec", "-i", "memcontainer", "node", "src/memory-cli.js", "list"]);
 });
 
-test("buildExecCliArgs: emits each flag as `--key value` pair", () => {
+test("buildExecCliArgs: emits each flag as a joined `--key=value` element", () => {
   const args = buildExecCliArgs(
     "save",
     { name: "plan-foo.md", datasetId: "plans" },
     "c",
   );
-  // Order: subcommand first, then flag pairs in insertion order.
-  assert.deepEqual(args.slice(5), ["save", "--name", "plan-foo.md", "--datasetId", "plans"]);
+  // Order: subcommand first, then one --key=value element per flag in insertion
+  // order. The joined form (not two-element `--key value`) is what lets a value
+  // starting with `--` survive (see the dash-leading regression test below).
+  assert.deepEqual(args.slice(5), ["save", "--name=plan-foo.md", "--datasetId=plans"]);
 });
 
 test("buildExecCliArgs: drops flags with value undefined / null / empty string", () => {
@@ -73,7 +75,7 @@ test("buildExecCliArgs: drops flags with value undefined / null / empty string",
     "c",
   );
   // Only prefix should survive.
-  assert.deepEqual(args.slice(5), ["list", "--prefix", "plan-"]);
+  assert.deepEqual(args.slice(5), ["list", "--prefix=plan-"]);
 });
 
 test("buildExecCliArgs: emits `value === true` as a bare --flag with no value", () => {
@@ -85,7 +87,20 @@ test("buildExecCliArgs: emits `value === true` as a bare --flag with no value", 
 test("buildExecCliArgs: coerces non-string values via String()", () => {
   const args = buildExecCliArgs("list", { limit: 5, enabled: false }, "c");
   // false is NOT === true, so it's emitted as a value.
-  assert.deepEqual(args.slice(5), ["list", "--limit", "5", "--enabled", "false"]);
+  assert.deepEqual(args.slice(5), ["list", "--limit=5", "--enabled=false"]);
+});
+
+test("buildExecCliArgs: a value that STARTS with -- stays one element (the incident)", () => {
+  // Regression: a dedup search query for a daily atom titled "--dry-run --force
+  // wiped state" begins with --. In two-element form the bridge parser read
+  // --query as valueless and rejected the call ("--query <string> is required"),
+  // aborting the hourly compile. The joined form keeps it a single argv element
+  // so the bridge's --key=value branch recovers the value verbatim.
+  const query = "--dry-run --force wiped state via ungated FORCE clear";
+  const args = buildExecCliArgs("search", { query, datasetId: "knowledge" }, "c");
+  assert.ok(args.includes(`--query=${query}`), `expected joined query element in ${JSON.stringify(args)}`);
+  // The value must NOT leak as its own argv element (which is what broke parsing).
+  assert.equal(args.indexOf(query), -1, "the raw dash-leading value must not be a standalone element");
 });
 
 // ---------- Wrapper subcommand + flag-shape lock ----------
@@ -132,14 +147,18 @@ for (const row of WRAPPER_TABLE) {
     const args = buildExecCliArgs(row.subcommand, row.flags, "test-container");
     // Subcommand is at index 5.
     assert.equal(args[5], row.subcommand, `${row.wrapper} must use subcommand '${row.subcommand}'`);
-    // Every flag key in the wrapper's contract should appear as --key in args.
+    // Every flag key in the wrapper's contract should appear: a bare --key for a
+    // boolean true, or a joined --key=value element otherwise.
     for (const key of Object.keys(row.flags)) {
       const val = row.flags[key];
       if (val === undefined || val === null || val === "") continue;
-      const flagIdx = args.indexOf(`--${key}`);
-      assert.ok(flagIdx > 5, `${row.wrapper} missing --${key} in args=${JSON.stringify(args)}`);
-      if (val !== true) {
-        assert.equal(args[flagIdx + 1], String(val), `${row.wrapper} --${key} value mismatch`);
+      if (val === true) {
+        assert.ok(args.indexOf(`--${key}`) > 5, `${row.wrapper} missing bare --${key} in args=${JSON.stringify(args)}`);
+      } else {
+        assert.ok(
+          args.indexOf(`--${key}=${String(val)}`) > 5,
+          `${row.wrapper} missing --${key}=${String(val)} in args=${JSON.stringify(args)}`,
+        );
       }
     }
   });
@@ -162,8 +181,11 @@ test("searchMemoryFiltered: filters object is JSON-stringified", () => {
   };
   const args = buildExecCliArgs("search", flags, "c");
   assert.equal(args[5], "search");
-  assert.equal(args[args.indexOf("--filters") + 1], '{"atom_type":"decision","project_module":"auth"}');
-  assert.equal(args[args.indexOf("--scoreThreshold") + 1], "0.5");
+  assert.ok(
+    args.includes('--filters={"atom_type":"decision","project_module":"auth"}'),
+    `expected joined --filters element in ${JSON.stringify(args)}`,
+  );
+  assert.ok(args.includes("--scoreThreshold=0.5"), `expected --scoreThreshold=0.5 in ${JSON.stringify(args)}`);
 });
 
 // ---------- updateDocMetadata: --replace is a valueless boolean flag ----------
@@ -172,12 +194,11 @@ test("updateDocMetadata: --replace emitted as a valueless flag only when set", (
   // With replace:true the builder emits a bare `--replace` (no value), so the
   // bridge asserts the full-set / skip-read-merge contract.
   const withReplace = buildExecCliArgs("update-doc-metadata", { datasetId: "d", documentId: "x", metadata: "{}", replace: true }, "c");
-  const idx = withReplace.indexOf("--replace");
-  assert.ok(idx > 5, "expected --replace in args");
-  assert.notEqual(withReplace[idx + 1], "true", "--replace must be valueless, not '--replace true'");
-  // Omitted by default (read-merge): no --replace token.
+  assert.ok(withReplace.includes("--replace"), "expected bare --replace in args");
+  assert.equal(withReplace.includes("--replace=true"), false, "--replace must be valueless, not '--replace=true'");
+  // Omitted by default (read-merge): no --replace token in any form.
   const noReplace = buildExecCliArgs("update-doc-metadata", { datasetId: "d", documentId: "x", metadata: "{}" }, "c");
-  assert.equal(noReplace.indexOf("--replace"), -1, "no --replace when unset (safe read-merge)");
+  assert.equal(noReplace.some((a) => a === "--replace" || a.startsWith("--replace=")), false, "no --replace when unset (safe read-merge)");
 });
 
 test("searchMemoryFiltered: empty/whitespace/absent query short-circuits to {records:[]} (no bridge call)", async () => {
