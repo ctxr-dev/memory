@@ -212,6 +212,13 @@ export function findByName({ name, datasetId } = {}) {
 }
 
 export function searchMemoryFiltered({ query, datasetId, limit, filters, scoreThreshold } = {}) {
+  // An empty/whitespace query is meaningless for retrieval (nothing to match) AND
+  // the bridge's `search` subcommand rejects it ("--query <string> is required").
+  // execCli maps that non-zero exit to DifyBridgeUnavailable, so a caller-side
+  // empty query (e.g. compile dedup on an atom with no title/tags, or consolidate
+  // similarity on an empty-body doc) was misread as a provider outage and aborted
+  // the whole hourly run. Short-circuit to "no results" without a bridge round-trip.
+  if (!query || String(query).trim() === "") return Promise.resolve({ records: [] });
   const flags = { query, datasetId, limit };
   if (filters && typeof filters === "object") flags.filters = JSON.stringify(filters);
   if (scoreThreshold != null) flags.scoreThreshold = String(scoreThreshold);
