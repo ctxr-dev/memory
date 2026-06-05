@@ -41,14 +41,34 @@ test("runCronJob: compile failure short-circuits (consolidate not run) and is lo
   assert.equal(appended.length, 1);
 });
 
-test("runCronJob: clean compile + clean consolidate -> ok:true, no error", async () => {
+test("runCronJob: compile exit 69 (providers unavailable) -> failed + short-circuit, labelled retryable", async () => {
+  // The 2026-06-04 contract: a provider-unavailable compile is a FAILED tick
+  // (cron_health unhealthy), distinctly labelled from a hard crash, and (per the
+  // short-circuit decision) consolidate is skipped this tick.
   const appended = [];
-  const consolidate = { ok: true, exit: 0, stderr: "", stdout: JSON.stringify({ ok: true, dryRun: false, totals: { errors: 0 }, workingSetSize: 5 }) };
+  let consolidateRan = false;
+  const runStepFn = (scriptPath) => {
+    if (scriptPath.endsWith("consolidate.mjs")) { consolidateRan = true; return OK; }
+    return { ok: false, exit: 69, stderr: "compile.mjs: aborting (DifyBridgeUnavailable): no container", stdout: "" };
+  };
+  const res = await runCronJob({ acquireLockFn: okLock, runStepFn, appendFn: (e) => appended.push(e) });
+  assert.equal(res.ok, false, "exit 69 is a failed attempt, not healthy");
+  assert.match(res.error, /providers unavailable \(exit 69\)/);
+  assert.match(res.error, /will retry/);
+  assert.equal(consolidateRan, false, "exit 69 short-circuits consolidate");
+  assert.equal(appended.length, 1);
+});
+
+test("runCronJob: clean compile + clean consolidate -> ok:true, no error; summary carries llm/llmRequested", async () => {
+  const appended = [];
+  const consolidate = { ok: true, exit: 0, stderr: "", stdout: JSON.stringify({ ok: true, dryRun: false, totals: { errors: 0 }, workingSetSize: 5, llm: true, llmRequested: true }) };
   const res = await runCronJob({ acquireLockFn: okLock, runStepFn: step({ compile: OK, consolidate }), appendFn: (e) => appended.push(e) });
   assert.equal(res.ok, true);
   assert.equal(res.error, null);
   assert.equal(appended.length, 1);
   assert.equal(appended[0].consolidate.summary.workingSetSize, 5);
+  assert.equal(appended[0].consolidate.summary.llm, true, "llm surfaced in the slim summary");
+  assert.equal(appended[0].consolidate.summary.llmRequested, true, "llmRequested surfaced in the slim summary");
 });
 
 test("runCronJob: consolidate reports totals.errors -> surfaced as a failure (not masked)", async () => {
