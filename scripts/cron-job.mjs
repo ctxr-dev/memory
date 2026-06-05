@@ -316,17 +316,17 @@ export function synthesizeProviderEntities({ compileExit = null, compileOk = nul
   if (realConsolidate && report.llmRequested === true) {
     // ./memory surfaces a mid-run outage as llm:false and/or llmInterrupted:true.
     const llmSkipped = report.llm === false || report.llmInterrupted === true;
+    // Distinguish "never ran" (llm=false from the start) from "died mid-run"
+    // (llmInterrupted) so the excerpt is accurate and the two open distinct
+    // episodes (different operator signals).
+    const excerpt = report.llmInterrupted === true
+      ? "consolidate: LLM provider unavailable MID-RUN (passes interrupted) llmRequested=true llmInterrupted=true"
+      : "consolidate: LLM passes skipped (provider unavailable) llmRequested=true llm=false";
     passes[SYNTH_CONSOLIDATE_PASS] = llmSkipped
       ? {
           name: SYNTH_CONSOLIDATE_PASS,
           entities: [],
-          failures: [{
-            id: SYNTH_CONSOLIDATE_ENTITY,
-            kind: "system-provider",
-            action: "llm-pass",
-            ok: false,
-            excerpt: "consolidate: LLM passes skipped (provider unavailable) llmRequested=true llm=false",
-          }],
+          failures: [{ id: SYNTH_CONSOLIDATE_ENTITY, kind: "system-provider", action: "llm-pass", ok: false, excerpt }],
         }
       : {
           name: SYNTH_CONSOLIDATE_PASS,
