@@ -28,6 +28,8 @@ export function normalizeErrorSignature(rawError, { pass = "", kind = "" } = {})
     .replace(/\s+/g, " ")
     .trim();
   const prefixed = [pass, kind, s].filter(Boolean).join(" ");
-  const slug = slugify(prefixed).slice(0, MAX_SIG_LEN).replace(/-+$/, "");
+  // Pass maxLen explicitly: slugify defaults to 60, which would silently cap the
+  // signature shorter than MAX_SIG_LEN and make the constant misleading.
+  const slug = slugify(prefixed, { maxLen: MAX_SIG_LEN }).replace(/-+$/, "");
   return slug || "unknown-error";
 }
