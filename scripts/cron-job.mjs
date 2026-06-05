@@ -193,6 +193,7 @@ export function readEntityState({ entitiesPath = CONSOLIDATE_ENTITIES_PATH } = {
 export function writeEntityState(state, { entitiesPath = CONSOLIDATE_ENTITIES_PATH } = {}) {
   try {
     state.updatedAt = new Date().toISOString();
+    fs.mkdirSync(path.dirname(entitiesPath), { recursive: true }); // writeFileAtomic ENOENTs without the dir
     writeFileAtomic(entitiesPath, JSON.stringify(state, null, 2) + "\n");
   } catch (err) {
     process.stderr.write(`[cron-job] failed to write entity state: ${err?.message || err}\n`);
@@ -338,7 +339,7 @@ export function synthesizeProviderEntities({ compileExit = null, compileOk = nul
 
 // ─── issue reports (deterministic skeletons) ───────────────────────────────
 
-export function readIssuesIndex({ issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR } = {}) {
+export function readIssuesIndex({ issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR, dataDir = MEMORY_DATA_DIR } = {}) {
   try {
     const parsed = JSON.parse(fs.readFileSync(issuesIndexPath, "utf8"));
     if (parsed && typeof parsed === "object" && parsed.signatures && typeof parsed.signatures === "object") {
@@ -347,13 +348,13 @@ export function readIssuesIndex({ issuesIndexPath = ISSUES_INDEX_PATH, issuesDir
   } catch (err) {
     if (err?.code !== "ENOENT") {
       process.stderr.write(`[cron-job] issues index unreadable (${err?.message || err}); rebuilding from issues/ tree\n`);
-      return rebuildIssuesIndex({ issuesDir });
+      return rebuildIssuesIndex({ issuesDir, dataDir });
     }
   }
   return { version: 1, signatures: {} };
 }
 
-function rebuildIssuesIndex({ issuesDir = ISSUES_DIR } = {}) {
+function rebuildIssuesIndex({ issuesDir = ISSUES_DIR, dataDir = MEMORY_DATA_DIR } = {}) {
   const idx = { version: 1, signatures: {} };
   const walk = (dir) => {
     let entries;
@@ -370,7 +371,7 @@ function rebuildIssuesIndex({ issuesDir = ISSUES_DIR } = {}) {
           if (!sig) continue;
           const cur = idx.signatures[sig];
           if (!cur || version > cur.version) {
-            idx.signatures[sig] = { version, path: relToDataDir(p), status, occurrences: [] };
+            idx.signatures[sig] = { version, path: path.relative(dataDir, p), status, occurrences: [] };
           }
         } catch {
           /* skip unreadable report */
@@ -384,6 +385,7 @@ function rebuildIssuesIndex({ issuesDir = ISSUES_DIR } = {}) {
 
 function writeIssuesIndex(idx, { issuesIndexPath = ISSUES_INDEX_PATH } = {}) {
   try {
+    fs.mkdirSync(path.dirname(issuesIndexPath), { recursive: true }); // writeFileAtomic ENOENTs without the dir
     writeFileAtomic(issuesIndexPath, JSON.stringify(idx, null, 2) + "\n");
   } catch (err) {
     process.stderr.write(`[cron-job] failed to write issues index: ${err?.message || err}\n`);
@@ -435,7 +437,7 @@ function renderIssueReport(rec) {
 }
 
 export function writeIssueReports(escalations, state, now = new Date(), { issuesDir = ISSUES_DIR, issuesIndexPath = ISSUES_INDEX_PATH, dataDir = MEMORY_DATA_DIR } = {}) {
-  const idx = readIssuesIndex({ issuesIndexPath, issuesDir });
+  const idx = readIssuesIndex({ issuesIndexPath, issuesDir, dataDir });
   const ts = now.toISOString();
   const touched = [];
 
@@ -480,8 +482,8 @@ export function writeIssueReports(escalations, state, now = new Date(), { issues
   return { touched, openCount: Object.values(idx.signatures).filter((r) => r.status === "open").length };
 }
 
-export function openEscalationsFromIndex({ issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR } = {}) {
-  const idx = readIssuesIndex({ issuesIndexPath, issuesDir });
+export function openEscalationsFromIndex({ issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR, dataDir = MEMORY_DATA_DIR } = {}) {
+  const idx = readIssuesIndex({ issuesIndexPath, issuesDir, dataDir });
   return Object.entries(idx.signatures)
     .filter(([, rec]) => rec.status === "open")
     .map(([signature, rec]) => ({
