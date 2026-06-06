@@ -684,12 +684,61 @@ export async function runCronJob(deps = {}) {
 
 // ─── health ───────────────────────────────────────────────────────────────
 //
-// Unhealthy iff the most-recent attempt errored with no later success, OR at
-// least one escalation episode is still open. A failure that later resolved
-// stays silent.
-export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH, issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR } = {}) {
+// Does the resolved data dir actually look like a memory install? A real one,
+// even brand-new, has the dir AND at least one marker that bootstrap.sh writes up
+// front: settings/.env (the canonical env file) or state/ (created by bootstrap so
+// it can be bind-mounted read-only into the container, before any cron tick runs).
+// A MIS-SET MEMORY_DATA_DIR (a typo/stale path that is absent, or an unrelated
+// existing dir like $HOME with neither marker) must NOT be mistaken for a "fresh,
+// healthy" install: readAttempts + openEscalationsFromIndex both ENOENT to empty
+// there, so without this guard cronHealth would return healthy:true off a
+// wrong-path empty read. This is the inverse of that footgun.
+function installLooksReal(dataDir) {
+  // Type-check the markers, not just existence: a path named "state" that is a
+  // FILE (or "settings/.env" that is a DIRECTORY) would pass an existsSync check
+  // but make later reads under state/ throw ENOTDIR, which the readers swallow as
+  // empty -> the very false-healthy we are guarding against. So require dataDir
+  // and state/ to be directories and settings/.env to be a file.
+  const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+  const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  if (!dataDir || !isDir(dataDir)) return false;
+  return isFile(path.join(dataDir, "settings", ".env")) || isDir(path.join(dataDir, "state"));
+}
+
+// Unhealthy iff the data dir is mis-set (cannot be assessed), the most-recent
+// attempt errored with no later success, OR at least one escalation episode is
+// still open. A failure that later resolved stays silent.
+export function cronHealth({ limit = 20, logPath, issuesIndexPath, issuesDir, dataDir = MEMORY_DATA_DIR } = {}) {
+  // Refuse to report health off a mis-set MEMORY_DATA_DIR, and do it BEFORE
+  // deriving any path from dataDir: a non-string (e.g. null passed explicitly,
+  // which skips the default) would make path.join throw and crash the check
+  // instead of returning a safe verdict. ok:false signals the check could not run
+  // against a real install; healthy:false ensures a monitor gating on `healthy`
+  // alarms rather than seeing a false green.
+  if (typeof dataDir !== "string" || dataDir === "" || !installLooksReal(dataDir)) {
+    return {
+      ok: false,
+      healthy: false,
+      summary: `cannot assess cron health: data dir (${dataDir}) is unset, invalid, or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
+      lastAttempt: null,
+      recent: [],
+      escalations: [],
+    };
+  }
+
+  // Default the read paths to dataDir-derived locations so cronHealth({ dataDir })
+  // validates AND reads the SAME install. Without this, passing only dataDir would
+  // validate the given dir but still read health from the default install's paths.
+  // Re-root each constant's MEMORY_DATA_DIR-relative subpath onto dataDir: when
+  // dataDir is the default these equal the original constants exactly (no behavior
+  // change), and a non-default dataDir is fully coherent. Explicit args still win.
+  const underDataDir = (constant) => path.join(dataDir, path.relative(MEMORY_DATA_DIR, constant));
+  logPath = logPath ?? underDataDir(CONSOLIDATE_ATTEMPTS_LOG_PATH);
+  issuesIndexPath = issuesIndexPath ?? underDataDir(ISSUES_INDEX_PATH);
+  issuesDir = issuesDir ?? underDataDir(ISSUES_DIR);
+
   const all = readAttempts({ limit: Math.max(attemptsKeepSafe(), 200), logPath });
-  const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir });
+  const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir, dataDir });
   const lastAttempt = all.length ? all[all.length - 1] : null;
 
   // `recent` is part of the documented shape on EVERY path (consistent for callers).
@@ -721,8 +770,15 @@ export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("cron-health") || args.includes("--health")) {
-    process.stdout.write(JSON.stringify(cronHealth()) + "\n");
-    process.exit(0);
+    const result = cronHealth();
+    process.stdout.write(JSON.stringify(result) + "\n");
+    // Exit non-zero when not healthy so a shell monitor (`... --health || alert`)
+    // cannot be silently fooled the way the JSON verdict could. Covers a mis-set
+    // MEMORY_DATA_DIR (ok:false), an open escalation, and an unresolved failure.
+    // Set exitCode + return (do NOT process.exit) so Node flushes stdout before
+    // exiting: process.exit can truncate a piped JSON write mid-stream.
+    process.exitCode = result.healthy ? 0 : 1;
+    return;
   }
   const entry = await runCronJob();
   process.exit(entry.ok ? 0 : 1);

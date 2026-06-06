@@ -119,6 +119,9 @@ test("runCronJob: consolidate exit 0 but unparseable JSON -> failure, with stdou
 function withTempLog(lines) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-"));
   tmpDirs.push(dir);
+  // Mark the temp dir as a real install (state/ marker) so cronHealth's mis-set
+  // guard treats it as assessable; callers pass dataDir: dir.
+  fs.mkdirSync(path.join(dir, "state"), { recursive: true });
   const p = path.join(dir, "attempts.log");
   fs.writeFileSync(p, lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n") + (lines.length ? "\n" : ""));
   // A nonexistent issues index so no real escalations leak into the classification.
@@ -128,29 +131,94 @@ function withTempLog(lines) {
 test("cronHealth: empty/absent log is healthy with a 'fresh' summary", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-none-"));
   tmpDirs.push(dir);
-  const h = cronHealth({ logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
+  // A real-but-fresh install: data dir + state/ marker present, just no tick yet.
+  fs.mkdirSync(path.join(dir, "state"), { recursive: true });
+  const h = cronHealth({ dataDir: dir, logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
   assert.equal(h.healthy, true);
   assert.match(h.summary, /no cron-job attempts/);
   assert.equal(h.lastAttempt, null);
 });
 
+test("cronHealth: mis-set MEMORY_DATA_DIR (absent path) is NOT healthy (closes the silent-green footgun)", () => {
+  // The footgun: a mis-set data dir reads nothing and would otherwise look 'fresh'.
+  // Derive a guaranteed-absent path from a fresh mkdtemp dir (a never-created
+  // child) so the test is hermetic regardless of leftover tmp state.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-misset-"));
+  tmpDirs.push(base);
+  const gone = path.join(base, "never-created");
+  assert.equal(fs.existsSync(gone), false, "precondition: the path must not exist");
+  const h = cronHealth({ dataDir: gone, logPath: path.join(gone, "attempts.log"), issuesIndexPath: path.join(gone, "issues.json") });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+  assert.match(h.summary, /mis-set|absent|not a memory install/i);
+  assert.equal(h.lastAttempt, null);
+});
+
+test("cronHealth: data dir exists but is NOT a memory install (no markers) is NOT healthy", () => {
+  // Mis-set to an unrelated existing dir (e.g. $HOME): exists, but no settings/.env
+  // and no state/ -> must not be read as a fresh-healthy install.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-bare-"));
+  tmpDirs.push(dir);
+  const h = cronHealth({ dataDir: dir, logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+});
+
+test("cronHealth: a 'state' marker that is a FILE (not a dir) does not count as a real install", () => {
+  // Type-check guard: existsSync would pass, but reads under state/ would ENOTDIR
+  // and be swallowed empty -> the false-healthy we are preventing.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-statefile-"));
+  tmpDirs.push(dir);
+  fs.writeFileSync(path.join(dir, "state"), "not a directory");
+  const h = cronHealth({ dataDir: dir, logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+});
+
+test("cronHealth: a non-string dataDir (null) returns a safe verdict, does not throw", () => {
+  // The validation must run before any path.join(dataDir, ...) so a null/invalid
+  // dataDir cannot crash the health check.
+  let h;
+  assert.doesNotThrow(() => { h = cronHealth({ dataDir: null }); });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+  assert.match(h.summary, /unset|invalid|not a memory install/i);
+});
+
+test("cronHealth: passing only dataDir reads health from THAT install (coherent defaults)", () => {
+  // Coherence lock: with no logPath/issuesIndexPath, the read paths must derive
+  // from dataDir, not the process-default install. Seed a failing attempt under
+  // <dataDir>/state and confirm the verdict reflects it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-coherent-"));
+  tmpDirs.push(dir);
+  fs.mkdirSync(path.join(dir, "state"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "state", ".consolidate-attempts.log"),
+    JSON.stringify({ ts: "2026-06-06T10:00:00Z", ok: false, error: "boom from THIS install" }) + "\n",
+  );
+  const h = cronHealth({ dataDir: dir }); // no logPath/issuesIndexPath -> must derive from dataDir
+  assert.equal(h.healthy, false);
+  assert.match(h.summary, /UNRESOLVED FAILURE/);
+  assert.match(h.summary, /boom from THIS install/);
+});
+
 test("cronHealth: last attempt ok:false -> unhealthy with the error", () => {
-  const { p, issuesIndexPath } = withTempLog([
+  const { p, dir, issuesIndexPath } = withTempLog([
     { ts: "2026-06-03T10:00:00Z", ok: true },
     { ts: "2026-06-03T11:00:00Z", ok: false, error: "consolidate completed with 1 error(s)" },
   ]);
-  const h = cronHealth({ logPath: p, issuesIndexPath });
+  const h = cronHealth({ dataDir: dir, logPath: p, issuesIndexPath });
   assert.equal(h.healthy, false);
   assert.match(h.summary, /UNRESOLVED FAILURE/);
   assert.match(h.summary, /1 error/);
 });
 
 test("cronHealth: last ok with an earlier failure -> healthy but reports lastFailureAt", () => {
-  const { p, issuesIndexPath } = withTempLog([
+  const { p, dir, issuesIndexPath } = withTempLog([
     { ts: "2026-06-03T10:00:00Z", ok: false, error: "x" },
     { ts: "2026-06-03T11:00:00Z", ok: true },
   ]);
-  const h = cronHealth({ logPath: p, issuesIndexPath });
+  const h = cronHealth({ dataDir: dir, logPath: p, issuesIndexPath });
   assert.equal(h.healthy, true);
   assert.equal(h.lastFailureAt, "2026-06-03T10:00:00Z");
 });
