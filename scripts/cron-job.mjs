@@ -709,6 +709,23 @@ function installLooksReal(dataDir) {
 // attempt errored with no later success, OR at least one escalation episode is
 // still open. A failure that later resolved stays silent.
 export function cronHealth({ limit = 20, logPath, issuesIndexPath, issuesDir, dataDir = MEMORY_DATA_DIR } = {}) {
+  // Refuse to report health off a mis-set MEMORY_DATA_DIR, and do it BEFORE
+  // deriving any path from dataDir: a non-string (e.g. null passed explicitly,
+  // which skips the default) would make path.join throw and crash the check
+  // instead of returning a safe verdict. ok:false signals the check could not run
+  // against a real install; healthy:false ensures a monitor gating on `healthy`
+  // alarms rather than seeing a false green.
+  if (typeof dataDir !== "string" || dataDir === "" || !installLooksReal(dataDir)) {
+    return {
+      ok: false,
+      healthy: false,
+      summary: `cannot assess cron health: MEMORY_DATA_DIR (${dataDir}) is unset, invalid, or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
+      lastAttempt: null,
+      recent: [],
+      escalations: [],
+    };
+  }
+
   // Default the read paths to dataDir-derived locations so cronHealth({ dataDir })
   // validates AND reads the SAME install. Without this, passing only dataDir would
   // validate the given dir but still read health from the default install's paths.
@@ -719,20 +736,6 @@ export function cronHealth({ limit = 20, logPath, issuesIndexPath, issuesDir, da
   logPath = logPath ?? underDataDir(CONSOLIDATE_ATTEMPTS_LOG_PATH);
   issuesIndexPath = issuesIndexPath ?? underDataDir(ISSUES_INDEX_PATH);
   issuesDir = issuesDir ?? underDataDir(ISSUES_DIR);
-
-  // Refuse to report health off a mis-set MEMORY_DATA_DIR. ok:false signals the
-  // check itself could not run against a real install; healthy:false ensures any
-  // monitor gating on `healthy` alarms rather than seeing a false green.
-  if (!installLooksReal(dataDir)) {
-    return {
-      ok: false,
-      healthy: false,
-      summary: `cannot assess cron health: MEMORY_DATA_DIR (${dataDir}) is absent or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
-      lastAttempt: null,
-      recent: [],
-      escalations: [],
-    };
-  }
 
   const all = readAttempts({ limit: Math.max(attemptsKeepSafe(), 200), logPath });
   const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir, dataDir });

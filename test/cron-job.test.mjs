@@ -175,6 +175,16 @@ test("cronHealth: a 'state' marker that is a FILE (not a dir) does not count as 
   assert.equal(h.ok, false);
 });
 
+test("cronHealth: a non-string dataDir (null) returns a safe verdict, does not throw", () => {
+  // The validation must run before any path.join(dataDir, ...) so a null/invalid
+  // dataDir cannot crash the health check.
+  let h;
+  assert.doesNotThrow(() => { h = cronHealth({ dataDir: null }); });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+  assert.match(h.summary, /unset|invalid|not a memory install/i);
+});
+
 test("cronHealth: passing only dataDir reads health from THAT install (coherent defaults)", () => {
   // Coherence lock: with no logPath/issuesIndexPath, the read paths must derive
   // from dataDir, not the process-default install. Seed a failing attempt under
