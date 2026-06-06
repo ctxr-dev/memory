@@ -685,13 +685,14 @@ export async function runCronJob(deps = {}) {
 // ─── health ───────────────────────────────────────────────────────────────
 //
 // Does the resolved data dir actually look like a memory install? A real one,
-// even brand-new, has the dir AND at least one marker: settings/.env (written at
-// bootstrap) or state/ (created by the first cron tick). A MIS-SET
-// MEMORY_DATA_DIR (a typo/stale path that is absent, or an unrelated existing
-// dir like $HOME with neither marker) must NOT be mistaken for a "fresh, healthy"
-// install: readAttempts + openEscalationsFromIndex both ENOENT to empty there, so
-// without this guard cronHealth would return healthy:true off a wrong-path empty
-// read. This is the inverse of that footgun.
+// even brand-new, has the dir AND at least one marker that bootstrap.sh writes up
+// front: settings/.env (the canonical env file) or state/ (created by bootstrap so
+// it can be bind-mounted read-only into the container, before any cron tick runs).
+// A MIS-SET MEMORY_DATA_DIR (a typo/stale path that is absent, or an unrelated
+// existing dir like $HOME with neither marker) must NOT be mistaken for a "fresh,
+// healthy" install: readAttempts + openEscalationsFromIndex both ENOENT to empty
+// there, so without this guard cronHealth would return healthy:true off a
+// wrong-path empty read. This is the inverse of that footgun.
 function installLooksReal(dataDir) {
   // Type-check the markers, not just existence: a path named "state" that is a
   // FILE (or "settings/.env" that is a DIRECTORY) would pass an existsSync check
