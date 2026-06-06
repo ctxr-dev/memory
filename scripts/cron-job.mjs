@@ -693,12 +693,15 @@ export async function runCronJob(deps = {}) {
 // without this guard cronHealth would return healthy:true off a wrong-path empty
 // read. This is the inverse of that footgun.
 function installLooksReal(dataDir) {
-  try {
-    if (!dataDir || !fs.existsSync(dataDir)) return false;
-    return fs.existsSync(path.join(dataDir, "settings", ".env")) || fs.existsSync(path.join(dataDir, "state"));
-  } catch {
-    return false;
-  }
+  // Type-check the markers, not just existence: a path named "state" that is a
+  // FILE (or "settings/.env" that is a DIRECTORY) would pass an existsSync check
+  // but make later reads under state/ throw ENOTDIR, which the readers swallow as
+  // empty -> the very false-healthy we are guarding against. So require dataDir
+  // and state/ to be directories and settings/.env to be a file.
+  const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+  const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  if (!dataDir || !isDir(dataDir)) return false;
+  return isFile(path.join(dataDir, "settings", ".env")) || isDir(path.join(dataDir, "state"));
 }
 
 // Unhealthy iff the data dir is mis-set (cannot be assessed), the most-recent
@@ -757,7 +760,10 @@ async function main() {
     // Exit non-zero when not healthy so a shell monitor (`... --health || alert`)
     // cannot be silently fooled the way the JSON verdict could. Covers a mis-set
     // MEMORY_DATA_DIR (ok:false), an open escalation, and an unresolved failure.
-    process.exit(result.healthy ? 0 : 1);
+    // Set exitCode + return (do NOT process.exit) so Node flushes stdout before
+    // exiting: process.exit can truncate a piped JSON write mid-stream.
+    process.exitCode = result.healthy ? 0 : 1;
+    return;
   }
   const entry = await runCronJob();
   process.exit(entry.ok ? 0 : 1);

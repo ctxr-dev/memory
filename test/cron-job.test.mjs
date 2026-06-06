@@ -141,7 +141,12 @@ test("cronHealth: empty/absent log is healthy with a 'fresh' summary", () => {
 
 test("cronHealth: mis-set MEMORY_DATA_DIR (absent path) is NOT healthy (closes the silent-green footgun)", () => {
   // The footgun: a mis-set data dir reads nothing and would otherwise look 'fresh'.
-  const gone = path.join(os.tmpdir(), "cron-health-misset-does-not-exist-xyzzy");
+  // Derive a guaranteed-absent path from a fresh mkdtemp dir (a never-created
+  // child) so the test is hermetic regardless of leftover tmp state.
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-misset-"));
+  tmpDirs.push(base);
+  const gone = path.join(base, "never-created");
+  assert.equal(fs.existsSync(gone), false, "precondition: the path must not exist");
   const h = cronHealth({ dataDir: gone, logPath: path.join(gone, "attempts.log"), issuesIndexPath: path.join(gone, "issues.json") });
   assert.equal(h.healthy, false);
   assert.equal(h.ok, false);
@@ -154,6 +159,17 @@ test("cronHealth: data dir exists but is NOT a memory install (no markers) is NO
   // and no state/ -> must not be read as a fresh-healthy install.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-bare-"));
   tmpDirs.push(dir);
+  const h = cronHealth({ dataDir: dir, logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
+  assert.equal(h.healthy, false);
+  assert.equal(h.ok, false);
+});
+
+test("cronHealth: a 'state' marker that is a FILE (not a dir) does not count as a real install", () => {
+  // Type-check guard: existsSync would pass, but reads under state/ would ENOTDIR
+  // and be swallowed empty -> the false-healthy we are preventing.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-statefile-"));
+  tmpDirs.push(dir);
+  fs.writeFileSync(path.join(dir, "state"), "not a directory");
   const h = cronHealth({ dataDir: dir, logPath: path.join(dir, "nope.log"), issuesIndexPath: path.join(dir, "nope-issues.json") });
   assert.equal(h.healthy, false);
   assert.equal(h.ok, false);
