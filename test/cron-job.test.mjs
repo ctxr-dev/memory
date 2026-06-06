@@ -175,6 +175,23 @@ test("cronHealth: a 'state' marker that is a FILE (not a dir) does not count as 
   assert.equal(h.ok, false);
 });
 
+test("cronHealth: passing only dataDir reads health from THAT install (coherent defaults)", () => {
+  // Coherence lock: with no logPath/issuesIndexPath, the read paths must derive
+  // from dataDir, not the process-default install. Seed a failing attempt under
+  // <dataDir>/state and confirm the verdict reflects it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-health-coherent-"));
+  tmpDirs.push(dir);
+  fs.mkdirSync(path.join(dir, "state"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "state", ".consolidate-attempts.log"),
+    JSON.stringify({ ts: "2026-06-06T10:00:00Z", ok: false, error: "boom from THIS install" }) + "\n",
+  );
+  const h = cronHealth({ dataDir: dir }); // no logPath/issuesIndexPath -> must derive from dataDir
+  assert.equal(h.healthy, false);
+  assert.match(h.summary, /UNRESOLVED FAILURE/);
+  assert.match(h.summary, /boom from THIS install/);
+});
+
 test("cronHealth: last attempt ok:false -> unhealthy with the error", () => {
   const { p, dir, issuesIndexPath } = withTempLog([
     { ts: "2026-06-03T10:00:00Z", ok: true },

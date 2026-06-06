@@ -708,7 +708,18 @@ function installLooksReal(dataDir) {
 // Unhealthy iff the data dir is mis-set (cannot be assessed), the most-recent
 // attempt errored with no later success, OR at least one escalation episode is
 // still open. A failure that later resolved stays silent.
-export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH, issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR, dataDir = MEMORY_DATA_DIR } = {}) {
+export function cronHealth({ limit = 20, logPath, issuesIndexPath, issuesDir, dataDir = MEMORY_DATA_DIR } = {}) {
+  // Default the read paths to dataDir-derived locations so cronHealth({ dataDir })
+  // validates AND reads the SAME install. Without this, passing only dataDir would
+  // validate the given dir but still read health from the default install's paths.
+  // Re-root each constant's MEMORY_DATA_DIR-relative subpath onto dataDir: when
+  // dataDir is the default these equal the original constants exactly (no behavior
+  // change), and a non-default dataDir is fully coherent. Explicit args still win.
+  const underDataDir = (constant) => path.join(dataDir, path.relative(MEMORY_DATA_DIR, constant));
+  logPath = logPath ?? underDataDir(CONSOLIDATE_ATTEMPTS_LOG_PATH);
+  issuesIndexPath = issuesIndexPath ?? underDataDir(ISSUES_INDEX_PATH);
+  issuesDir = issuesDir ?? underDataDir(ISSUES_DIR);
+
   // Refuse to report health off a mis-set MEMORY_DATA_DIR. ok:false signals the
   // check itself could not run against a real install; healthy:false ensures any
   // monitor gating on `healthy` alarms rather than seeing a false green.
@@ -724,7 +735,7 @@ export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH
   }
 
   const all = readAttempts({ limit: Math.max(attemptsKeepSafe(), 200), logPath });
-  const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir });
+  const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir, dataDir });
   const lastAttempt = all.length ? all[all.length - 1] : null;
 
   // `recent` is part of the documented shape on EVERY path (consistent for callers).
