@@ -719,7 +719,7 @@ export function cronHealth({ limit = 20, logPath, issuesIndexPath, issuesDir, da
     return {
       ok: false,
       healthy: false,
-      summary: `cannot assess cron health: MEMORY_DATA_DIR (${dataDir}) is unset, invalid, or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
+      summary: `cannot assess cron health: data dir (${dataDir}) is unset, invalid, or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
       lastAttempt: null,
       recent: [],
       escalations: [],
