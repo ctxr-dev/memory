@@ -1278,6 +1278,13 @@ server.registerTool(
       const stateDir = process.env.MEMORY_STATE_DIR || "/app/state";
       const logPath = path.join(stateDir, ".consolidate-attempts.log");
       const n = limit || 20;
+      // Parity with the host cronHealth guard: if the read-only state dir is not
+      // present, the mount is missing/misconfigured. Reading it would ENOENT to
+      // empty and we'd otherwise report "no attempts yet ... healthy:true" -- a
+      // false green. Refuse to assess instead.
+      if (!fs.existsSync(stateDir)) {
+        return jsonToolResponse({ ok: false, healthy: false, summary: `cannot assess: state dir ${stateDir} is not present (read-only state mount missing?)`, lastAttempt: null, recent: [], escalations: [], logPath });
+      }
       // Open self-healing escalations, read from the issues INDEX (under the same
       // ro-mounted state dir; the rendered issues/*.md live host-side only). An
       // open episode means the same entity kept failing across runs OR one error

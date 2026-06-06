@@ -684,10 +684,41 @@ export async function runCronJob(deps = {}) {
 
 // ─── health ───────────────────────────────────────────────────────────────
 //
-// Unhealthy iff the most-recent attempt errored with no later success, OR at
-// least one escalation episode is still open. A failure that later resolved
-// stays silent.
-export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH, issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR } = {}) {
+// Does the resolved data dir actually look like a memory install? A real one,
+// even brand-new, has the dir AND at least one marker: settings/.env (written at
+// bootstrap) or state/ (created by the first cron tick). A MIS-SET
+// MEMORY_DATA_DIR (a typo/stale path that is absent, or an unrelated existing
+// dir like $HOME with neither marker) must NOT be mistaken for a "fresh, healthy"
+// install: readAttempts + openEscalationsFromIndex both ENOENT to empty there, so
+// without this guard cronHealth would return healthy:true off a wrong-path empty
+// read. This is the inverse of that footgun.
+function installLooksReal(dataDir) {
+  try {
+    if (!dataDir || !fs.existsSync(dataDir)) return false;
+    return fs.existsSync(path.join(dataDir, "settings", ".env")) || fs.existsSync(path.join(dataDir, "state"));
+  } catch {
+    return false;
+  }
+}
+
+// Unhealthy iff the data dir is mis-set (cannot be assessed), the most-recent
+// attempt errored with no later success, OR at least one escalation episode is
+// still open. A failure that later resolved stays silent.
+export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH, issuesIndexPath = ISSUES_INDEX_PATH, issuesDir = ISSUES_DIR, dataDir = MEMORY_DATA_DIR } = {}) {
+  // Refuse to report health off a mis-set MEMORY_DATA_DIR. ok:false signals the
+  // check itself could not run against a real install; healthy:false ensures any
+  // monitor gating on `healthy` alarms rather than seeing a false green.
+  if (!installLooksReal(dataDir)) {
+    return {
+      ok: false,
+      healthy: false,
+      summary: `cannot assess cron health: MEMORY_DATA_DIR (${dataDir}) is absent or not a memory install dir (mis-set MEMORY_DATA_DIR?)`.slice(0, 200),
+      lastAttempt: null,
+      recent: [],
+      escalations: [],
+    };
+  }
+
   const all = readAttempts({ limit: Math.max(attemptsKeepSafe(), 200), logPath });
   const escalations = openEscalationsFromIndex({ issuesIndexPath, issuesDir });
   const lastAttempt = all.length ? all[all.length - 1] : null;
@@ -721,8 +752,12 @@ export function cronHealth({ limit = 20, logPath = CONSOLIDATE_ATTEMPTS_LOG_PATH
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes("cron-health") || args.includes("--health")) {
-    process.stdout.write(JSON.stringify(cronHealth()) + "\n");
-    process.exit(0);
+    const result = cronHealth();
+    process.stdout.write(JSON.stringify(result) + "\n");
+    // Exit non-zero when not healthy so a shell monitor (`... --health || alert`)
+    // cannot be silently fooled the way the JSON verdict could. Covers a mis-set
+    // MEMORY_DATA_DIR (ok:false), an open escalation, and an unresolved failure.
+    process.exit(result.healthy ? 0 : 1);
   }
   const entry = await runCronJob();
   process.exit(entry.ok ? 0 : 1);

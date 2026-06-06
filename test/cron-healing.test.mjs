@@ -26,6 +26,9 @@ const tmpDirs = [];
 function mkSP() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-heal-"));
   tmpDirs.push(dir);
+  // state/ marker so cronHealth's mis-set-data-dir guard treats this temp dir as
+  // a real install (the calls below pass dataDir: sp.dataDir).
+  fs.mkdirSync(path.join(dir, "state"), { recursive: true });
   return {
     entitiesPath: path.join(dir, ".consolidate-entities.json"),
     issuesIndexPath: path.join(dir, ".issues-index.json"),
@@ -153,7 +156,7 @@ test("full runCronJob lifecycle: 3 compile-69 ticks escalate; cron_health flips 
   for (let i = 0; i < 3; i += 1) {
     await runCronJob({ acquireLockFn: okLock, runStepFn: compile69, statePaths: sp });
   }
-  let h = cronHealth({ logPath: sp.attemptsLogPath, issuesIndexPath: sp.issuesIndexPath, issuesDir: sp.issuesDir });
+  let h = cronHealth({ dataDir: sp.dataDir, logPath: sp.attemptsLogPath, issuesIndexPath: sp.issuesIndexPath, issuesDir: sp.issuesDir });
   assert.equal(h.healthy, false, "3 consecutive provider-unavailable ticks -> unhealthy");
   assert.ok(h.escalations.length >= 1, "an open escalation is surfaced");
 
@@ -162,7 +165,7 @@ test("full runCronJob lifecycle: 3 compile-69 ticks escalate; cron_health flips 
     ? { ok: true, exit: 0, stderr: "", stdout: JSON.stringify({ ok: true, dryRun: false, totals: { errors: 0 }, llm: true, llmRequested: true }) }
     : { ok: true, exit: 0, stderr: "", stdout: "" });
   await runCronJob({ acquireLockFn: okLock, runStepFn: healthy, statePaths: sp });
-  h = cronHealth({ logPath: sp.attemptsLogPath, issuesIndexPath: sp.issuesIndexPath, issuesDir: sp.issuesDir });
+  h = cronHealth({ dataDir: sp.dataDir, logPath: sp.attemptsLogPath, issuesIndexPath: sp.issuesIndexPath, issuesDir: sp.issuesDir });
   assert.equal(h.healthy, true, "first healthy tick resolves the episode");
   assert.equal(h.escalations.length, 0);
 });
